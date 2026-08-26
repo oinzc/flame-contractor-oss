@@ -7,5 +7,10 @@ interface Props {
 
 export default function StatusBadge({ label, tone = 'default' }: Props) {
   const className = tone === 'default' ? 'badge' : `badge ${tone}`
-  return <span className={className}>{label}</span>
+  return (
+    <span className={className}>
+      <i className="dot" />
+      {label}
+    </span>
+  )
 }
