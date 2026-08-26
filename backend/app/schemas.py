@@ -173,3 +173,28 @@ class DashboardSummary(APIBase):
     needs_attention: int
     accounts: list[AccountRead]
     recent_jobs: list[JobRead]
+
+
+# ---------------------------------------------------------------- execution
+
+LoginState = Literal["idle", "waiting_scan", "succeeded", "failed", "expired"]
+
+
+class LoginStatusRead(APIBase):
+    state: LoginState
+    detail: str | None = None
+
+
+class DryRunTargetRead(APIBase):
+    target: str
+    status: Literal["found", "not_found", "ambiguous"]
+    title: str | None = None
+
+
+class DryRunRead(APIBase):
+    account_id: str
+    overall: Literal["ok", "auth_expired", "error"]
+    detail: str | None = None
+    targets: list[DryRunTargetRead]
+    artifact_path: str | None = None
+

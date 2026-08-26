@@ -1,11 +1,10 @@
 from collections.abc import Generator
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
 
 def build_engine(database_url: str) -> Engine:
@@ -22,13 +21,6 @@ def build_engine(database_url: str) -> Engine:
             cursor.close()
 
     return engine
-
-
-def create_db_and_tables(engine: Engine) -> None:
-    url = engine.url
-    if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:"):
-        Path(url.database).parent.mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.create_all(engine)
 
 
 def get_session(request: Request) -> Generator[Session, None, None]:

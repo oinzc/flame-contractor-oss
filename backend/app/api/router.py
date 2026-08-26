@@ -2,11 +2,13 @@ from fastapi import APIRouter
 
 from .accounts import router as accounts_router
 from .dashboard import router as dashboard_router
+from .execution import router as execution_router
 from .targets import router as targets_router
 from .templates import router as templates_router
 
 api_router = APIRouter()
 api_router.include_router(accounts_router)
+api_router.include_router(execution_router)
 api_router.include_router(targets_router)
 api_router.include_router(templates_router)
 api_router.include_router(dashboard_router)

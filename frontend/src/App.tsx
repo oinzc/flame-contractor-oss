@@ -100,6 +100,7 @@ export default function App() {
                   accounts={summary.accounts}
                   onToggle={handleToggleAccount}
                   onCreateAccount={() => setShowCreate(true)}
+                  onChanged={() => void refresh()}
                 />
               </section>
             </div>

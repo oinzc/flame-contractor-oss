@@ -3,60 +3,63 @@
 > 最近更新：2026-08-26 | 由 DeepSeek Harness Agent 更新
 
 ## 当前目标
-本机自用版「PRD + 技术设计 + 可运行骨架」已交付；下一里程碑为 M2（单账号扫码登录 + 独立 Profile + Dry Run）。
+M2 已完成：扫码登录 + 独立 Profile + Dry Run。下一步是用户在真实环境扫码验证，然后进入 M3（发送与终态确认）。
 
 ## 已完成内容
-- 调研：核验 9 个候选项目，确定 `unmev/douyin-auto-fire` 为首要代码/测试参考，详见 `research-report.md`。
-- 文档：`docs/PRD.md`、`docs/TECHNICAL_DESIGN.md`、`docs/API.md`、`docs/SCHEMA.md`。
-- 后端：FastAPI + SQLModel + SQLite，核心表 Account/ContractTarget/MessageTemplate/SendJob/SendAttempt，含每日幂等唯一约束 `(account_id, target_id, business_date, message_slot_id)`。
-- 后端 API：health、dashboard 聚合、accounts（创建/列出/PATCH，凭据字段一律 422）、targets、templates（受控变量白名单）。
-- 前端：React 19 + TypeScript + Vite 8，契约炉心视觉（Coal/Iron/Parchment/Ember），签名元素「今日焰线」节点轨道；账号创建、暂停/恢复、空态与错误横幅。
-- 验证：后端 10/10 测试通过；前端类型检查与生产构建通过；浏览器端到端流程与截图视觉质检通过。
-- 演示数据已清空，交付时为全新数据库状态。
+- 骨架基线已提交（`9d535c4`），M2 变更待提交。
+- Alembic 接入：基线迁移 `722cd9dc7d0b`，启动即自动迁移，空库自动建表（已端到端验证 6 张表 + alembic_version）。
+- Playwright + Chromium 已装入后端 venv。
+- 执行层：
+  - `app/execution/profile_store.py`：每账号独立 Profile 目录，ID 白名单校验防路径逃逸；
+  - `app/execution/selectors.py`：抖音网页版 DOM 选择器集中管理（注明参考来源，无指纹伪装）；
+  - `app/execution/douyin_chat.py`：页面窄封装（登录检测、会话定位、右侧标题二次核对）；
+  - `app/execution/browser_manager.py`：扫码登录流程（headed、180s 超时、状态机）+ Dry Run（headless、严格匹配、artifact 落盘、绝不发送）。
+- API：`POST/GET /api/accounts/{id}/login`、`POST .../login/cancel`、`POST .../dry-run`。
+- 前端：账号卡片新增「扫码登录」按钮（2s 轮询状态、取消）、「Dry Run」按钮与逐目标结果展示（已定位/未找到/身份存疑）。
+- 测试：16/16 通过（10 项骨架回归 + 6 项假浏览器执行层测试，不依赖真实抖音网络）。
+- 前端类型检查与生产构建通过。
 
 ## 关键技术决策
-- 本机自用版：FastAPI + SQLite(WAL) + React/Vite，单机优先，不引入 Redis/Celery。
-- 凭据零落地：骨架阶段 Account 模型不含 Cookie/密码/Token 字段，API `extra="forbid"`。
-- 幂等先于执行：即使 Scheduler 尚未接入，数据库唯一约束已就位。
-- 状态机：账号 8 态、任务 10 态；`unknown_requires_review` 不可自动重发。
-- 模板仅允许 `{{target_name}} {{streak_days}} {{weekday}} {{date}}` 四个受控变量。
-- 日志/数据库字段 snake_case，API camelCase；时间戳 ISO 8601。
-- UI 明确标注未实现能力（扫码登录、调度器、执行器均为“下一阶段”），不伪装可用。
+- 登录态存于持久浏览器 Profile（`launch_persistent_context`），无需用户粘贴 Cookie。
+- 登录检测 = 会话列表出现；Dry Run 打开会话后必须右侧标题严格等于目标名，否则记 ambiguous。
+- 同一账号同一时间只允许一个活动浏览器流程（登录中禁止 Dry Run，反之亦然）。
+- 登录成功自动把账号标记 healthy；Dry Run 登录失效自动标记 auth_expired；Dry Run 不改变健康状态。
+- 迁移替换 create_all；真实运行与测试均走 `alembic upgrade head`。
+- 浏览器操作不加载任何反检测脚本；验证码与风控仅本人处理。
 
 ## 修改过的核心文件
-- `backend/app/`：main、models、schemas、services、core/config、core/database、api/{health,accounts,targets,templates,dashboard,router}
-- `backend/tests/`：conftest、test_api
-- `backend/requirements.txt`、`requirements-dev.txt`、`pyproject.toml`、`.env.example`
-- `frontend/`：package.json、tsconfig、vite.config、index.html、src（App、theme.css、api、types、lib/format、6 个组件）
-- `docs/`：PRD、TECHNICAL_DESIGN、API、SCHEMA
-- `README.md`、`.gitignore`、`PROJECT_STATUS.md`、`task_plan.md`、`progress.md`
+- `backend/alembic.ini`、`backend/alembic/env.py`、`backend/alembic/versions/722cd9dc7d0b_baseline.py`、`backend/alembic/script.py.mako`
+- `backend/app/core/migrations.py`、`core/config.py`（profiles_dir/artifacts_dir）、`core/database.py`、`main.py`
+- `backend/app/execution/`：profile_store、selectors、douyin_chat、browser_manager
+- `backend/app/schemas.py`、`api/execution.py`、`api/router.py`
+- `backend/tests/test_execution.py`、`tests/conftest.py`
+- `frontend/src/types.ts`、`api.ts`、`components/AccountRail.tsx`、`theme.css`、`App.tsx`
+- `docs/API.md`、`README.md`、`PROJECT_STATUS.md`、`task_plan.md`、`progress.md`
 
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | 10 passed（health、账号 CRUD/409/422、模板变量、契约对象、仪表盘聚合、幂等唯一约束） |
+| 后端 pytest | 16 passed（迁移、API 回归、登录状态机、冲突 409、Dry Run found/ambiguous/not_found、auth_expired） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
-| API 冒烟（真实 uvicorn） | health/accounts/templates/targets/dashboard 全部正确 |
-| 浏览器端到端（Vite + pilot） | 新建账号、暂停/恢复、焰线节点、空态渲染均生效 |
-| 视觉质检（截图 + modlens） | 布局无重叠、无文字截断、节点正常 |
-| Git | 已 `git init`（main 分支），全部文件尚未提交 |
+| 真实启动冒烟 | 健康检查 ok；Alembic 基线迁移在全新库上执行，表齐全 |
+| 真实扫码 E2E | 未执行（需用户本人扫码，属预期人工环节） |
 
 ## 已知问题
-- 骨架不含抖音执行能力：扫码登录、好友搜索、发送、终态确认均未实现（M2/M3 范围）。
-- 无用户鉴权：当前仅监听 127.0.0.1，切勿暴露公网；桌面封装前不可远程使用。
-- SQLite 用 `create_all()` 初始化；进入 M2 前应引入 Alembic 基线迁移。
-- SendJob/SendAttempt 表已建但暂无调度器写入路径。
-- 删除/编辑契约对象与模板的 API 尚未实现（骨架期故意省略，避免误删恢复成本）。
-- Starlette 提示 httpx→httpx2 迁移 deprecation warning，功能不受影响，可后续处理。
-- QA 截图保存在 `artifacts/qa/`（gitignored），可自行删除。
+- 真实登录成功判定依赖「会话列表出现」启发式，尚未经用户真实扫码验证；若页面改版需调整 selectors.py。
+- 登录成功后 Profile 数据为高敏感凭据；当前目录权限依赖操作系统用户权限，尚未做额外加密。
+- 尚无 Scheduler（M4）；SendJob 表空转，dashboard 的今日数据仍为 0。
+- 冒烟用的 data/ 已清空，用户首次启动将重建全新数据库。
+- Starlette 的 httpx→httpx2 弃用警告仍存在，功能无影响。
+- Dry Run 结果仅落盘 artifact JSON，未入库供历史查询（M4 与任务表一并解决）。
 
 ## 尝试过但失败的方案
-- 调研阶段两个后台 subagent 无结果即失败 → 改主会话直接核验，不再重复该委派。
-- 直接读取抖音开放平台旧“发送私信”页面 → 404，无法据搜索摘要断言官方 API 可用于个人续火。
+- autogenerate 直接连默认库失败（父目录不存在）→ env.py 迁移前创建 SQLite 父目录解决。
+- 基线迁移缺少 sqlmodel 导入 → 显式补 import 解决。
+- 内联 Python 检查数据库时 PowerShell 引号转义两次出错 → 改为单引号外层包裹解决。
 
 ## 下一步开发顺序
-1. 提交当前骨架为首个 commit（用户确认后）。
-2. M2：引入 Alembic；每账号独立持久 Profile 目录与扫码登录流程；Dry Run。
-3. M3：严格好友绑定（优先 platform_user_id）、纯文字发送、发送终态确认与失败 artifact。
-4. M4：Scheduler（随机焰窗、租约、heartbeat）+ 每账号 Worker 进程隔离。
-5. M5：原生表情/图片、通知、selector 热更与火花天数。
+1. 用户真实验证：启动前后端，扫码登录一个账号，绑定好友后 Dry Run，反馈「已定位/未找到/身份存疑」的实际情况。
+2. 提交 M2 变更（用户确认后）。
+3. M3：纯文字发送 + 发送终态确认（单条 outgoing 消息状态机）+ 失败分类与截图 artifact。
+4. M4：Scheduler（随机焰窗、租约、heartbeat、账号互斥）+ 每账号 Worker 进程 + SendJob 入库与今日焰线点亮。
+5. M5：原生表情/图片、通知、selector 热更与火花天数校准。
