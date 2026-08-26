@@ -71,7 +71,7 @@ input:focus-visible {
   gap: 14px;
   padding: 0 22px;
   border-bottom: 1px solid var(--line);
-  background: rgba(11, 13, 16, 0.9);
+  background: var(--coal);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -569,7 +569,9 @@ input:focus-visible {
   color: var(--ash);
 }
 
-.field input {
+.field input,
+.field select,
+.field textarea {
   background: var(--coal);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -578,9 +580,53 @@ input:focus-visible {
   width: 100%;
 }
 
-.field input:focus {
+.field textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
   border-color: var(--ember);
   outline: none;
+}
+
+.variable-doc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.variable-chip {
+  font-size: 11px;
+  color: var(--ash);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.variable-chip code {
+  font-family: var(--font-data);
+  color: var(--gold);
+}
+
+.preview-box {
+  border: 1px dashed var(--ash-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--coal);
+}
+
+.preview-label {
+  font-size: 11px;
+  color: var(--ash-2);
+  margin-bottom: 4px;
+}
+
+.preview-text {
+  white-space: pre-wrap;
+  color: var(--parchment);
 }
 
 .field-hint {

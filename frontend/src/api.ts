@@ -49,6 +49,17 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   targets: () => request<import('./types').ContractTarget[]>('/api/targets'),
+  createTarget: (input: import('./types').TargetCreateInput) =>
+    request<import('./types').ContractTarget>('/api/targets', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  templates: () => request<import('./types').MessageTemplate[]>('/api/templates'),
+  createTemplate: (input: import('./types').TemplateCreateInput) =>
+    request<import('./types').MessageTemplate>('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   startLogin: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login`, {
       method: 'POST',
