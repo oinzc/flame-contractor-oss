@@ -8,6 +8,8 @@ export default defineConfig(() => {
     server: {
       port: 5173,
       strictPort: true,
+      // Windows 下原子写入会触发文件监听的 EBUSY 崩溃，改用轮询监听
+      watch: { usePolling: true, interval: 400 },
       proxy: {
         '/api': { target: apiTarget, changeOrigin: true },
         '/health': { target: apiTarget, changeOrigin: true },

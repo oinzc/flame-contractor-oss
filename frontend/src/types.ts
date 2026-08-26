@@ -144,3 +144,33 @@ export interface TemplateCreateInput {
   name: string
   content: string
 }
+
+export interface SendPreviewItem {
+  targetId: string
+  targetName: string
+  templateId: string | null
+  message: string | null
+  reason: string | null
+}
+
+export interface SendPreviewRead {
+  accountId: string
+  businessDate: string
+  items: SendPreviewItem[]
+}
+
+export interface SendTargetResult {
+  target: string
+  status: string
+  failureClass: string | null
+  detail: string | null
+  message: string | null
+}
+
+export interface SendRead {
+  accountId: string
+  overall: 'ok' | 'partial' | 'auth_expired' | 'error'
+  detail: string | null
+  results: SendTargetResult[]
+  artifactPath: string | null
+}

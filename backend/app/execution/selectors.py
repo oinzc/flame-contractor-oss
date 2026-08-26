@@ -23,3 +23,11 @@ SEARCH_INPUT = 'input.semi-input[placeholder="搜索"][type="text"]'
 
 # 消息编辑器（M3 发送使用）
 CHAT_EDITOR = 'div[data-slate-editor="true"][contenteditable="true"]'
+
+# 发送失败/重试标记（概念参考 unmev/douyin-auto-fire 的 SendStatusretry 类标记；
+# 类名随页面版本变化，真实 E2E 前必须核对，并保持“检测不到就按结果未知处理”）
+SEND_FAILURE_MARKERS = (
+    '[class*="SendStatusretry"]',
+    '[class*="SendStatusfailed"]',
+    '[class*="send-status-retry"]',
+)

@@ -1,10 +1,12 @@
 import re
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
+from .execution.message_renderer import render_message
 from .models import (
     Account,
     AccountStatus,
@@ -151,6 +153,76 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
         raise HTTPException(status_code=409, detail="该账号下已存在同名契约对象") from None
     session.refresh(target)
     return TargetRead.model_validate(target)
+
+
+def delete_target(session: Session, target_id: str) -> None:
+    target = session.get(ContractTarget, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="好友不存在")
+
+    session.delete(target)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="该好友已有任务记录，不能删除；可改为暂停使用",
+        ) from None
+
+
+# ---------------------------------------------------------------- send preview
+
+
+def send_preview(session: Session, account_id: str) -> dict:
+    account = session.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+
+    targets = session.exec(
+        select(ContractTarget)
+        .where(ContractTarget.account_id == account_id, ContractTarget.enabled)
+        .order_by(ContractTarget.created_at)
+    ).all()
+    business_date = datetime.now(ZoneInfo(account.timezone)).date()
+
+    items: list[dict] = []
+    for target in targets:
+        template = (
+            session.get(MessageTemplate, target.template_id) if target.template_id else None
+        )
+        if template is not None and template.enabled:
+            message = render_message(
+                template.content,
+                target_name=target.nickname_snapshot,
+                streak_days=target.streak_days,
+                timezone=account.timezone,
+            )
+            items.append(
+                {
+                    "target_id": target.id,
+                    "target_name": target.nickname_snapshot,
+                    "template_id": template.id,
+                    "message": message,
+                    "reason": None,
+                }
+            )
+        else:
+            items.append(
+                {
+                    "target_id": target.id,
+                    "target_name": target.nickname_snapshot,
+                    "template_id": None,
+                    "message": None,
+                    "reason": "未绑定可用模板",
+                }
+            )
+
+    return {
+        "account_id": account_id,
+        "business_date": business_date.isoformat(),
+        "items": items,
+    }
 
 
 # ---------------------------------------------------------------- dashboard

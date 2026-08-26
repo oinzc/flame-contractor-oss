@@ -17,6 +17,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [templateId, setTemplateId] = useState('')
   const [streakDays, setStreakDays] = useState('0')
   const [error, setError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -30,6 +31,19 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   function templateName(id: string | null): string {
     if (!id) return '未绑定'
     return templates.find((template) => template.id === id)?.name ?? id.slice(0, 8)
+  }
+
+  async function handleDelete(target: ContractTarget) {
+    if (!window.confirm(`确定删除好友「${target.nicknameSnapshot}」？`)) {
+      return
+    }
+    setActionError(null)
+    try {
+      await api.deleteTarget(target.id)
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '删除失败，请重试')
+    }
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -89,6 +103,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
             <div className="card-head">
               <h2>好友列表（{selectedTargets.length}）</h2>
             </div>
+            {actionError && <div className="form-error" style={{ marginBottom: 8 }}>{actionError}</div>}
             {selectedTargets.length === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                 这个账号还没有好友，用下面的表单添加第一位。
@@ -102,6 +117,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                     <th>模板</th>
                     <th>火花天数</th>
                     <th>上次确认发送</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -112,6 +128,15 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                       <td>{templateName(target.templateId)}</td>
                       <td className="mono">{target.streakDays} 天</td>
                       <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
+                      <td>
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() => handleDelete(target)}
+                        >
+                          删除
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

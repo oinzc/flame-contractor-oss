@@ -198,3 +198,35 @@ class DryRunRead(APIBase):
     targets: list[DryRunTargetRead]
     artifact_path: str | None = None
 
+
+# ---------------------------------------------------------------- send
+
+class SendPreviewItemRead(APIBase):
+    target_id: str
+    target_name: str
+    template_id: str | None = None
+    message: str | None = None
+    reason: str | None = None
+
+
+class SendPreviewRead(APIBase):
+    account_id: str
+    business_date: str
+    items: list[SendPreviewItemRead]
+
+
+class SendTargetResultRead(APIBase):
+    target: str
+    status: str
+    failure_class: FailureClass | None = None
+    detail: str | None = None
+    message: str | None = None
+
+
+class SendRead(APIBase):
+    account_id: str
+    overall: Literal["ok", "partial", "auth_expired", "error"]
+    detail: str | None = None
+    results: list[SendTargetResultRead]
+    artifact_path: str | None = None
+
