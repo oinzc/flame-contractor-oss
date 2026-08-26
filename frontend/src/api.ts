@@ -49,4 +49,18 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   targets: () => request<import('./types').ContractTarget[]>('/api/targets'),
+  startLogin: (id: string) =>
+    request<import('./types').LoginStatus>(`/api/accounts/${id}/login`, {
+      method: 'POST',
+    }),
+  loginStatus: (id: string) =>
+    request<import('./types').LoginStatus>(`/api/accounts/${id}/login`),
+  cancelLogin: (id: string) =>
+    request<import('./types').LoginStatus>(`/api/accounts/${id}/login/cancel`, {
+      method: 'POST',
+    }),
+  dryRun: (id: string) =>
+    request<import('./types').DryRunRead>(`/api/accounts/${id}/dry-run`, {
+      method: 'POST',
+    }),
 }

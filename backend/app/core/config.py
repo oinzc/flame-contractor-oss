@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     version: str = "0.1.0"
     api_prefix: str = "/api"
     database_url: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
+    profiles_dir: Path = PROJECT_ROOT / "data" / "profiles"
+    artifacts_dir: Path = PROJECT_ROOT / "artifacts"
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",

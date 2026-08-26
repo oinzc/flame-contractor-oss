@@ -241,7 +241,71 @@ password, cookie, token, storageState, profilePath
 }
 ```
 
-## 7. 枚举
+## 7. 执行接口（M2）
+
+> 真实浏览器操作只在本机进行；登录与 Dry Run 均不向服务端发送凭据文本。
+
+### 7.1 发起扫码登录
+
+- **接口说明**：在本机打开该账号的独立浏览器窗口（headed），等待本人扫码。同一账号同时只允许一个登录流程。
+- **请求 URL**：`/accounts/{accountId}/login`
+- **请求方式**：POST
+- **返回**：`202`
+
+响应示例：
+
+```json
+{ "state": "waiting_scan", "detail": null }
+```
+
+重复发起返回 `409`；账号不存在返回 `404`。
+
+### 7.2 查询登录状态
+
+- **请求 URL**：`/accounts/{accountId}/login`
+- **请求方式**：GET
+
+`state` 取值：
+
+| 值 | 含义 |
+|---|---|
+| idle | 没有登录流程 |
+| waiting_scan | 浏览器已打开，等待扫码 |
+| succeeded | 已登录，账号状态更新为 healthy |
+| expired | 等待扫码超时 |
+| failed | 流程异常终止 |
+
+### 7.3 取消登录流程
+
+- **请求 URL**：`/accounts/{accountId}/login/cancel`
+- **请求方式**：POST
+- 关闭浏览器并结束轮询。
+
+### 7.4 执行 Dry Run
+
+- **接口说明**：以 headless 方式复用该账号的浏览器 Profile，逐一严格定位契约对象；**绝不发送任何消息**。登录失效时把账号标记为 `auth_expired`。登录流程进行中返回 `409`。
+- **请求 URL**：`/accounts/{accountId}/dry-run`
+- **请求方式**：POST
+
+响应示例：
+
+```json
+{
+  "accountId": "25ebd541-85ae-44d4-bec2-33c4779fc7cf",
+  "overall": "ok",
+  "detail": null,
+  "targets": [
+    { "target": "好友A", "status": "found", "title": "好友A" },
+    { "target": "好友A同学", "status": "ambiguous", "title": "好友A" },
+    { "target": "不存在", "status": "not_found", "title": null }
+  ],
+  "artifactPath": "D:/Workspace/Flame Contractor/artifacts/<accountId>/dry-run-20260826-153000.json"
+}
+```
+
+`overall`：`ok` / `auth_expired` / `error`；`targets[].status`：`found` / `not_found` / `ambiguous`。
+
+## 8. 枚举
 
 ### 7.1 AccountStatus
 

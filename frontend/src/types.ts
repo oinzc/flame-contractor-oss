@@ -108,3 +108,26 @@ export interface AccountCreateInput {
   sendWindowStart: string
   sendWindowEnd: string
 }
+
+export type LoginState = 'idle' | 'waiting_scan' | 'succeeded' | 'failed' | 'expired'
+
+export interface LoginStatus {
+  state: LoginState
+  detail: string | null
+}
+
+export type DryRunTargetStatus = 'found' | 'not_found' | 'ambiguous'
+
+export interface DryRunTargetResult {
+  target: string
+  status: DryRunTargetStatus
+  title: string | null
+}
+
+export interface DryRunRead {
+  accountId: string
+  overall: 'ok' | 'auth_expired' | 'error'
+  detail: string | null
+  targets: DryRunTargetResult[]
+  artifactPath: string | null
+}

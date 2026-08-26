@@ -6,18 +6,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.health import router as health_router
 from .api.router import api_router
 from .core.config import Settings, get_settings
-from .core.database import build_engine, create_db_and_tables
+from .core.database import build_engine
+from .core.migrations import run_migrations
+from .execution.browser_manager import BrowserManager
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, browser_manager=None) -> FastAPI:
     settings = settings or get_settings()
     engine = build_engine(settings.database_url)
+    if browser_manager is None:
+        browser_manager = BrowserManager(engine, settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.engine = engine
-        create_db_and_tables(engine)
+        app.state.browser_manager = browser_manager
+        run_migrations(settings.database_url)
         yield
+        await browser_manager.aclose()
         engine.dispose()
 
     app = FastAPI(
