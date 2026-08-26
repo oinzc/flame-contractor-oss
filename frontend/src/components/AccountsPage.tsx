@@ -3,6 +3,7 @@ import { api, ApiError } from '../api'
 import type { Account, DryRunRead, LoginStatus } from '../types'
 import { ACCOUNT_STATUS_LABELS, ACCOUNT_STATUS_TONES, formatDateTime } from '../lib/format'
 import StatusBadge from './StatusBadge'
+import SendModal from './SendModal'
 
 const DRY_RUN_LABELS: Record<string, string> = {
   found: '已定位 · 未发送',
@@ -21,6 +22,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
   const [loginStates, setLoginStates] = useState<Record<string, LoginStatus>>({})
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [sendAccount, setSendAccount] = useState<Account | null>(null)
   const timersRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
@@ -249,6 +251,15 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                       定位校验
                     </button>
                   )}
+                  {account.status === 'healthy' && account.enabled && (
+                    <button
+                      className="btn small"
+                      type="button"
+                      onClick={() => setSendAccount(account)}
+                    >
+                      立即发送
+                    </button>
+                  )}
                   <button
                     className="btn ghost small"
                     type="button"
@@ -262,6 +273,14 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
             )
           })}
         </div>
+      )}
+
+      {sendAccount && (
+        <SendModal
+          account={sendAccount}
+          onClose={() => setSendAccount(null)}
+          onChanged={() => void onChanged()}
+        />
       )}
     </div>
   )

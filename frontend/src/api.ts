@@ -54,6 +54,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  deleteTarget: (id: string) =>
+    request<void>(`/api/targets/${id}`, { method: 'DELETE' }),
+  sendPreview: (id: string) =>
+    request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
+  sendNow: (id: string) =>
+    request<import('./types').SendRead>(`/api/accounts/${id}/send`, { method: 'POST' }),
   templates: () => request<import('./types').MessageTemplate[]>('/api/templates'),
   createTemplate: (input: import('./types').TemplateCreateInput) =>
     request<import('./types').MessageTemplate>('/api/templates', {

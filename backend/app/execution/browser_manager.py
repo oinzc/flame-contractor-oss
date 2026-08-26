@@ -1,20 +1,37 @@
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..core.config import Settings
-from ..models import Account, AccountStatus, ContractTarget
-from .douyin_chat import DouyinChat
+from ..models import (
+    Account,
+    AccountStatus,
+    AttemptStatus,
+    ContractTarget,
+    FailureClass,
+    JobStatus,
+    MessageTemplate,
+    SendAttempt,
+    SendJob,
+)
+from .douyin_chat import DomChangedError, DouyinChat
+from .message_renderer import render_message
 from .profile_store import ensure_profile_dir
+from .send_confirmer import SendConfirmer
 
 LOGIN_POLL_INTERVAL = 2.0
 LOGIN_TIMEOUT_SECONDS = 180.0
+SEND_TIMEOUT_SECONDS = 15.0
+SEND_POLL_INTERVAL = 0.5
+SEND_STABILIZE_POLLS = 3
 
 BrowserFactory = Callable[[Path, bool], Awaitable[tuple[object, object]]]
 
@@ -55,6 +72,9 @@ class BrowserManager:
         *,
         login_poll_interval: float = LOGIN_POLL_INTERVAL,
         login_timeout: float = LOGIN_TIMEOUT_SECONDS,
+        send_timeout: float = SEND_TIMEOUT_SECONDS,
+        send_poll_interval: float = SEND_POLL_INTERVAL,
+        send_stabilize_polls: int = SEND_STABILIZE_POLLS,
         sleep=asyncio.sleep,
     ):
         self._engine = engine
@@ -64,6 +84,9 @@ class BrowserManager:
         self._browser_factory = browser_factory
         self._login_poll_interval = login_poll_interval
         self._login_timeout = login_timeout
+        self._send_timeout = send_timeout
+        self._send_poll_interval = send_poll_interval
+        self._send_stabilize_polls = send_stabilize_polls
         self._sleep = sleep
 
     # ------------------------------------------------------------ browser
@@ -268,6 +291,318 @@ class BrowserManager:
                 {"target": item.target, "status": item.status, "title": item.title}
                 for item in results
             ],
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    # ------------------------------------------------------------ send
+
+    async def run_send(self, account_id: str) -> dict:
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
+
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+            if not account.enabled:
+                raise HTTPException(status_code=409, detail="账号已暂停")
+            targets = session.exec(
+                select(ContractTarget).where(
+                    ContractTarget.account_id == account_id,
+                    ContractTarget.enabled,
+                )
+            ).all()
+        if not targets:
+            raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
+
+        profile_path = ensure_profile_dir(self._settings, account_id)
+        results: list[dict] = []
+        overall = "ok"
+        detail: str | None = None
+        context = None
+        try:
+            context, page = await self._open(profile_path, headless=True)
+            chat = DouyinChat(page, sleep=self._sleep)
+            await chat.open_chat_page()
+            if not await chat.is_logged_in():
+                self._mark_auth_expired(account_id)
+                overall = "auth_expired"
+                detail = "登录已失效，请重新扫码"
+            else:
+                business_date = datetime.now(ZoneInfo(account.timezone)).date()
+                for target in targets:
+                    result = await self._send_one(chat, account, target, business_date)
+                    results.append(result)
+                    if result["status"] not in ("succeeded", "duplicate_succeeded", "skipped"):
+                        overall = "partial"
+        except Exception as exc:
+            overall = "error"
+            detail = type(exc).__name__
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+        artifact_path = self._write_send_artifact(account_id, overall, detail, results)
+        return {
+            "account_id": account_id,
+            "overall": overall,
+            "detail": detail,
+            "results": results,
+            "artifact_path": str(artifact_path),
+        }
+
+    async def _send_one(
+        self,
+        chat: DouyinChat,
+        account: Account,
+        target: ContractTarget,
+        business_date: date,
+    ) -> dict:
+        with Session(self._engine) as session:
+            current = session.get(ContractTarget, target.id)
+            if current is None or not current.enabled:
+                return {"target": target.nickname_snapshot, "status": "skipped",
+                        "detail": "好友已删除或暂停", "failure_class": None, "message": None}
+            template = session.get(MessageTemplate, current.template_id) if current.template_id else None
+            template_ok = template is not None and template.enabled
+            template_id = template.id if template_ok else None
+            template_version = template.version if template_ok else None
+            template_content = template.content if template_ok else None
+            nickname = current.nickname_snapshot
+            streak_days = current.streak_days
+
+        if template_content is None:
+            return {"target": nickname, "status": "skipped",
+                    "detail": "未绑定可用模板", "failure_class": None, "message": None}
+
+        message = render_message(
+            template_content,
+            target_name=nickname,
+            streak_days=streak_days,
+            timezone=account.timezone,
+        )
+        slot = f"{template_id}:v{template_version}"
+
+        job, created = self._get_or_create_job(
+            account.id, target.id, template_id, business_date, slot
+        )
+        if not created:
+            if job.status == JobStatus.SUCCEEDED:
+                return {"target": nickname, "status": "duplicate_succeeded",
+                        "detail": "今日已发送，已跳过", "failure_class": None, "message": message}
+            if job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW:
+                return {"target": nickname, "status": "duplicate_unknown",
+                        "detail": "今日结果未确认，已跳过以防重复", "failure_class": None, "message": message}
+
+        opened = await chat.open_conversation(nickname)
+        if not opened.opened:
+            self._finalize_send(
+                job.id, target.id, account.id,
+                status=JobStatus.FAILED_TERMINAL, failure=FailureClass.TARGET_UNCERTAIN,
+                confirmed=False,
+            )
+            return {"target": nickname, "status": "not_found",
+                    "failure_class": FailureClass.TARGET_UNCERTAIN.value,
+                    "detail": "会话列表中未找到该好友", "message": message}
+        if not opened.exact:
+            self._finalize_send(
+                job.id, target.id, account.id,
+                status=JobStatus.FAILED_TERMINAL, failure=FailureClass.TARGET_UNCERTAIN,
+                confirmed=False,
+            )
+            return {"target": nickname, "status": "ambiguous",
+                    "failure_class": FailureClass.TARGET_UNCERTAIN.value,
+                    "detail": f"右侧标题为「{opened.title}」，与好友名不一致",
+                    "message": message}
+
+        attempt_no = self._record_attempt(job.id)
+        try:
+            await chat.send_text(message)
+        except DomChangedError:
+            self._finalize_send(
+                job.id, target.id, account.id,
+                status=JobStatus.FAILED_RETRYABLE, failure=FailureClass.DOM_CHANGED,
+                confirmed=False, attempt_no=attempt_no,
+            )
+            return {"target": nickname, "status": "failed_retryable",
+                    "failure_class": FailureClass.DOM_CHANGED.value,
+                    "detail": "页面结构变化，未找到输入框", "message": message}
+        except Exception as exc:
+            self._finalize_send(
+                job.id, target.id, account.id,
+                status=JobStatus.FAILED_RETRYABLE, failure=FailureClass.OTHER,
+                confirmed=False, attempt_no=attempt_no,
+            )
+            return {"target": nickname, "status": "failed_retryable",
+                    "failure_class": FailureClass.OTHER.value,
+                    "detail": type(exc).__name__, "message": message}
+
+        self._update_job_status(job.id, JobStatus.CONFIRMING)
+        outcome = await SendConfirmer(
+            chat,
+            sleep=self._sleep,
+            timeout=self._send_timeout,
+            poll_interval=self._send_poll_interval,
+            stabilize_polls=self._send_stabilize_polls,
+        ).confirm()
+
+        outcome_map = {
+            "succeeded": (JobStatus.SUCCEEDED, None, True),
+            "failed_retryable": (JobStatus.FAILED_RETRYABLE, FailureClass.OTHER, False),
+            "unknown_requires_review": (
+                JobStatus.UNKNOWN_REQUIRES_REVIEW,
+                FailureClass.UNKNOWN_OUTCOME,
+                False,
+            ),
+        }
+        job_status, failure, confirmed = outcome_map[outcome]
+        self._finalize_send(
+            job.id, target.id, account.id,
+            status=job_status, failure=failure, confirmed=confirmed, attempt_no=attempt_no,
+        )
+        detail = None
+        if outcome == "unknown_requires_review":
+            detail = "已触发发送但结果未确认，请到任务记录人工核对"
+        return {"target": nickname, "status": outcome,
+                "failure_class": failure.value if failure else None,
+                "detail": detail, "message": message}
+
+    def _get_or_create_job(
+        self,
+        account_id: str,
+        target_id: str,
+        template_id: str,
+        business_date: date,
+        slot: str,
+    ) -> tuple[SendJob, bool]:
+        query = (
+            SendJob.account_id == account_id,
+            SendJob.target_id == target_id,
+            SendJob.business_date == business_date,
+            SendJob.message_slot_id == slot,
+        )
+        with Session(self._engine) as session:
+            existing = session.exec(select(SendJob).where(*query)).first()
+            if existing is not None:
+                return existing, False
+            job = SendJob(
+                account_id=account_id,
+                target_id=target_id,
+                template_id=template_id,
+                business_date=business_date,
+                message_slot_id=slot,
+                status=JobStatus.SCHEDULED,
+                scheduled_at=_utcnow(),
+            )
+            session.add(job)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                existing = session.exec(select(SendJob).where(*query)).first()
+                return existing, False
+            session.refresh(job)
+            return job, True
+
+    def _record_attempt(self, job_id: str) -> int:
+        with Session(self._engine) as session:
+            job = session.get(SendJob, job_id)
+            if job is None:
+                raise RuntimeError("任务不存在")
+            job.attempt_count += 1
+            attempt_no = job.attempt_count
+            job.status = JobStatus.SENDING
+            job.updated_at = _utcnow()
+            attempt = SendAttempt(
+                job_id=job_id,
+                attempt_no=attempt_no,
+                stage="sending",
+                status=AttemptStatus.RUNNING,
+                started_at=_utcnow(),
+            )
+            session.add(job)
+            session.add(attempt)
+            session.commit()
+            return attempt_no
+
+    def _update_job_status(self, job_id: str, status: JobStatus) -> None:
+        with Session(self._engine) as session:
+            job = session.get(SendJob, job_id)
+            if job is not None:
+                job.status = status
+                job.updated_at = _utcnow()
+                session.add(job)
+                session.commit()
+
+    def _finalize_send(
+        self,
+        job_id: str,
+        target_id: str,
+        account_id: str,
+        *,
+        status: JobStatus,
+        failure: FailureClass | None,
+        confirmed: bool,
+        attempt_no: int | None = None,
+    ) -> None:
+        with Session(self._engine) as session:
+            now = _utcnow()
+            job = session.get(SendJob, job_id)
+            if job is not None:
+                job.status = status
+                job.failure_class = failure
+                job.updated_at = now
+                if confirmed:
+                    job.confirmed_at = now
+                session.add(job)
+            if attempt_no is not None:
+                attempt = session.exec(
+                    select(SendAttempt).where(
+                        SendAttempt.job_id == job_id,
+                        SendAttempt.attempt_no == attempt_no,
+                    )
+                ).first()
+                if attempt is not None:
+                    attempt.status = (
+                        AttemptStatus.SUCCEEDED if confirmed else AttemptStatus.FAILED
+                    )
+                    attempt.failure_class = failure
+                    attempt.finished_at = now
+                    session.add(attempt)
+            if confirmed:
+                target = session.get(ContractTarget, target_id)
+                if target is not None:
+                    target.last_sent_at = now
+                    target.last_confirmed_at = now
+                    target.streak_days += 1
+                    target.updated_at = now
+                    session.add(target)
+                account = session.get(Account, account_id)
+                if account is not None:
+                    account.last_success_at = now
+                    session.add(account)
+            session.commit()
+
+    def _write_send_artifact(
+        self,
+        account_id: str,
+        overall: str,
+        detail: str | None,
+        results: list[dict],
+    ) -> Path:
+        directory = self._settings.artifacts_dir / account_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"send-{_utcnow():%Y%m%d-%H%M%S}.json"
+        payload = {
+            "account_id": account_id,
+            "overall": overall,
+            "detail": detail,
+            "finished_at": _utcnow().isoformat(),
+            "results": results,
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path

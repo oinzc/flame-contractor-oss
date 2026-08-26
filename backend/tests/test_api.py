@@ -142,6 +142,57 @@ def test_target_requires_existing_account_and_template(client):
     assert [item["nicknameSnapshot"] for item in listing.json()] == ["好友A"]
 
 
+def test_delete_target(client):
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
+    ).json()
+
+    removed = client.delete(f"/api/targets/{target['id']}")
+    assert removed.status_code == 204
+
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    assert listing == []
+
+    missing = client.delete("/api/targets/not-a-real-id")
+    assert missing.status_code == 404
+
+
+def test_delete_target_with_jobs_conflicts(client, engine):
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    from app.models import SendJob
+
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()
+    target = client.post(
+        "/api/targets",
+        json={
+            "accountId": account["id"],
+            "nicknameSnapshot": "好友A",
+            "templateId": template["id"],
+        },
+    ).json()
+
+    with Session(engine) as session:
+        session.add(
+            SendJob(
+                account_id=account["id"],
+                target_id=target["id"],
+                template_id=template["id"],
+                business_date=date_cls.today(),
+                message_slot_id="slot",
+            )
+        )
+        session.commit()
+
+    blocked = client.delete(f"/api/targets/{target['id']}")
+    assert blocked.status_code == 409
+
+
 def test_dashboard_aggregates_real_data(client, engine):
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
     template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()

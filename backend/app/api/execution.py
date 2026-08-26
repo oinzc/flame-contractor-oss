@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from ..core.database import SessionDep
 from ..models import Account
-from ..schemas import DryRunRead, LoginStatusRead
+from ..schemas import DryRunRead, LoginStatusRead, SendPreviewRead, SendRead
+from ..services import send_preview
 
 router = APIRouter(prefix="/accounts/{account_id}", tags=["execution"])
 
@@ -38,3 +39,16 @@ async def dry_run(account_id: str, request: Request, session: SessionDep) -> dic
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
     return await manager.run_dry_run(account_id)
+
+
+@router.get("/send/preview", response_model=SendPreviewRead)
+def read_send_preview(account_id: str, session: SessionDep) -> dict:
+    _require_account(session, account_id)
+    return send_preview(session, account_id)
+
+
+@router.post("/send", response_model=SendRead)
+async def send_now(account_id: str, request: Request, session: SessionDep) -> dict:
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.run_send(account_id)
