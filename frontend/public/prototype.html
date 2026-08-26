@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flame Contractor · 控制台原型预览（4 款方案）</title>
+<style>
+  /* ============ 原型页外壳（不属于任何方案） ============ */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0b0d10;
+    color: #e8ecf1;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  .proto { max-width: 1080px; margin: 0 auto; padding: 36px 22px 90px; }
+  .proto > header { margin-bottom: 10px; }
+  .proto > header h1 { margin: 0 0 4px; font-size: 20px; }
+  .proto > header p { margin: 0; color: #8b94a3; font-size: 13px; }
+  .section { margin-top: 44px; }
+  .section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+  .section-head h2 { margin: 0; font-size: 16px; }
+  .section-head .tag { color: #8b94a3; font-size: 12px; }
+  .screen {
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    border: 1px solid #242b35;
+  }
+  .screen-note { margin-top: 10px; color: #8b94a3; font-size: 12px; }
+
+  /* ================================================================
+     方案 A · Grafana 暗色运维台
+     ================================================================ */
+  .a-root {
+    background: #0e1116;
+    color: #e8ecf1;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-size: 13px;
+    display: grid;
+    grid-template-columns: 172px 1fr;
+    min-height: 560px;
+  }
+  .a-side { background: #161b22; border-right: 1px solid #242b35; padding: 16px 10px; }
+  .a-brand { display: flex; align-items: baseline; gap: 8px; padding: 0 8px 14px; }
+  .a-brand .glyph { font-size: 18px; color: #ff6a3d; font-family: "KaiTi","STKaiti",serif; }
+  .a-brand .name { font-size: 14px; font-weight: 600; letter-spacing: .06em; }
+  .a-nav { display: grid; gap: 2px; }
+  .a-nav div { padding: 7px 10px; border-radius: 6px; color: #8b94a3; font-size: 12.5px; }
+  .a-nav div.on { background: rgba(255,106,61,.12); border: 1px solid rgba(255,106,61,.35); color: #e8ecf1; }
+  .a-main { display: grid; grid-template-rows: 46px 1fr; }
+  .a-top { display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid #242b35; background: #0e1116; }
+  .a-top .t { font-size: 14px; font-weight: 600; }
+  .a-top .sub { color: #5c6470; font-size: 11.5px; font-family: Consolas, monospace; }
+  .a-top .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .a-health { font-size: 11.5px; color: #8b94a3; border: 1px solid #242b35; background: #161b22; border-radius: 999px; padding: 2px 10px; }
+  .a-health b { color: #72d6d0; font-weight: 600; }
+  .a-btn { background: #ff6a3d; border: 1px solid #ff6a3d; color: #160b06; font-weight: 600; font-size: 12px; border-radius: 6px; padding: 5px 12px; }
+  .a-content { padding: 16px 18px; display: grid; gap: 14px; align-content: start; }
+  .a-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .a-stat { background: #161b22; border: 1px solid #242b35; border-radius: 8px; padding: 12px 14px; }
+  .a-stat .l { font-size: 11.5px; color: #8b94a3; }
+  .a-stat .v { font-family: "Cascadia Code", Consolas, monospace; font-size: 24px; font-weight: 600; margin-top: 2px; }
+  .a-stat .v.hot { color: #ff6a3d; }
+  .a-panel { background: #161b22; border: 1px solid #242b35; border-radius: 8px; padding: 14px 16px; }
+  .a-panel h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: #b7bfc9; }
+  .a-bar { height: 6px; border-radius: 999px; background: #242b35; overflow: hidden; }
+  .a-bar i { display: block; height: 100%; width: 66%; border-radius: 999px; background: linear-gradient(90deg,#e2552a,#ff6a3d); }
+  .a-progress-meta { display: flex; justify-content: space-between; font-family: "Cascadia Code",Consolas,monospace; font-size: 12px; color: #b7bfc9; margin-bottom: 8px; }
+  .a-progress-meta b { color: #ff6a3d; }
+  .a-nodes { display: flex; gap: 14px; margin-top: 12px; }
+  .a-node { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: #8b94a3; }
+  .a-node i { width: 10px; height: 10px; border-radius: 50%; border: 1px solid #f5b942; }
+  .a-node i.done { border-color: #ff6a3d; background: #ff6a3d; box-shadow: 0 0 7px rgba(255,106,61,.6); }
+  .a-two { display: grid; grid-template-columns: 1.6fr 1fr; gap: 10px; }
+  .a-row { display: flex; align-items: center; gap: 10px; border: 1px solid #242b35; background: #1b212b; border-radius: 6px; padding: 8px 10px; }
+  .a-row .nm { flex: 1; }
+  .a-row .tm { color: #5c6470; font-family: Consolas,monospace; font-size: 11.5px; }
+  .a-chip { font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid #242b35; color: #8b94a3; white-space: nowrap; }
+  .a-chip.ok { color: #ff6a3d; border-color: rgba(255,106,61,.4); background: rgba(255,106,61,.12); }
+  .a-chip.warn { color: #f5b942; border-color: rgba(245,185,66,.4); background: rgba(245,185,66,.12); }
+  .a-chip.bad { color: #e45b64; border-color: rgba(228,91,100,.4); background: rgba(228,91,100,.12); }
+
+  /* ================================================================
+     方案 B · Vercel 轻量亮色
+     ================================================================ */
+  .b-root {
+    background: #fafafa;
+    color: #171717;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-size: 13px;
+    min-height: 560px;
+    display: grid;
+    grid-template-rows: 48px 1fr;
+  }
+  .b-top { display: flex; align-items: center; gap: 22px; padding: 0 22px; border-bottom: 1px solid #e5e5e5; background: #fff; }
+  .b-brand { display: flex; align-items: baseline; gap: 8px; }
+  .b-brand .glyph { color: #ff6a3d; font-family: "KaiTi","STKaiti",serif; font-size: 17px; }
+  .b-brand .name { font-weight: 700; font-size: 13.5px; letter-spacing: .04em; }
+  .b-nav { display: flex; gap: 18px; }
+  .b-nav span { color: #737373; font-size: 12.5px; cursor: default; padding: 13px 0 11px; border-bottom: 2px solid transparent; }
+  .b-nav span.on { color: #171717; border-bottom-color: #171717; }
+  .b-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .b-health { font-size: 11.5px; color: #737373; }
+  .b-health b { color: #11845b; font-weight: 600; }
+  .b-btn { background: #171717; color: #fff; font-weight: 500; font-size: 12px; border-radius: 6px; padding: 5px 12px; border: none; }
+  .b-body { display: grid; grid-template-columns: minmax(0,680px) 240px; justify-content: center; gap: 20px; padding: 26px 24px; }
+  .b-main { display: grid; gap: 14px; align-content: start; }
+  .b-h1 { font-size: 17px; font-weight: 700; margin: 0; }
+  .b-sub { color: #737373; font-size: 12px; margin-top: 2px; }
+  .b-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid #e5e5e5; border-radius: 8px; background: #fff; overflow: hidden; }
+  .b-stat { padding: 12px 14px; border-right: 1px solid #e5e5e5; }
+  .b-stat:last-child { border-right: none; }
+  .b-stat .l { font-size: 11.5px; color: #737373; }
+  .b-stat .v { font-family: Consolas, monospace; font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .b-stat .v.hot { color: #ff6a3d; }
+  .b-card { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 14px 16px; }
+  .b-card h4 { margin: 0 0 10px; font-size: 12.5px; font-weight: 600; }
+  .b-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .b-table th { text-align: left; color: #737373; font-weight: 500; font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid #e5e5e5; }
+  .b-table td { padding: 9px 8px; border-bottom: 1px solid #f0f0f0; }
+  .b-table tr:last-child td { border-bottom: none; }
+  .b-table .mono { font-family: Consolas, monospace; color: #737373; font-size: 11.5px; }
+  .b-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  .b-dot.ok { background: #ff6a3d; }
+  .b-dot.warn { background: #f5b942; }
+  .b-dot.bad { background: #e45b64; }
+  .b-rail { display: grid; gap: 12px; align-content: start; }
+  .b-rail .b-card { border-color: #e5e5e5; }
+  .b-link { color: #171717; border: 1px solid #e5e5e5; background: #fff; border-radius: 6px; font-size: 12px; padding: 5px 12px; }
+
+  /* ================================================================
+     方案 C · Apple 暖灰空间
+     ================================================================ */
+  .c-root {
+    background: #f5f5f7;
+    color: #1d1d1f;
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-size: 14px;
+    min-height: 560px;
+  }
+  .c-head { display: flex; align-items: flex-end; justify-content: space-between; padding: 30px 34px 18px; }
+  .c-title { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+  .c-head .sub { color: #86868b; font-size: 13px; margin-top: 4px; }
+  .c-actions { display: flex; gap: 8px; }
+  .c-btn { background: #007aff; color: #fff; font-size: 13px; border-radius: 999px; padding: 7px 16px; border: none; font-weight: 500; }
+  .c-btn.plain { background: #fff; color: #007aff; border: 1px solid #d2d2d7; }
+  .c-body { padding: 0 34px 30px; display: grid; gap: 26px; }
+  .c-group-title { font-size: 12.5px; color: #86868b; margin: 0 0 8px 6px; }
+  .c-list { display: grid; gap: 10px; }
+  .c-card { background: #fff; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05); padding: 16px 18px; display: flex; align-items: center; gap: 14px; }
+  .c-avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg,#ffb08a,#ff6a3d); color: #fff; font-family: "KaiTi","STKaiti",serif; font-size: 17px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .c-card .mid { flex: 1; min-width: 0; }
+  .c-card .nm { font-weight: 600; font-size: 15px; }
+  .c-card .meta { color: #86868b; font-size: 12.5px; margin-top: 2px; }
+  .c-pill { font-size: 12px; border-radius: 999px; padding: 3px 12px; white-space: nowrap; }
+  .c-pill.gray { background: #f5f5f7; color: #6e6e73; }
+  .c-pill.orange { background: rgba(255,106,61,.12); color: #e2552a; }
+  .c-pill.red { background: rgba(228,91,100,.12); color: #c43d46; }
+  .c-chev { color: #c7c7cc; font-size: 16px; padding: 0 4px; }
+  .c-progress { padding: 20px 22px; }
+  .c-progress .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+  .c-progress .nm { font-size: 15px; font-weight: 600; }
+  .c-progress .num { font-size: 13px; color: #86868b; }
+  .c-progress .num b { color: #e2552a; font-size: 16px; }
+  .c-bar { height: 8px; border-radius: 999px; background: #ececef; overflow: hidden; }
+  .c-bar i { display: block; height: 100%; width: 66%; border-radius: 999px; background: linear-gradient(90deg,#ff9a6a,#ff6a3d); }
+  .c-dots { display: flex; gap: 12px; margin-top: 14px; }
+  .c-dot-cell { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #86868b; }
+  .c-dot-cell i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid #f5b942; }
+  .c-dot-cell i.done { background: #ff6a3d; border-color: #ff6a3d; }
+
+  /* ================================================================
+     方案 D · Material 3 暗色调性
+     ================================================================ */
+  .d-root {
+    background: #141519;
+    color: #e6e1e5;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    font-size: 13.5px;
+    min-height: 560px;
+    display: grid;
+    grid-template-rows: 56px 44px 1fr;
+  }
+  .d-bar { display: flex; align-items: center; gap: 14px; padding: 0 18px; background: #1a1b20; }
+  .d-brand { display: flex; align-items: baseline; gap: 8px; }
+  .d-brand .glyph { color: #ff6a3d; font-family: "KaiTi","STKaiti",serif; font-size: 17px; }
+  .d-brand .name { font-weight: 600; font-size: 14px; letter-spacing: .04em; }
+  .d-bar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .d-health { font-size: 12px; color: #b6b1b8; }
+  .d-health b { color: #72d6d0; font-weight: 600; }
+  .d-btn { background: #ff6a3d; color: #160b06; font-weight: 600; font-size: 12.5px; border-radius: 999px; padding: 6px 16px; border: none; }
+  .d-tabs { display: flex; align-items: center; gap: 4px; padding: 0 18px; background: #1a1b20; border-bottom: 1px solid #26282f; }
+  .d-tab { padding: 6px 14px; border-radius: 999px; color: #b6b1b8; font-size: 12.5px; }
+  .d-tab.on { background: #ff6a3d; color: #160b06; font-weight: 600; }
+  .d-body { padding: 16px 18px; display: grid; gap: 12px; align-content: start; }
+  .d-card { background: #202127; border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .d-card.hi { background: #26282f; box-shadow: 0 2px 6px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.3); }
+  .d-card h4 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #e6e1e5; }
+  .d-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .d-stat { background: #26282f; border-radius: 12px; padding: 12px 14px; }
+  .d-stat .l { font-size: 11.5px; color: #b6b1b8; }
+  .d-stat .v { font-family: Consolas, monospace; font-size: 21px; font-weight: 600; margin-top: 2px; }
+  .d-stat .v.hot { color: #ff6a3d; }
+  .d-barline { height: 6px; border-radius: 999px; background: #33363e; overflow: hidden; }
+  .d-barline i { display: block; height: 100%; width: 66%; border-radius: 999px; background: #ff6a3d; }
+  .d-meta { display: flex; justify-content: space-between; font-family: Consolas, monospace; font-size: 12px; color: #b6b1b8; margin-bottom: 8px; }
+  .d-meta b { color: #ff6a3d; }
+  .d-rows { display: grid; gap: 8px; }
+  .d-row { display: flex; align-items: center; gap: 10px; background: #26282f; border-radius: 12px; padding: 10px 14px; }
+  .d-row .nm { flex: 1; font-weight: 500; }
+  .d-row .tm { color: #8f8a92; font-family: Consolas, monospace; font-size: 11.5px; }
+  .d-pill { font-size: 12px; border-radius: 999px; padding: 3px 12px; white-space: nowrap; }
+  .d-pill.solid { background: #ff6a3d; color: #160b06; font-weight: 600; }
+  .d-pill.tint { background: rgba(255,106,61,.15); color: #ffb08a; }
+  .d-pill.gray { background: #33363e; color: #b6b1b8; }
+  .d-pill.red { background: rgba(228,91,100,.15); color: #eaa0a6; }
+</style>
+</head>
+<body>
+<div class="proto">
+  <header>
+    <h1>Flame Contractor · 控制台原型预览</h1>
+    <p>同一套数据与文案（账号 / 好友 / 模板 / 任务记录），四种不同的布局架构与视觉语言。内容为静态假数据，仅用于选样式。</p>
+  </header>
+
+  <!-- ===================== A ===================== -->
+  <section class="section">
+    <div class="section-head"><h2>方案 A · Grafana 暗色运维台</h2><span class="tag">数据密度优先 · 侧边栏 + 仪表盘网格</span></div>
+    <div class="screen">
+      <div class="a-root">
+        <aside class="a-side">
+          <div class="a-brand"><span class="glyph">焰</span><span class="name">焰之契约者</span></div>
+          <nav class="a-nav">
+            <div class="on">总览</div><div>账号</div><div>好友</div><div>模板</div><div>任务记录</div>
+          </nav>
+        </aside>
+        <div class="a-main">
+          <header class="a-top">
+            <span class="t">总览</span><span class="sub">2026/08/26 周三 · v0.1.0</span>
+            <span class="right">
+              <span class="a-health"><b>●</b> 本机控制面正常</span>
+              <button class="a-btn">新建账号</button>
+            </span>
+          </header>
+          <main class="a-content">
+            <div class="a-stats">
+              <div class="a-stat"><div class="l">账号总数</div><div class="v">2</div></div>
+              <div class="a-stat"><div class="l">正常账号</div><div class="v">1</div></div>
+              <div class="a-stat"><div class="l">启用好友</div><div class="v">3</div></div>
+              <div class="a-stat"><div class="l">今日已发送</div><div class="v hot">2</div></div>
+            </div>
+            <div class="a-panel">
+              <h4>今日发送进度</h4>
+              <div class="a-progress-meta"><span>已发送 <b>2</b> / 启用好友 <b>3</b></span><span>66%</span></div>
+              <div class="a-bar"><i></i></div>
+              <div class="a-nodes">
+                <div class="a-node"><i class="done"></i>好友A</div>
+                <div class="a-node"><i class="done"></i>好友B</div>
+                <div class="a-node"><i></i>好友C</div>
+              </div>
+            </div>
+            <div class="a-two">
+              <div class="a-panel">
+                <h4>最近任务</h4>
+                <div style="display:grid;gap:8px">
+                  <div class="a-row"><span class="nm">好友A</span><span class="tm">20:12</span><span class="a-chip ok">已续焰</span></div>
+                  <div class="a-row"><span class="nm">好友B</span><span class="tm">20:14</span><span class="a-chip ok">已续焰</span></div>
+                  <div class="a-row"><span class="nm">好友C</span><span class="tm">20:16</span><span class="a-chip warn">待执行</span></div>
+                </div>
+              </div>
+              <div class="a-panel">
+                <h4>待处理</h4>
+                <div class="a-row"><span class="nm">主账号</span><span class="a-chip bad">登录失效</span></div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+    <p class="screen-note">布局：侧边栏导航 + 统计卡网格 + 进度轨道 + 双栏列表。视觉：无阴影、1px 边框、等宽数据、状态色点。</p>
+  </section>
+
+  <!-- ===================== B ===================== -->
+  <section class="section">
+    <div class="section-head"><h2>方案 B · Vercel 轻量亮色</h2><span class="tag">极简 hairline · 顶部导航 + 居中窄栏</span></div>
+    <div class="screen">
+      <div class="b-root">
+        <header class="b-top">
+          <div class="b-brand"><span class="glyph">焰</span><span class="name">焰之契约者</span></div>
+          <nav class="b-nav">
+            <span class="on">总览</span><span>账号</span><span>好友</span><span>模板</span><span>任务记录</span>
+          </nav>
+          <div class="b-right">
+            <span class="b-health"><b>●</b> 控制面正常</span>
+            <button class="b-btn">新建账号</button>
+          </div>
+        </header>
+        <div class="b-body">
+          <main class="b-main">
+            <div>
+              <h1 class="b-h1">总览</h1>
+              <p class="b-sub">账号、好友与今日任务的最新状态。</p>
+            </div>
+            <div class="b-stats">
+              <div class="b-stat"><div class="l">账号总数</div><div class="v">2</div></div>
+              <div class="b-stat"><div class="l">正常账号</div><div class="v">1</div></div>
+              <div class="b-stat"><div class="l">启用好友</div><div class="v">3</div></div>
+              <div class="b-stat"><div class="l">今日已发送</div><div class="v hot">2</div></div>
+            </div>
+            <div class="b-card">
+              <h4>好友发送状态</h4>
+              <table class="b-table">
+                <tr><th>好友</th><th>状态</th><th>上次发送</th><th>操作</th></tr>
+                <tr><td>好友A</td><td><span class="b-dot ok"></span>已发送</td><td class="mono">20:12</td><td><button class="b-link">定位校验</button></td></tr>
+                <tr><td>好友B</td><td><span class="b-dot ok"></span>已发送</td><td class="mono">20:14</td><td><button class="b-link">定位校验</button></td></tr>
+                <tr><td>好友C</td><td><span class="b-dot warn"></span>待发送</td><td class="mono">—</td><td><button class="b-link">定位校验</button></td></tr>
+              </table>
+            </div>
+            <div class="b-card">
+              <h4>最近任务</h4>
+              <table class="b-table">
+                <tr><th>时间</th><th>好友</th><th>结果</th></tr>
+                <tr><td class="mono">20:12</td><td>好友A</td><td>已续焰</td></tr>
+                <tr><td class="mono">20:14</td><td>好友B</td><td>已续焰</td></tr>
+              </table>
+            </div>
+          </main>
+          <aside class="b-rail">
+            <div class="b-card">
+              <h4>待处理</h4>
+              <div style="display:grid;gap:8px">
+                <div class="b-rowline" style="font-size:12.5px"><span class="b-dot bad"></span>主账号 · 登录失效</div>
+                <div class="b-rowline" style="font-size:12.5px"><span class="b-dot warn"></span>好友C · 待发送</div>
+              </div>
+            </div>
+            <div class="b-card">
+              <h4>今日进度</h4>
+              <div class="a-bar" style="background:#ececec"><i style="display:block;height:100%;width:66%;border-radius:999px;background:#171717"></i></div>
+              <div style="font-size:11.5px;color:#737373;margin-top:8px">已发送 2 / 3</div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+    <p class="screen-note">布局：顶部横向导航 + 居中窄栏 + 右侧上下文栏。视觉：纯白底、hairline 分割、黑色主按钮、几乎无阴影。</p>
+  </section>
+
+  <!-- ===================== C ===================== -->
+  <section class="section">
+    <div class="section-head"><h2>方案 C · Apple 暖灰空间</h2><span class="tag">大留白 · 无侧边栏 + 分组圆角卡片</span></div>
+    <div class="screen">
+      <div class="c-root">
+        <header class="c-head">
+          <div>
+            <div class="c-title">账号管理</div>
+            <div class="sub">每账号独立浏览器登录 · 本机数据不出门</div>
+          </div>
+          <div class="c-actions">
+            <button class="c-btn plain">帮助</button>
+            <button class="c-btn">新建账号</button>
+          </div>
+        </header>
+        <div class="c-body">
+          <section>
+            <h3 class="c-group-title">账号</h3>
+            <div class="c-list">
+              <div class="c-card">
+                <div class="c-avatar">主</div>
+                <div class="mid">
+                  <div class="nm">主账号</div>
+                  <div class="meta">登录已失效 · 上次验证 3 天前</div>
+                </div>
+                <span class="c-pill red">登录失效</span>
+                <button class="c-btn" style="background:#ff6a3d">重新登录</button>
+                <span class="c-chev">›</span>
+              </div>
+              <div class="c-card">
+                <div class="c-avatar">备</div>
+                <div class="mid">
+                  <div class="nm">备用账号</div>
+                  <div class="meta">正常 · 发送时段 20:00–22:00</div>
+                </div>
+                <span class="c-pill orange">正常</span>
+                <button class="c-btn">定位校验</button>
+                <span class="c-chev">›</span>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h3 class="c-group-title">今日</h3>
+            <div class="c-card c-progress">
+              <div class="top">
+                <span class="nm">发送进度</span>
+                <span class="num">已发送 <b>2</b> / 3 位好友</span>
+              </div>
+              <div class="c-bar"><i></i></div>
+              <div class="c-dots">
+                <div class="c-dot-cell"><i class="done"></i>好友A 已发送</div>
+                <div class="c-dot-cell"><i class="done"></i>好友B 已发送</div>
+                <div class="c-dot-cell"><i></i>好友C 待发送</div>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h3 class="c-group-title">模板</h3>
+            <div class="c-card">
+              <div class="mid">
+                <div class="nm">每日一言</div>
+                <div class="meta">{{target_name}}，今天也要开心。第 {{streak_days}} 天。</div>
+              </div>
+              <span class="c-pill gray">v1</span>
+              <span class="c-chev">›</span>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <p class="screen-note">布局：无侧边栏，大标题页头 + 分组区块 + 行内右侧操作。视觉：暖灰底、白色大圆角卡片、柔和分层阴影、蓝色胶囊按钮。</p>
+  </section>
+
+  <!-- ===================== D ===================== -->
+  <section class="section">
+    <div class="section-head"><h2>方案 D · Material 3 暗色调性</h2><span class="tag">tonal 分层 · App Bar + 页内 Tab</span></div>
+    <div class="screen">
+      <div class="d-root">
+        <header class="d-bar">
+          <div class="d-brand"><span class="glyph">焰</span><span class="name">焰之契约者</span></div>
+          <div class="right">
+            <span class="d-health"><b>●</b> 控制面正常</span>
+            <button class="d-btn">新建账号</button>
+          </div>
+        </header>
+        <nav class="d-tabs">
+          <span class="d-tab on">总览</span><span class="d-tab">账号</span><span class="d-tab">好友</span><span class="d-tab">模板</span><span class="d-tab">任务记录</span>
+        </nav>
+        <main class="d-body">
+          <div class="d-stats">
+            <div class="d-stat"><div class="l">账号总数</div><div class="v">2</div></div>
+            <div class="d-stat"><div class="l">正常账号</div><div class="v">1</div></div>
+            <div class="d-stat"><div class="l">启用好友</div><div class="v">3</div></div>
+            <div class="d-stat"><div class="l">今日已发送</div><div class="v hot">2</div></div>
+          </div>
+          <div class="d-card hi">
+            <h4>今日发送进度</h4>
+            <div class="d-meta"><span>已发送 <b>2</b> / 3</span><span>66%</span></div>
+            <div class="d-barline"><i></i></div>
+          </div>
+          <div class="d-card">
+            <h4>好友状态</h4>
+            <div class="d-rows">
+              <div class="d-row"><span class="nm">好友A</span><span class="tm">20:12</span><span class="d-pill tint">已发送</span><button class="d-pill gray">定位校验</button></div>
+              <div class="d-row"><span class="nm">好友B</span><span class="tm">20:14</span><span class="d-pill tint">已发送</span><button class="d-pill gray">定位校验</button></div>
+              <div class="d-row"><span class="nm">好友C</span><span class="tm">20:16</span><span class="d-pill red">待发送</span><button class="d-pill gray">定位校验</button></div>
+            </div>
+          </div>
+          <div class="d-card">
+            <h4>待处理</h4>
+            <div class="d-row"><span class="nm">主账号 · 登录已失效，请重新扫码</span><button class="d-pill solid">重新登录</button></div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <p class="screen-note">布局：顶部 App Bar + 页内胶囊 Tab。视觉：tonal 分层 surface、16px 大圆角、elevation 阴影、胶囊按钮与状态条。</p>
+  </section>
+</div>
+</body>
+</html>
