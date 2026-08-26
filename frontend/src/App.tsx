@@ -1,22 +1,30 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from './api'
 import type {
-  Account,
   ContractTarget,
   DashboardSummary,
   Health,
   MessageTemplate,
 } from './types'
-import TopBar from './components/TopBar'
-import FlameLine from './components/FlameLine'
-import AccountRail from './components/AccountRail'
-import AttentionPanel from './components/AttentionPanel'
-import RecentJobs from './components/RecentJobs'
-import CreateAccountPanel from './components/CreateAccountPanel'
-import ContractsPanel from './components/ContractsPanel'
-import TemplatesPanel from './components/TemplatesPanel'
+import CreateAccountModal from './components/CreateAccountModal'
+import DashboardPage from './components/DashboardPage'
+import AccountsPage from './components/AccountsPage'
+import TargetsPage from './components/TargetsPage'
+import TemplatesPage from './components/TemplatesPage'
+import JobsPage from './components/JobsPage'
+
+type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
+
+const NAV_ITEMS: { key: Page; label: string }[] = [
+  { key: 'dashboard', label: '总览' },
+  { key: 'accounts', label: '账号' },
+  { key: 'targets', label: '好友' },
+  { key: 'templates', label: '模板' },
+  { key: 'jobs', label: '任务记录' },
+]
 
 export default function App() {
+  const [page, setPage] = useState<Page>('dashboard')
   const [health, setHealth] = useState<Health | null>(null)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [targets, setTargets] = useState<ContractTarget[]>([])
@@ -56,27 +64,47 @@ export default function App() {
     await refresh()
   }
 
-  async function handleToggleAccount(account: Account) {
-    await api.patchAccount(account.id, { enabled: !account.enabled })
-    await refresh()
-  }
-
   const loading = health === null && error === null
 
   return (
     <div className="app">
-      <TopBar
-        databaseReady={health?.database === 'ready'}
-        onCreateAccount={() => setShowCreate(true)}
-      />
+      <header className="topbar">
+        <div className="brand">
+          <span className="glyph" aria-hidden="true">
+            焰
+          </span>
+          <span className="name">焰之契约者</span>
+        </div>
+        <nav className="nav">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`nav-item${page === item.key ? ' active' : ''}`}
+              onClick={() => setPage(item.key)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <div className="topbar-right">
+          <span className="health">
+            <span className={`dot${health?.database === 'ready' ? '' : ' degraded'}`} />
+            {health?.database === 'ready' ? '控制面正常' : '控制面未连接'}
+          </span>
+          <button className="btn primary small" type="button" onClick={() => setShowCreate(true)}>
+            新建账号
+          </button>
+        </div>
+      </header>
 
       {error && (
         <div className="error-banner" role="alert">
           <span>
-            控制面不可达：{error}。请确认后端已在 backend 目录运行（.venv\Scripts\python -m
-            uvicorn app.main:app --host 127.0.0.1 --port 8000）。
+            控制面不可达：{error}。请确认后端已运行（backend 目录：.venv\Scripts\python -m uvicorn
+            app.main:app --host 127.0.0.1 --port 8000）。
           </span>
-          <button className="btn ghost small" type="button" onClick={() => void refresh()}>
+          <button className="btn small" type="button" onClick={() => void refresh()}>
             重试
           </button>
         </div>
@@ -88,75 +116,44 @@ export default function App() {
         </div>
       ) : (
         summary && (
-          <main className="main">
-            <div className="column">
-              {showCreate && (
-                <CreateAccountPanel
-                  onSubmit={handleCreateAccount}
-                  onCancel={() => setShowCreate(false)}
-                />
-              )}
-
-              <section className="panel">
-                <h2 className="panel-title">今日焰线</h2>
-                <FlameLine targets={targets} succeeded={summary.todaySucceeded} />
-              </section>
-
-              <ContractsPanel
+          <main className="content">
+            {page === 'dashboard' && (
+              <DashboardPage summary={summary} targets={targets} onNavigate={setPage} />
+            )}
+            {page === 'accounts' && (
+              <AccountsPage
+                accounts={summary.accounts}
+                onChanged={() => void refresh()}
+                onCreateAccount={() => setShowCreate(true)}
+              />
+            )}
+            {page === 'targets' && (
+              <TargetsPage
                 accounts={summary.accounts}
                 targets={targets}
                 templates={templates}
                 onChanged={() => void refresh()}
               />
-
-              <TemplatesPanel templates={templates} onChanged={() => void refresh()} />
-
-              <section className="panel">
-                <h2 className="panel-title">账号炉心</h2>
-                <p className="panel-sub">
-                  {summary.accountCount} 个账号 · 状态与焰窗一览
-                </p>
-                <AccountRail
-                  accounts={summary.accounts}
-                  onToggle={handleToggleAccount}
-                  onCreateAccount={() => setShowCreate(true)}
-                  onChanged={() => void refresh()}
-                />
-              </section>
-            </div>
-
-            <aside className="column">
-              <section className="panel">
-                <h2 className="panel-title">待处理</h2>
-                <p className="panel-sub">{summary.needsAttention} 项需要你的关注</p>
-                <AttentionPanel accounts={summary.accounts} />
-              </section>
-
-              <section className="panel">
-                <h2 className="panel-title">最近任务</h2>
-                <p className="panel-sub">
-                  今日已续 {summary.todaySucceeded} · 待执行 {summary.todayPending}
-                </p>
-                <RecentJobs jobs={summary.recentJobs} />
-              </section>
-
-              <section className="panel">
-                <h2 className="panel-title">本机边界</h2>
-                <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 18 }}>
-                  <li>骨架版本：调度器与抖音执行器尚未接入。</li>
-                  <li>数据库不保存 Cookie、密码或 Storage State。</li>
-                  <li>登录失效与验证码只允许本人处理，不自动绕过。</li>
-                </ul>
-              </section>
-            </aside>
+            )}
+            {page === 'templates' && (
+              <TemplatesPage templates={templates} onChanged={() => void refresh()} />
+            )}
+            {page === 'jobs' && <JobsPage summary={summary} />}
           </main>
         )
       )}
 
       {!loading && (
         <footer className="footer-note">
-          Flame Contractor 0.1 · 本地优先 · 账号凭据永不进入数据库与日志
+          本机优先 · 登录凭据只保存在本机浏览器 Profile，不入库、不上传
         </footer>
+      )}
+
+      {showCreate && (
+        <CreateAccountModal
+          onSubmit={handleCreateAccount}
+          onClose={() => setShowCreate(false)}
+        />
       )}
     </div>
   )
