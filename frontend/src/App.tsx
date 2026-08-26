@@ -1,17 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, ApiError } from './api'
-import type { Account, ContractTarget, DashboardSummary, Health } from './types'
+import type {
+  Account,
+  ContractTarget,
+  DashboardSummary,
+  Health,
+  MessageTemplate,
+} from './types'
 import TopBar from './components/TopBar'
 import FlameLine from './components/FlameLine'
 import AccountRail from './components/AccountRail'
 import AttentionPanel from './components/AttentionPanel'
 import RecentJobs from './components/RecentJobs'
 import CreateAccountPanel from './components/CreateAccountPanel'
+import ContractsPanel from './components/ContractsPanel'
+import TemplatesPanel from './components/TemplatesPanel'
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [targets, setTargets] = useState<ContractTarget[]>([])
+  const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -19,14 +28,16 @@ export default function App() {
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [nextHealth, nextSummary, nextTargets] = await Promise.all([
+      const [nextHealth, nextSummary, nextTargets, nextTemplates] = await Promise.all([
         api.health(),
         api.dashboard(),
         api.targets(),
+        api.templates(),
       ])
       setHealth(nextHealth)
       setSummary(nextSummary)
       setTargets(nextTargets)
+      setTemplates(nextTemplates)
       setError(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '无法连接本机控制面')
@@ -90,6 +101,15 @@ export default function App() {
                 <h2 className="panel-title">今日焰线</h2>
                 <FlameLine targets={targets} succeeded={summary.todaySucceeded} />
               </section>
+
+              <ContractsPanel
+                accounts={summary.accounts}
+                targets={targets}
+                templates={templates}
+                onChanged={() => void refresh()}
+              />
+
+              <TemplatesPanel templates={templates} onChanged={() => void refresh()} />
 
               <section className="panel">
                 <h2 className="panel-title">账号炉心</h2>

@@ -131,3 +131,16 @@ export interface DryRunRead {
   targets: DryRunTargetResult[]
   artifactPath: string | null
 }
+
+export interface TargetCreateInput {
+  accountId: string
+  nicknameSnapshot: string
+  platformUserId?: string
+  templateId?: string
+  streakDays: number
+}
+
+export interface TemplateCreateInput {
+  name: string
+  content: string
+}
