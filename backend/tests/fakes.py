@@ -76,6 +76,7 @@ class FakePage:
         search_results: dict[str, tuple[str, ...]] | None = None,
         titles_revealed_by_scroll: tuple[str, ...] = (),
         search_requires_warmup: bool = False,
+        search_results_after_polls: int = 0,
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
@@ -89,6 +90,8 @@ class FakePage:
         self.search_results = search_results or {}
         self.titles_revealed_by_scroll = list(titles_revealed_by_scroll)
         self.search_requires_warmup = search_requires_warmup
+        self.search_results_after_polls = search_results_after_polls
+        self._search_polls = 0
         self.warmed = False
         self.search_active = False
         self.editor_text = ""
@@ -124,6 +127,9 @@ class FakePage:
         if selector == SEARCH_RESULT_ITEM:
             if not self.search_active:
                 return []
+            self._search_polls += 1
+            if self._search_polls <= self.search_results_after_polls:
+                return []  # 模拟结果延迟渲染
             return [FakeItem(self, title, search_style=True) for title in self.conversation_titles]
         if selector == CONVERSATION_ITEM:
             if self.search_active:
@@ -199,6 +205,7 @@ def make_app(settings, pages: list[FakePage]):
         send_poll_interval=0.05,
         send_stabilize_polls=2,
         confirm_timeout=0.2,
+        search_timeout=0.2,
         sleep=lambda _seconds: asyncio.sleep(0),
     )
     return create_app(settings, browser_manager=manager)

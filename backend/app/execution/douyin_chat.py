@@ -18,6 +18,7 @@ from .selectors import (
 
 MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
+SEARCH_RESULTS_TIMEOUT = 12.0
 _ITEM_SELECTORS = (CONVERSATION_ITEM, SEARCH_RESULT_ITEM)
 OPEN_CONFIRM_TIMEOUT = 8.0
 
@@ -45,11 +46,13 @@ class DouyinChat:
         page,
         timeout_ms: int = 15_000,
         confirm_timeout: float = OPEN_CONFIRM_TIMEOUT,
+        search_timeout: float = SEARCH_RESULTS_TIMEOUT,
         sleep=asyncio.sleep,
     ):
         self.page = page
         self.timeout_ms = timeout_ms
         self.confirm_timeout = confirm_timeout
+        self.search_timeout = search_timeout
         self._sleep = sleep
         self._warmed = False
 
@@ -100,11 +103,9 @@ class DouyinChat:
         # 1) 搜索优先：直接搜索昵称，从结果中精确匹配
         try:
             await self.search(name)
-            result = await self._scan_items(name)
-            if result.opened:
+            result = await self._search_and_open(name)
+            if result is not None:
                 return result
-            if await self._try_click_exact_by_text(name):
-                return await self._confirm_opened(name)
         except Exception:
             pass
         # 2) 清空搜索，滚动加载列表兜底（会话列表可能是懒加载）
@@ -195,6 +196,21 @@ class DouyinChat:
         except Exception:
             pass
         return result
+
+    async def _search_and_open(self, name: str) -> ConversationOpen | None:
+        """搜索后轮询等待结果渲染（首次加载时结果可能晚于固定等待时间）。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.search_timeout
+        while True:
+            result = await self._scan_items(name)
+            if result.opened:
+                return result
+            if loop.time() >= deadline:
+                break
+            await self._sleep(1.0)
+        if await self._try_click_exact_by_text(name):
+            return await self._confirm_opened(name)
+        return None
 
     async def _scan_items(self, name: str) -> ConversationOpen:
         for selector in _ITEM_SELECTORS:

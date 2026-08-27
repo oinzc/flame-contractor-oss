@@ -246,3 +246,27 @@ def test_search_requires_warmup_first(settings):
         )
         result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
         assert result["targets"][0]["status"] == "found"
+
+
+def test_search_results_appearing_late_are_waited_for(settings):
+    """搜索结果晚于固定等待时间才渲染：轮询等待直到出现。"""
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B",),
+                right_title="oinzc",
+                search_results={"oinzc": ("oinzc",)},
+                search_results_after_polls=3,
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "oinzc"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "found"
