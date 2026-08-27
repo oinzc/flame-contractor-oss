@@ -75,6 +75,7 @@ class FakePage:
         clear_on_enter: bool = True,
         search_results: dict[str, tuple[str, ...]] | None = None,
         titles_revealed_by_scroll: tuple[str, ...] = (),
+        search_requires_warmup: bool = False,
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
@@ -87,6 +88,8 @@ class FakePage:
         self.clear_on_enter = clear_on_enter
         self.search_results = search_results or {}
         self.titles_revealed_by_scroll = list(titles_revealed_by_scroll)
+        self.search_requires_warmup = search_requires_warmup
+        self.warmed = False
         self.search_active = False
         self.editor_text = ""
         self.gotos: list[str] = []
@@ -133,9 +136,12 @@ class FakePage:
         if selector == SEARCH_INPUT:
             if value.strip():
                 self.search_active = True
-                self.conversation_titles = list(
-                    self.search_results.get(value.strip(), self._original_titles)
-                )
+                if self.search_requires_warmup and not self.warmed:
+                    self.conversation_titles = []
+                else:
+                    self.conversation_titles = list(
+                        self.search_results.get(value.strip(), self._original_titles)
+                    )
             else:
                 self.search_active = False
                 self.conversation_titles = list(self._original_titles)
@@ -153,9 +159,13 @@ class FakePage:
     async def evaluate(self, _expression: str, selector: str) -> None:
         self.scrolls.append(selector)
         if selector == CONVERSATION_LIST:
+            self.warmed = True
             for title in self.titles_revealed_by_scroll:
                 if title not in self.conversation_titles:
                     self.conversation_titles.append(title)
+
+    async def evaluate_js(self, _script: str) -> dict:
+        return {}
 
 
 class FakeContext:
