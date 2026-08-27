@@ -198,3 +198,27 @@ def test_dry_run_not_found_reports_visible_titles(settings):
         assert result["targets"][0]["status"] == "not_found"
         assert result["visibleTitles"] == ["好友B", "群聊A(7)"]
         assert "好友B" in result["targets"][0]["detail"]
+
+
+def test_dry_run_finds_contact_via_send_message_button(settings):
+    """无历史会话的联系人：列表里没有，但搜索能搜到，点「发消息」按钮发起聊天。"""
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B",),
+                right_title="oinzc",
+                search_results={"oinzc": ("oinzc",)},
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "oinzc"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "found"
+        assert result["visibleTitles"] == ["好友B"]  # 搜索面板里看不到历史列表，符合真实页面

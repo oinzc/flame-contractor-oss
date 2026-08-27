@@ -76,6 +76,7 @@ class BrowserManager:
         send_timeout: float = SEND_TIMEOUT_SECONDS,
         send_poll_interval: float = SEND_POLL_INTERVAL,
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
+        confirm_timeout: float = 8.0,
         sleep=asyncio.sleep,
     ):
         self._engine = engine
@@ -88,7 +89,15 @@ class BrowserManager:
         self._send_timeout = send_timeout
         self._send_poll_interval = send_poll_interval
         self._send_stabilize_polls = send_stabilize_polls
+        self._confirm_timeout = confirm_timeout
         self._sleep = sleep
+
+    def _make_chat(self, page) -> DouyinChat:
+        return DouyinChat(
+            page,
+            sleep=self._sleep,
+            confirm_timeout=self._confirm_timeout,
+        )
 
     # ------------------------------------------------------------ browser
 
@@ -232,7 +241,7 @@ class BrowserManager:
         visible_titles: list[str] = []
         try:
             context, page = await self._open(profile_path, headless=True)
-            chat = DouyinChat(page, sleep=self._sleep)
+            chat = self._make_chat(page)
             await chat.open_chat_page()
             if not await chat.is_logged_in():
                 self._mark_auth_expired(account_id)
@@ -350,7 +359,7 @@ class BrowserManager:
         context = None
         try:
             context, page = await self._open(profile_path, headless=True)
-            chat = DouyinChat(page, sleep=self._sleep)
+            chat = self._make_chat(page)
             await chat.open_chat_page()
             if not await chat.is_logged_in():
                 self._mark_auth_expired(account_id)
