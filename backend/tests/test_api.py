@@ -159,6 +159,30 @@ def test_delete_target(client):
     assert missing.status_code == 404
 
 
+def test_patch_target_streak(client):
+    """火花天数手动校准：只改 streakDays，其余字段不变。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A", "streakDays": 3},
+    ).json()
+
+    updated = client.patch(
+        f"/api/targets/{target['id']}", json={"streakDays": 12}
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["streakDays"] == 12
+    assert body["nicknameSnapshot"] == "好友A"  # 其它字段不变
+
+    missing = client.patch("/api/targets/not-a-real-id", json={"streakDays": 5})
+    assert missing.status_code == 404
+
+    # 负数被 422 拒绝
+    negative = client.patch(f"/api/targets/{target['id']}", json={"streakDays": -1})
+    assert negative.status_code == 422
+
+
 def test_delete_target_with_jobs_conflicts(client, engine):
     from datetime import date as date_cls
 

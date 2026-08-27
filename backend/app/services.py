@@ -23,6 +23,7 @@ from .schemas import (
     DashboardSummary,
     JobRead,
     TargetCreate,
+    TargetPatch,
     TargetRead,
     TemplateCreate,
     TemplateRead,
@@ -169,6 +170,23 @@ def delete_target(session: Session, target_id: str) -> None:
             status_code=409,
             detail="该好友已有任务记录，不能删除；可改为暂停使用",
         ) from None
+
+
+def patch_target(session: Session, target_id: str, payload: TargetPatch) -> TargetRead:
+    """局部更新契约对象。当前仅支持火花天数手动校准（参考 ScriptCat）。"""
+    target = session.get(ContractTarget, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="好友不存在")
+
+    data = payload.model_dump(exclude_unset=True)
+    for field, value in data.items():
+        setattr(target, field, value)
+    target.updated_at = utc_now()
+
+    session.add(target)
+    session.commit()
+    session.refresh(target)
+    return TargetRead.model_validate(target)
 
 
 # ---------------------------------------------------------------- send preview
