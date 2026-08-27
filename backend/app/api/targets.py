@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Response, status
 
 from ..core.database import SessionDep
-from ..schemas import TargetCreate, TargetRead
-from ..services import create_target, delete_target, list_targets
+from ..schemas import TargetCreate, TargetPatch, TargetRead
+from ..services import create_target, delete_target, list_targets, patch_target
 
 router = APIRouter(prefix="/targets", tags=["targets"])
 
@@ -15,6 +15,11 @@ def read_targets(session: SessionDep, account_id: str | None = None) -> list[Tar
 @router.post("", response_model=TargetRead, status_code=status.HTTP_201_CREATED)
 def add_target(payload: TargetCreate, session: SessionDep) -> TargetRead:
     return create_target(session, payload)
+
+
+@router.patch("/{target_id}", response_model=TargetRead)
+def update_target(target_id: str, payload: TargetPatch, session: SessionDep) -> TargetRead:
+    return patch_target(session, target_id, payload)
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)

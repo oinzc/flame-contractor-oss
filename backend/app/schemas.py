@@ -130,6 +130,12 @@ class TargetCreate(APIBase):
         return value
 
 
+class TargetPatch(APIBase):
+    """局部更新契约对象。当前仅开放火花天数手动校准（参考 ScriptCat）。"""
+
+    streak_days: int | None = Field(default=None, ge=0)
+
+
 class TargetRead(APIBase):
     id: str
     account_id: str

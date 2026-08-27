@@ -46,6 +46,22 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     }
   }
 
+  async function handleAdjustStreak(target: ContractTarget) {
+    const input = window.prompt(
+      `校准好友「${target.nicknameSnapshot}」的火花天数（本地记录，非抖音实时值）：`,
+      String(target.streakDays),
+    )
+    if (input === null) return
+    const value = Math.max(0, Number.parseInt(input, 10) || 0)
+    setActionError(null)
+    try {
+      await api.patchTarget(target.id, { streakDays: value })
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '校准失败，请重试')
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -126,7 +142,17 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                       <td>{target.nicknameSnapshot}</td>
                       <td className="mono">{target.platformUserId ?? '—'}</td>
                       <td>{templateName(target.templateId)}</td>
-                      <td className="mono">{target.streakDays} 天</td>
+                      <td className="mono">
+                        {target.streakDays} 天
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          style={{ marginLeft: 6 }}
+                          onClick={() => handleAdjustStreak(target)}
+                        >
+                          校准
+                        </button>
+                      </td>
                       <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
                       <td>
                         <button

@@ -54,6 +54,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  patchTarget: (id: string, patch: { streakDays?: number }) =>
+    request<import('./types').ContractTarget>(`/api/targets/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
   deleteTarget: (id: string) =>
     request<void>(`/api/targets/${id}`, { method: 'DELETE' }),
   sendPreview: (id: string) =>
