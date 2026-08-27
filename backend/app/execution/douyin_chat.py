@@ -1,4 +1,5 @@
 import asyncio
+import re
 from dataclasses import dataclass
 
 from .selectors import (
@@ -13,8 +14,12 @@ from .selectors import (
     SEARCH_INPUTS,
     SEARCH_NAME_SELECTORS,
     SEARCH_RESULT_ITEM,
+    SEND_BUTTONS,
     SEND_FAILURE_MARKERS,
 )
+
+# 抖音输入框发送后会残留零宽字符，普通 strip() 判不清空
+_BLANK_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff]+")
 
 MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
@@ -231,7 +236,10 @@ class DouyinChat:
                 target = await item.query_selector(SEARCH_CHAT_BTN)
                 if target is None:
                     target = item
-                await target.click()
+                try:
+                    await target.click(timeout=2500)
+                except Exception:
+                    continue  # 隐藏缓存行等不可点目标，跳过继续扫描
                 return await self._confirm_opened(name)
         return ConversationOpen(opened=False, title=None, exact=False)
 
@@ -284,7 +292,65 @@ class DouyinChat:
                         return titles
         return titles
 
+    async def _type_text(self, text: str) -> None:
+        """输入文本：真实页面走 IME 安全的 insert_text；测试协议方法兜底。"""
+        page = self.page
+        if hasattr(page, "type_text"):
+            await page.type_text(CHAT_EDITOR, text)
+        elif hasattr(page, "keyboard"):
+            await page.keyboard.insert_text(text)
+        else:
+            raise DomChangedError("页面对象不支持文本输入")
+
+    async def _press_key(self, key: str) -> None:
+        page = self.page
+        if hasattr(page, "press_key"):
+            await page.press_key(key)
+        elif hasattr(page, "keyboard"):
+            await page.keyboard.press(key)
+        else:
+            raise DomChangedError("页面对象不支持按键")
+
+    async def _text_in_editor(self, content: str) -> bool:
+        """确认文字确实写入了编辑器（新版 Draft.js 对程序化输入可能不触发内部状态）。"""
+        page = self.page
+        if hasattr(page, "wait_for_function"):
+            try:
+                await page.wait_for_function(
+                    """(expected) => {
+                        const editors = [
+                          ...document.querySelectorAll('[class*="messageEditor"] [contenteditable=true], .messageEditorinputArea, div[data-slate-editor="true"][contenteditable="true"]'),
+                        ];
+                        return editors.some((e) => (e.innerText || '').includes(expected));
+                    }""",
+                    arg=content,
+                    timeout=5000,
+                )
+                return True
+            except Exception:
+                return False
+        editor = await self.page.query_selector(CHAT_EDITOR)
+        if editor is None:
+            return False
+        text = await editor.inner_text()
+        return content in (text or "")
+
+    async def _trigger_send(self) -> None:
+        """新版编辑器按 Enter 不发送：优先点击发布按钮，Enter 仅兜底（同 unmev）。"""
+        page = self.page
+        if hasattr(page, "locator"):
+            for selector in SEND_BUTTONS:
+                locator = page.locator(selector).first
+                try:
+                    if await locator.count() and await locator.is_visible():
+                        await locator.click()
+                        return
+                except Exception:
+                    continue
+        await self._press_key("Enter")
+
     async def send_text(self, text: str) -> None:
+        self.last_bubble_seen = False
         editor = await self.page.query_selector(CHAT_EDITOR)
         if editor is None:
             raise DomChangedError("未找到消息输入框")
@@ -292,17 +358,44 @@ class DouyinChat:
         lines = text.split("\n")
         for index, line in enumerate(lines):
             if line:
-                await self.page.type_text(CHAT_EDITOR, line)
+                await self._type_text(line)
             if index < len(lines) - 1:
-                await self.page.press_key("Shift+Enter")
-        await self.page.press_key("Enter")
+                await self._press_key("Shift+Enter")
+
+        # 程序化输入必须验证文字确实进入编辑器
+        if not await self._text_in_editor(text.replace("\n", "")):
+            raise DomChangedError("文字未能写入聊天输入框")
+        await self._trigger_send()
+
+        # 权威成功信号：消息列表出现包含本条渲染文本的 outgoing 气泡。
+        # 仅真实 Playwright 页面具备 wait_for_function；测试假页面走不到该
+        # 路径，由 manager 以编辑器清空路径兜底判定。
+        content_key = _BLANK_RE.sub("", text)
+        if hasattr(self.page, "wait_for_function"):
+            try:
+                await self.page.wait_for_function(
+                    """(expected) => {
+                        const norm = (v) => (v || '').replace(/[\\s\\u200B\\u200C\\u200D\\uFEFF]+/g, ' ').trim();
+                        const expectedNorm = norm(expected);
+                        const boxes = document.querySelectorAll('.messageMessageBoxcontentBox');
+                        for (const box of boxes) {
+                            if (norm(box.innerText).includes(expectedNorm)) return true;
+                        }
+                        return false;
+                    }""",
+                    arg=content_key,
+                    timeout=10_000,
+                )
+                self.last_bubble_seen = True
+            except Exception:
+                self.last_bubble_seen = False
 
     async def editor_is_cleared(self) -> bool:
         element = await self.page.query_selector(CHAT_EDITOR)
         if element is None:
             return True
         text = await element.inner_text()
-        return not (text or "").strip()
+        return not (_BLANK_RE.sub("", text or ""))
 
     async def failure_marker_visible(self) -> bool:
         for selector in SEND_FAILURE_MARKERS:

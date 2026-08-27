@@ -30,7 +30,7 @@ class FakeElement:
         value = self._text() if callable(self._text) else self._text
         return value
 
-    async def click(self) -> None:
+    async def click(self, timeout: int | None = None) -> None:
         if self._on_click is not None:
             self._on_click()
 
@@ -58,7 +58,7 @@ class FakeItem:
             return f"{self._title}\n发消息"
         return self._title
 
-    async def click(self) -> None:
+    async def click(self, timeout: int | None = None) -> None:
         self._page.clicked.append((self._title, "row"))
 
 
@@ -173,6 +173,33 @@ class FakePage:
 
     async def evaluate_js(self, _script: str) -> dict:
         return {}
+
+
+class FakeKeyboard:
+    """模拟真实 Playwright page.keyboard：只有 type/press。"""
+
+    def __init__(self, page: "RealApiPage"):
+        self._page = page
+
+    async def type(self, text: str, delay: int = 0) -> None:
+        self._page.editor_text += text
+        self._page.typed.append(text)
+
+    async def press(self, key: str) -> None:
+        self._page.keys.append(key)
+        if key == "Enter" and self._page.editor_text.strip() and self._page.clear_on_enter:
+            self._page.editor_text = ""
+
+
+class RealApiPage(FakePage):
+    """形状与真实 Playwright Page 一致：没有 type_text/press_key 协议方法。
+
+    用于回归测试「假页面协议不得泄漏到真实实现」——代码若误调，将直接 AttributeError。
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.keyboard = FakeKeyboard(self)
 
 
 class FakeContext:

@@ -52,10 +52,22 @@ SEARCH_INPUTS = (
 # 消息编辑器（M3 发送使用）
 CHAT_EDITOR = 'div[data-slate-editor="true"][contenteditable="true"]'
 
-# 发送失败/重试标记（概念参考 unmev/douyin-auto-fire 的 SendStatusretry 类标记；
-# 类名随页面版本变化，真实 E2E 前必须核对，并保持“检测不到就按结果未知处理”）
+# 发送失败/重试标记（概念参考 unmev/douyin-auto-fire Issue #11；
+# 结构标记随页面版本变化，真实 E2E 前必须核对，并保持“检测不到就按结果未知处理”。
+# 注意裸 SendStatusicon 是多状态共用类，绝不能当作失败条件）
 SEND_FAILURE_MARKERS = (
+    '[class*="sendFailed"]',
+    '[class*="SendFailed"]',
+    '[class*="ContentSideSendStatusretry"]',
     '[class*="SendStatusretry"]',
-    '[class*="SendStatusfailed"]',
-    '[class*="send-status-retry"]',
+    '[aria-label*="重试"]',
+    '[title*="重试"]',
+)
+
+# 发送按钮：新版编辑器按 Enter 不发送，必须优先点发布按钮，Enter 仅兜底
+SEND_BUTTONS = (
+    '[class*="messageMsgInputpublishBtn"]',
+    '.e2e-send-msg-bt',
+    'button[aria-label*="发送"]',
+    '[role="button"][aria-label*="发送"]',
 )

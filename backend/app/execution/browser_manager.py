@@ -512,16 +512,29 @@ class BrowserManager:
             ),
         }
         job_status, failure, confirmed = outcome_map[outcome]
+        bubble_confirmed = bool(getattr(chat, "last_bubble_seen", False))
+        upgrade_detail: str | None = None
+        if outcome == "unknown_requires_review" and bubble_confirmed:
+            # 权威证据：渲染文本已进入消息列表气泡，且整个观察窗内无失败标记。
+            # 仅状态指示（如零宽字符残留）未消失，按成功核销，防止重复发送。
+            job_status = JobStatus.SUCCEEDED
+            failure = None
+            confirmed = True
+            outcome = "succeeded"
+            upgrade_detail = "消息已出现在聊天记录中（经气泡内容确认）"
+        else:
+            upgrade_detail = (
+                "已触发发送但结果未确认，请到任务记录人工核对"
+                if outcome == "unknown_requires_review"
+                else None
+            )
         self._finalize_send(
             job.id, target.id, account.id,
             status=job_status, failure=failure, confirmed=confirmed, attempt_no=attempt_no,
         )
-        detail = None
-        if outcome == "unknown_requires_review":
-            detail = "已触发发送但结果未确认，请到任务记录人工核对"
         return {"target": nickname, "status": outcome,
                 "failure_class": failure.value if failure else None,
-                "detail": detail, "message": message}
+                "detail": upgrade_detail, "message": message}
 
     def _get_or_create_job(
         self,
