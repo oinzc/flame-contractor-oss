@@ -9,6 +9,7 @@ from .core.config import Settings, get_settings
 from .core.database import build_engine
 from .core.migrations import run_migrations
 from .execution.browser_manager import BrowserManager
+from .notifications import BarkNotifier
 from .scheduler import Scheduler
 
 
@@ -34,6 +35,7 @@ def create_app(
                 engine,
                 settings,
                 send_account=browser_manager.run_send,
+                notifier=BarkNotifier(base_url=settings.bark_url),
             )
             sched.start()
         app.state.scheduler = sched
