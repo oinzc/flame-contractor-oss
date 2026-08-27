@@ -1,98 +1,65 @@
-# Task Plan: Flame Contractor M2 — 扫码登录与 Dry Run
+# Task Plan: Flame Contractor — M3 完成，启动 M4 调度器
 
 ## Goal
-完成 M2：Alembic 基线迁移、每账号独立浏览器 Profile、扫码登录流程、Dry Run 流程，配套 API、测试与前端交互。
+M3（真实发送 + 终态确认）已完成并实机验证。当前目标：进入 M4——让系统按账号发送时段自动向启用好友发送，实现「自动续火」。
 
 ## Next Step
-等待用户在本机执行真实扫码验证（唯一人工环节）。
+实现 Scheduler：按 account.timezone + send_window 生成每日任务，窗口内随机取时，数据库租约 + heartbeat + 账号互斥；后端挂定时调度（本地单进程，APScheduler 或自建 asyncio 循环）。
 
 ## Current Phase
-Complete
+Phase 1（M4）
 
-## Phases
+## 里程碑总览
+- [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
+- [x] **M2 登录与定位**（`4081936` + 定位修复 `2635044`→`b1a8712`）：每账号独立 Profile、扫码登录、严格定位（搜索+滚动+懒加载适配）、可见会话诊断。
+- [x] **M3 真实发送**（`6acd24f` + `6544e04`）：预览/终态确认/好友删除/任务落库；实机联调修复三连坑（协议泄漏、Enter 不发送、零宽字符），真实发送验证通过。
+- [ ] **M4 调度器**（当前）：自动每日发送。
+- [ ] **M5 增强**：原生表情/图片、通知、selector 热更、火花天数读取校准。
 
-### Phase 1: 迁移与依赖
-- [x] 提交骨架基线（9d535c4）
-- [x] 引入 Alembic，生成并验证基线迁移
-- [x] 引入 Playwright 并安装 Chromium
-- **Status:** complete
+## M4 子阶段
+### Phase 1: 调度与任务生成（in_progress）
+- [ ] 设计「每日任务生成」：遍历启用账号，按 timezone 计算当日 business_date，为每个启用契约对象生成 SendJob（复用已有幂等唯一约束）。
+- [ ] Scheduler 进程：本地 asyncio 循环或 APScheduler；每账号独立发送时段窗口；窗口内随机取执行时间。
+- [ ] 数据库租约：scheduled→leased（lease_owner/lease_expires_at）+ heartbeat，防重复触发与 worker 崩溃恢复。
+- [ ] 账号互斥：同账号同一时间只跑一个发送流程。
+- **Status:** pending
 
-### Phase 2: 执行层
-- [x] 实现每账号 Profile 存储
-- [x] 实现抖音聊天适配层与选择器集中管理
-- [x] 实现扫码登录流程管理器（状态机、注册表、超时）
-- [x] 实现 Dry Run 流程（严格匹配、绝不发送、artifact 落盘）
-- **Status:** complete
+### Phase 2: 安全与恢复
+- [ ] 崩溃恢复：租约过期且已进入 sending/confirming 的 → 转 unknown_requires_review，不自动重发；仅 scheduled/未开始的可重排。
+- [ ] 失败重试：failed_retryable 在当天窗口内有限次退避重试；unknown 一律人工核销（用 `finalize_unknown_jobs.py`）。
+- **Status:** pending
 
-### Phase 3: API 与测试
-- [x] 新增 login/status/cancel 与 dry-run 接口
-- [x] 注入假浏览器工厂的单元测试（状态机、冲突、认证过期）
-- [x] 迁移测试与回归测试全部通过（16 passed）
-- **Status:** complete
+### Phase 3: 前端联动
+- [ ] 总览「今日进度」改为读取真实 SendJob 状态；任务记录页完整展示。
+- [ ] 手动「立即发送」与自动任务共用同一套幂等约束（不重复）。
+- **Status:** pending
 
-### Phase 4: 前端
-- [x] 账号卡片接入扫码登录按钮与轮询状态
-- [x] 账号卡片接入 Dry Run 与结果展示
-- [x] 类型检查与生产构建通过
-- **Status:** complete
+### Phase 4: 验收与交接
+- [ ] 后端测试全绿；真实账号跨天场景验证（次日自动任务生成）。
+- [ ] 更新 PROJECT_STATUS / docs / README；说明可暂停全部自动任务。
+- **Status:** pending
 
-### Phase 5: 交接
-- [x] 更新 API 文档、README 与 PROJECT_STATUS
-- [x] 说明用户扫码验证步骤（真实 E2E 唯一人工环节）
-- **Status:** complete
+## M3 已完成状态（复用 Success Criteria 参考）
+- 后端 pytest **39 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded。
+- 已在真实账号完成验收（五页视觉质检无缺陷 + 数据落库正确）。
 
-## Success Criteria
-1. ✅ 启动即执行 Alembic 迁移，空库自动建表。
-2. ✅ 每账号 Profile 目录独立，路径不可由用户输入。
-3. ✅ 登录流程 headed 浏览器 + 等待扫码 + 成功/过期/失败状态可查询。
-4. ✅ Dry Run 只定位不发送，身份存疑记为 ambiguous，登录失效标记 auth_expired。
-5. ✅ 测试用假浏览器工厂通过，不依赖真实抖音网络。
-6. ✅ 前端可发起扫码登录并轮询状态，可发起 Dry Run 并展示逐目标结果。
-7. ✅ 全部自动化检查通过；真实 E2E 由用户扫码完成。
+## 关键技术决策
+- 登录态/会话存于持久浏览器 Profile；身份确认靠右侧标题严格等值，存疑即 ambiguous 不发。
+- 发送终态采用「发布按钮触发 + 编辑框清空（零宽感知）+ 气泡内容确认」三重兜底；无可靠信号记 unknown，绝不误判成功。
+- `unknown_requires_review` 当日禁止自动重发；人工核销走 `scripts/finalize_unknown_jobs.py`。
+- 调度用本地单进程（不引 Celery/Redis/SaaS 编排）；同账号互斥。
+- 不加载任何反检测脚本；验证码与风控仅本人处理。
 
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
-| 用 launch_persistent_context 持久 Profile | 登录态落在浏览器 Profile 内，无需手工粘贴 Cookie |
-| 登录检测以会话列表出现为准 | 与参考项目一致的稳定信号，避免仅凭 Cookie 判断 |
-| 不添加任何反检测脚本 | 与安全边界一致，不规避平台保护 |
-| 迁移替换 create_all | 进入有真实部署的阶段，schema 演进必须有版本 |
-
-## Errors Encountered
+## Errors Encountered（M3 关键，防重踩）
 | Error | Attempt | Resolution |
 |-------|---------|------------|
-| autogenerate 连接默认库失败（data/ 不存在） | 1 | env.py 在线迁移前创建 SQLite 父目录 |
-| 基线迁移 NameError: sqlmodel 未导入 | 1 | 迁移文件与 env.py 显式 import sqlmodel |
-| alembic path_separator 弃用警告 | 1 | alembic.ini 增加 path_separator=os |
+| 真实 Playwright 无 type_text/press_key → 发送 AttributeError | 1 | keyboard.insert_text + hasattr 分支（并加 RealApiPage 回归测试防协议泄漏） |
+| 新版编辑器按 Enter 不发送 → 消息困输入框、终态超时 | 1 | 优先点击发布按钮 messageMsgInputpublishBtn，Enter 兜底 |
+| 输入框发送后残留零宽字符 \u200b，strip() 判不清空 | 1 | 空白判定纳入 \u200b\u200c\u200d\ufeff + 气泡内容确认兜底 |
+| 预热滚动传选择器字符串而非元素句柄 → 静默空转 | 1 | query_selector 取元素再 evaluate |
+| 脚本 import run_migrations 从 app.core.database（错 3 次） | 3 | 正确路径是 app.core.migrations |
 
-## Success Criteria
-1. `backend` 可以启动，`/api/health` 返回健康状态。
-2. SQLite 首次启动自动建立核心表，并有数据库唯一约束承载幂等设计。
-3. 账户与契约对象 API 至少具备列表/创建的安全骨架，不接受 Cookie/密码字段。
-4. `frontend` 可以构建，并能通过 API 展示仪表盘与账号状态。
-5. 文档明确区分已实现骨架与尚未实现的真实抖音自动化。
-6. 所有自动化测试与构建命令通过。
-
-## Decisions Made
-| Decision | Rationale |
-|----------|-----------|
-| 首版为本机自用 | 凭据留在本机，先验证可靠性，降低 SaaS 合规和安全复杂度 |
-| FastAPI + SQLite + React/Vite | 与研究结论一致，依赖成熟，适合单机 MVP |
-| 本轮不接真实抖音账号 | 先建立安全数据/API/界面边界，避免凭据和 E2E 阻塞骨架交付 |
-| 不加入 Redis/Celery/微服务 | 当前规模不需要，SQLite 任务表和单调度器足够 |
-| 不复制 AGPL 项目代码 | 首选借鉴 MIT 项目设计；许可边界清晰 |
-
-## Errors Encountered
-| Error | Attempt | Resolution |
-|-------|---------|------------|
-| 旧调研阶段两个后台 subagent 未产出 | 1 | 已改为主会话逐仓库核验并完成调研 |
-| health 接口 NameError（get_settings 未导入） | 1 | 改为从 request.app.state.settings 读取 |
-| Windows 缺 IANA 时区数据导致 Asia/Shanghai 校验失败 | 1 | requirements 增加 tzdata |
-| JobRead.business_date 声明为 str，date 对象校验失败 | 1 | 改为 date 类型 |
-| SQLite 首次启动 unable to open database file | 1 | create_db_and_tables 前自动创建父目录 |
-| 后端 uvicorn 起于 127.0.0.1，浏览器经 localhost 访问 Vite 正常 | 1 | Vite 监听 localhost，代理目标 127.0.0.1 工作正常 |
-
-## Notes
-- 本阶段不得收集或写入抖音 Cookie、密码、Token。
-- “可运行骨架”不等于“自动续火已可用”，最终文档必须明确这一边界。
-- 任何外部依赖版本选择都以当前官方文档或本机可用版本为准。
+## 注意事项
+- 调度器与手动发送共用幂等与互斥，确保「自动续火」不重复打扰好友。
+- DOM 选择器依赖抖音页面结构（selectors.py），页面改版需适配；无把握时宁可记 unknown 不误发。
+- 本机服务仅监听 127.0.0.1，勿暴露公网；转远程需先加鉴权与加密。

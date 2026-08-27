@@ -1,65 +1,97 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-26 | 由 DeepSeek Harness Agent 更新
+> 最近更新：2026-08-27 | 由 DeepSeek Harness Agent 更新 | HEAD = `3684462`
 
-## 当前目标
-M2 已完成：扫码登录 + 独立 Profile + Dry Run。下一步是用户在真实环境扫码验证，然后进入 M3（发送与终态确认）。
+## 当前状态
+**M3 已完成并在真实账号上验证通过**：多账号扫码登录、独立 Profile、严格好友定位、真实发送 + 终态确认、每日防重复全部可用。
 
-## 已完成内容
-- 骨架基线已提交（`9d535c4`），M2 变更待提交。
-- Alembic 接入：基线迁移 `722cd9dc7d0b`，启动即自动迁移，空库自动建表（已端到端验证 6 张表 + alembic_version）。
-- Playwright + Chromium 已装入后端 venv。
-- 执行层：
-  - `app/execution/profile_store.py`：每账号独立 Profile 目录，ID 白名单校验防路径逃逸；
-  - `app/execution/selectors.py`：抖音网页版 DOM 选择器集中管理（注明参考来源，无指纹伪装）；
-  - `app/execution/douyin_chat.py`：页面窄封装（登录检测、会话定位、右侧标题二次核对）；
-  - `app/execution/browser_manager.py`：扫码登录流程（headed、180s 超时、状态机）+ Dry Run（headless、严格匹配、artifact 落盘、绝不发送）。
-- API：`POST/GET /api/accounts/{id}/login`、`POST .../login/cancel`、`POST .../dry-run`。
-- 前端：账号卡片新增「扫码登录」按钮（2s 轮询状态、取消）、「Dry Run」按钮与逐目标结果展示（已定位/未找到/身份存疑）。
-- 测试：16/16 通过（10 项骨架回归 + 6 项假浏览器执行层测试，不依赖真实抖音网络）。
-- 前端类型检查与生产构建通过。
+**下一目标（M4）**：Scheduler——每天在账号发送时段内随机取时，自动向启用好友发送，实现「自动续火」（最初的核心诉求）。
+
+## 已完成内容（按里程碑）
+
+### M1 骨架（`9d535c4`）
+- FastAPI + SQLModel + SQLite WAL 控制平面；核心表 Account/ContractTarget/MessageTemplate/SendJob/SendAttempt。
+- Alembic 迁移（基线 `722cd9dc7d0b`），启动自动建表；每日幂等唯一约束 `(account, target, business_date, message_slot_id)`。
+- API：health、dashboard 聚合、accounts、targets、templates；凭据字段一律 422；模板仅 4 个受控变量。
+- React 19 + Vite 8 控制台。
+
+### M2 登录与定位（M2 提交：`4081936`，后经多轮定位修复）
+- 每账号独立持久浏览器 Profile（`launch_persistent_context`），登录态零粘贴 Cookie。
+- 扫码登录流程：headed 弹窗、180s 超时、状态轮询/取消；登录成功标记 healthy，失效标记 auth_expired。
+- Dry Run / 定位校验：严格匹配 + 右侧标题二次核对，记 found/ambiguous/not_found；绝不发送。
+- **定位链路实机修复**（这是本轮最大工作量，6 个提交 `2635044`→`b1a8712`）：
+  - 无历史会话联系人必须**搜索 + 点「发消息」按钮**（SearchPanelitemchat_btn）；
+  - 抖音会话列表与搜索索引均为**分页懒加载**，必须先滚动预热再搜索；
+  - 预热滚动必须传**元素句柄**（传选择器字符串会静默空转）；
+  - 搜索结果可能在固定等待后才渲染，需**轮询等待**；
+  - 输出「本次可见会话」诊断帮助用户核对昵称。
+
+### M3 真实发送（`6acd24f` + `6544e04`）
+- 模板渲染（4 受控变量）；发送流程：严格定位 → 输入 → 触发发送 → 终态确认。
+- 新增：发送预览接口/弹窗、好友删除接口、任务落库与总览联动、SendJob/SendAttempt 状态机。
+- **实机联调修复三连坑**（`6544e04`）：
+  1. 假页面协议泄漏：`type_text/press_key` 真实 Playwright 无 → `AttributeError`；改 `keyboard.insert_text` + hasattr 分支。
+  2. 新版编辑器按 Enter 不发送 → 消息困在输入框、终态超时；按 unmev 方案改为**优先点发布按钮** `messageMsgInputpublishBtn`，Enter 兜底。
+  3. 输入框发送后残留**零宽字符** `\u200b`，`strip()` 判不清空 → 永不成功；空白判定纳入 `\u200b\u200c\u200d\ufeff`。
+- 权威成功信号：渲染文本进入消息列表气泡即确认；unknown+气泡证据升级为成功（防重复发送）。
+
+## 实机验证结果（老大「验收」通过）
+
+用真实账号（`oinzc` 小号）：
+- `测试111` 已送达小号会话（`check_state` 探针确认真实气泡）；
+- 任务记录「已续焰」，火花天数=1，总览进度 100%；
+- 重复发送返回 `duplicate_succeeded`（幂等防重闭环验证通过）；
+- 五个页面（总览/账号/好友/模板/任务记录）逐页截图 + modlens 质检无布局/文字/对比度缺陷。
+
+后端测试 **39 passed**；前端 `npm run build` 通过；工作树干净。
 
 ## 关键技术决策
-- 登录态存于持久浏览器 Profile（`launch_persistent_context`），无需用户粘贴 Cookie。
-- 登录检测 = 会话列表出现；Dry Run 打开会话后必须右侧标题严格等于目标名，否则记 ambiguous。
-- 同一账号同一时间只允许一个活动浏览器流程（登录中禁止 Dry Run，反之亦然）。
-- 登录成功自动把账号标记 healthy；Dry Run 登录失效自动标记 auth_expired；Dry Run 不改变健康状态。
+- 登录态存于持久 Profile；登录检测=会话列表出现；身份确认=右侧标题严格等值，存疑即 ambiguous 不发。
+- 同账号浏览器流程互斥（登录/Dry Run/发送）；`unknown_requires_review` 禁止当日自动重发。
+- 发送确认不依赖「气泡出现=成功」，采用「发布按钮触发 + 编辑框清空（零宽感知）+ 气泡内容确认」三重兜底。
 - 迁移替换 create_all；真实运行与测试均走 `alembic upgrade head`。
-- 浏览器操作不加载任何反检测脚本；验证码与风控仅本人处理。
+- 不加载任何反检测脚本；验证码与风控仅本人处理。
 
-## 修改过的核心文件
-- `backend/alembic.ini`、`backend/alembic/env.py`、`backend/alembic/versions/722cd9dc7d0b_baseline.py`、`backend/alembic/script.py.mako`
-- `backend/app/core/migrations.py`、`core/config.py`（profiles_dir/artifacts_dir）、`core/database.py`、`main.py`
-- `backend/app/execution/`：profile_store、selectors、douyin_chat、browser_manager
-- `backend/app/schemas.py`、`api/execution.py`、`api/router.py`
-- `backend/tests/test_execution.py`、`tests/conftest.py`
-- `frontend/src/types.ts`、`api.ts`、`components/AccountRail.tsx`、`theme.css`、`App.tsx`
-- `docs/API.md`、`README.md`、`PROJECT_STATUS.md`、`task_plan.md`、`progress.md`
+## 当前核心代码结构
+```
+backend/app/
+  core/        config(database_url/profiles_dir/artifacts_dir)、database、migrations
+  models.py    Account/ContractTarget/MessageTemplate/SendJob/SendAttempt + 枚举
+  schemas.py   API 输入/输出模型（camelCase 别名字段）
+  services.py  账号/模板/好友 CRUD、发送预览、仪表盘聚合
+  execution/   profile_store、selectors、douyin_chat、send_confirmer、message_renderer、browser_manager
+  api/         accounts、targets、templates、dashboard、execution(login/dry-run/send)、health、router
+backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
+                   reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
+frontend/src/
+  App.tsx(顶栏导航+页面切换+全局刷新)、components/DashboardPage/AccountsPage/TargetsPage/
+  TemplatesPage/JobsPage/CreateAccountModal/SendModal/StatusBadge
+  lib/format.ts(状态文案映射)、api.ts、types.ts、theme.css(Vercel 浅色)
+```
 
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | 16 passed（迁移、API 回归、登录状态机、冲突 409、Dry Run found/ambiguous/not_found、auth_expired） |
+| 后端 pytest | 39 passed（CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
-| 真实启动冒烟 | 健康检查 ok；Alembic 基线迁移在全新库上执行，表齐全 |
-| 真实扫码 E2E | 未执行（需用户本人扫码，属预期人工环节） |
+| 真实发送 E2E | 测试111 送达小号；重复发送正确跳过 |
+| 五个页面视觉质检 | 无错位/截断/对比度问题 |
 
-## 已知问题
-- 真实登录成功判定依赖「会话列表出现」启发式，尚未经用户真实扫码验证；若页面改版需调整 selectors.py。
-- 登录成功后 Profile 数据为高敏感凭据；当前目录权限依赖操作系统用户权限，尚未做额外加密。
-- 尚无 Scheduler（M4）；SendJob 表空转，dashboard 的今日数据仍为 0。
-- 冒烟用的 data/ 已清空，用户首次启动将重建全新数据库。
-- Starlette 的 httpx→httpx2 弃用警告仍存在，功能无影响。
-- Dry Run 结果仅落盘 artifact JSON，未入库供历史查询（M4 与任务表一并解决）。
-
-## 尝试过但失败的方案
-- autogenerate 直接连默认库失败（父目录不存在）→ env.py 迁移前创建 SQLite 父目录解决。
-- 基线迁移缺少 sqlmodel 导入 → 显式补 import 解决。
-- 内联 Python 检查数据库时 PowerShell 引号转义两次出错 → 改为单引号外层包裹解决。
+## 已知问题 / 边界
+- 发送/定位的 DOM 选择器依赖抖音当前页面结构（`selectors.py`），页面改版可能失效；`SendConfirmer` 在无可靠信号时记 unknown 而非误判成功，是安全设计。
+- 真实发送的「终态确认」目前以气泡内容 + 发布按钮为主，`SendStatusretry` 等失败标记选择器未经验证，失败标记可能检测不到（会退化为 unknown 而非误判成功）。
+- Profile 数据高敏感，仅依赖系统用户权限，未做额外加密。
+- Starlette httpx→httpx2 弃用警告存在，功能无影响。
+- 尚无 Scheduler（M4）；SendJob 目前由「立即发送」手动触发写入。
 
 ## 下一步开发顺序
-1. 用户真实验证：启动前后端，扫码登录一个账号，绑定好友后 Dry Run，反馈「已定位/未找到/身份存疑」的实际情况。
-2. 提交 M2 变更（用户确认后）。
-3. M3：纯文字发送 + 发送终态确认（单条 outgoing 消息状态机）+ 失败分类与截图 artifact。
-4. M4：Scheduler（随机焰窗、租约、heartbeat、账号互斥）+ 每账号 Worker 进程 + SendJob 入库与今日焰线点亮。
-5. M5：原生表情/图片、通知、selector 热更与火花天数校准。
+1. **M4 调度器**：按 account.timezone + send_window 生成每日任务；数据库租约（lease）+ heartbeat + 账号互斥；在窗口内随机取时；定时进程或 APScheduler（本地单进程即可，暂不引 Celery）。
+2. M5 增强：原生表情/图片、通知（Bark/钉钉）、selector 热更、火花天数自动读取校准。
+3. 后续：若转多用户/远程，需加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
+
+## 应急运维工具（backend/scripts，实机排查用）
+- `probe_dry_run.py <account_id>`：走产品代码路径跑一次定位校验（只读不发）。
+- `probe_send.py <account_id>`：走产品代码路径实际发送一次。
+- `check_state.py <account_id> <text>`：区分消息困在编辑器 vs 已进气泡；核对发送按钮选择器。
+- `verify_sent.py <account_id> <text>`：全文检索文案是否已出现在会话里。
+- `finalize_unknown_jobs.py` / `reset_unknown_jobs.py`：人工核对后核销/重置当日任务状态。
