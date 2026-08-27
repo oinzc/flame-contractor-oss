@@ -84,14 +84,20 @@ class DouyinChat:
     async def warm_up_list(self) -> None:
         """滚动列表触发懒加载：会话列表与搜索索引都是分页拉取的。
 
-        刚打开页面时列表为空、搜索索引也空（搜什么都是“未搜索到相关内容”）；
-        必须先滚动让数据加载，搜索才有结果。
+        注意必须传入 ElementHandle——传选择器字符串时 JS 对字符串设置
+        scrollTop 会静默无效，预热就成了空转。
         """
         if self._warmed:
             return
         for _ in range(WARMUP_SCROLLS):
-            await self.page.evaluate("(el) => { el.scrollTop += 800 }", CONVERSATION_LIST)
-            await self._sleep(0.8)
+            element = await self.page.query_selector(CONVERSATION_LIST)
+            if element is None:
+                break
+            try:
+                await self.page.evaluate("(el) => { el.scrollTop += 900 }", element)
+            except Exception:
+                break
+            await self._sleep(0.9)
         self._warmed = True
 
     async def open_conversation(self, name: str) -> ConversationOpen:
@@ -118,7 +124,10 @@ class DouyinChat:
             result = await self._scan_items(name)
             if result.opened:
                 return result
-            await self.page.evaluate("(el) => { el.scrollTop += 800 }", CONVERSATION_LIST)
+            scroll_element = await self.page.query_selector(CONVERSATION_LIST)
+            if scroll_element is None:
+                break
+            await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
             await self._sleep(0.8)
         return ConversationOpen(opened=False, title=None, exact=False)
 

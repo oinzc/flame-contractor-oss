@@ -131,6 +131,7 @@ export interface DryRunRead {
   detail: string | null
   targets: DryRunTargetResult[]
   visibleTitles: string[]
+  diagnostics: Record<string, unknown> | null
   artifactPath: string | null
 }
 
