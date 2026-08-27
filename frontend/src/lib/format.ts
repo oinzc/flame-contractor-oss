@@ -1,4 +1,4 @@
-import type { AccountStatus, JobStatus } from '../types'
+import type { AccountStatus, JobStatus, ScheduleStatus } from '../types'
 
 export type Tone = 'default' | 'ember' | 'gold' | 'cyan' | 'crimson'
 
@@ -62,11 +62,40 @@ export const ATTENTION_ACCOUNT_HINTS: Record<string, string> = {
   dom_broken: '页面结构变化，已暂停自动发送并保留诊断。',
 }
 
+export const SCHEDULE_STATUS_LABELS: Record<ScheduleStatus, string> = {
+  pending: '待发送',
+  leased: '已租用',
+  sending: '发送中',
+  succeeded: '已发送',
+  failed: '发送失败',
+  unknown_requires_review: '待人工复核',
+  skipped: '已跳过',
+  cancelled: '已取消',
+}
+
+export const SCHEDULE_STATUS_TONES: Record<ScheduleStatus, Tone> = {
+  pending: 'gold',
+  leased: 'cyan',
+  sending: 'cyan',
+  succeeded: 'ember',
+  failed: 'crimson',
+  unknown_requires_review: 'crimson',
+  skipped: 'default',
+  cancelled: 'default',
+}
+
 export function formatDateTime(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+export function formatTimeHM(value: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
 
 export function formatDateOnly(value: string | null): string {

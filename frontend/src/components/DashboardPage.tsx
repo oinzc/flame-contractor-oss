@@ -1,20 +1,31 @@
-import type { ContractTarget, DashboardSummary } from '../types'
+import type { ContractTarget, DashboardSummary, SchedulerStatus } from '../types'
 import {
   ATTENTION_ACCOUNT_HINTS,
   ATTENTION_ACCOUNT_STATUSES,
   JOB_STATUS_LABELS,
   JOB_STATUS_TONES,
+  SCHEDULE_STATUS_LABELS,
+  SCHEDULE_STATUS_TONES,
   formatDateTime,
+  formatTimeHM,
 } from '../lib/format'
 import StatusBadge from './StatusBadge'
 
 interface Props {
   summary: DashboardSummary
   targets: ContractTarget[]
+  schedulerStatus: SchedulerStatus | null
+  onToggleScheduler: () => void
   onNavigate: (page: 'accounts' | 'targets' | 'jobs') => void
 }
 
-export default function DashboardPage({ summary, targets, onNavigate }: Props) {
+export default function DashboardPage({
+  summary,
+  targets,
+  schedulerStatus,
+  onToggleScheduler,
+  onNavigate,
+}: Props) {
   const enabledTargets = targets.filter((target) => target.enabled)
   const progress = enabledTargets.length > 0 ? summary.todaySucceeded / enabledTargets.length : 0
   const percent = Math.round(progress * 100)
@@ -142,6 +153,61 @@ export default function DashboardPage({ summary, targets, onNavigate }: Props) {
           <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
             节点对应启用中的好友，进度来自已确认发送的任务。
           </p>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <h2 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>自动调度</h2>
+            <button
+              className={`btn small ${schedulerStatus?.paused ? '' : 'primary'}`}
+              type="button"
+              onClick={onToggleScheduler}
+              disabled={schedulerStatus === null}
+            >
+              {schedulerStatus?.paused ? '恢复自动调度' : '暂停自动调度'}
+            </button>
+          </div>
+          {schedulerStatus === null ? (
+            <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+              无法读取调度状态。
+            </p>
+          ) : (
+            <>
+              <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+                {schedulerStatus.paused
+                  ? '已暂停：不会自动发送，手动发送仍可正常使用。'
+                  : '已开启：到点自动向启用好友发送。'}
+              </p>
+              {schedulerStatus.todaySchedules.length === 0 ? (
+                <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                  今日暂无自动调度计划。
+                </p>
+              ) : (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {schedulerStatus.todaySchedules.map((schedule) => (
+                    <div className="rail-item" key={schedule.id}>
+                      <span className="t">
+                        {summary.accounts.find((a) => a.id === schedule.accountId)?.displayName ??
+                          schedule.accountId}
+                      </span>
+                      <span className="s">
+                        {formatTimeHM(schedule.scheduledAt)}
+                        <StatusBadge
+                          label={SCHEDULE_STATUS_LABELS[schedule.status]}
+                          tone={SCHEDULE_STATUS_TONES[schedule.status]}
+                        />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {schedulerStatus.runningAccounts.length > 0 && (
+                <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
+                  正在发送中：{schedulerStatus.runningAccounts.join('、')}
+                </p>
+              )}
+            </>
+          )}
         </section>
 
         <section className="card">

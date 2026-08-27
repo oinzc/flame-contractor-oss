@@ -29,6 +29,35 @@ export type FailureClass =
   | 'unknown_outcome'
   | 'other'
 
+export type ScheduleStatus =
+  | 'pending'
+  | 'leased'
+  | 'sending'
+  | 'succeeded'
+  | 'failed'
+  | 'unknown_requires_review'
+  | 'skipped'
+  | 'cancelled'
+
+export interface SendSchedule {
+  id: string
+  accountId: string
+  businessDate: string
+  scheduledAt: string | null
+  status: ScheduleStatus
+  attemptCount: number
+  startedAt: string | null
+  finishedAt: string | null
+  lastError: string | null
+}
+
+export interface SchedulerStatus {
+  enabled: boolean
+  paused: boolean
+  runningAccounts: string[]
+  todaySchedules: SendSchedule[]
+}
+
 export interface Account {
   id: string
   displayName: string

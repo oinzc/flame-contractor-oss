@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .models import AccountStatus, FailureClass, JobStatus, TemplateType
+from .models import AccountStatus, FailureClass, JobStatus, ScheduleStatus, TemplateType
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -160,6 +160,27 @@ class JobRead(APIBase):
     confirmed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------- scheduler
+
+class SendScheduleRead(APIBase):
+    id: str
+    account_id: str
+    business_date: date
+    scheduled_at: datetime | None
+    status: ScheduleStatus
+    attempt_count: int
+    started_at: datetime | None
+    finished_at: datetime | None
+    last_error: str | None
+
+
+class SchedulerStatusRead(APIBase):
+    enabled: bool
+    paused: bool
+    running_accounts: list[str]
+    today_schedules: list[SendScheduleRead]
 
 
 # ---------------------------------------------------------------- dashboard
