@@ -14,6 +14,7 @@ from app.execution.selectors import (
     CONVERSATION_TITLE,
     RIGHT_TITLE,
     SEARCH_INPUT,
+    SEARCH_RESULT_ITEM,
     SEND_FAILURE_MARKERS,
 )
 from app.main import create_app
@@ -55,20 +56,26 @@ class FakePage:
         editor_present: bool = True,
         failure_marker: bool = False,
         clear_on_enter: bool = True,
+        search_results: dict[str, tuple[str, ...]] | None = None,
+        titles_revealed_by_scroll: tuple[str, ...] = (),
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
         self._list_polls = 0
+        self._original_titles = list(conversation_titles)
         self.conversation_titles = list(conversation_titles)
         self.right_title = right_title
         self.editor_present = editor_present
         self.failure_marker = failure_marker
         self.clear_on_enter = clear_on_enter
+        self.search_results = search_results or {}
+        self.titles_revealed_by_scroll = list(titles_revealed_by_scroll)
         self.editor_text = ""
         self.gotos: list[str] = []
         self.fills: list[tuple[str, str]] = []
         self.typed: list[tuple[str, str]] = []
         self.keys: list[str] = []
+        self.scrolls: list[str] = []
         self.closed = False
 
     async def goto(self, url: str) -> None:
@@ -92,12 +99,19 @@ class FakePage:
         return None
 
     async def query_selector_all(self, selector: str):
-        if selector == CONVERSATION_ITEM:
+        if selector in (CONVERSATION_ITEM, SEARCH_RESULT_ITEM):
             return [FakeItem(title) for title in self.conversation_titles]
         return []
 
     async def fill(self, selector: str, value: str) -> None:
         self.fills.append((selector, value))
+        if selector == SEARCH_INPUT:
+            if value.strip():
+                self.conversation_titles = list(
+                    self.search_results.get(value.strip(), self._original_titles)
+                )
+            else:
+                self.conversation_titles = list(self._original_titles)
 
     async def type_text(self, selector: str, text: str) -> None:
         self.typed.append((selector, text))
@@ -108,6 +122,13 @@ class FakePage:
         self.keys.append(key)
         if key == "Enter" and self.editor_text.strip() and self.clear_on_enter:
             self.editor_text = ""
+
+    async def evaluate(self, _expression: str, selector: str) -> None:
+        self.scrolls.append(selector)
+        if selector == CONVERSATION_LIST:
+            for title in self.titles_revealed_by_scroll:
+                if title not in self.conversation_titles:
+                    self.conversation_titles.append(title)
 
 
 class FakeContext:

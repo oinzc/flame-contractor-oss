@@ -9,8 +9,12 @@ from .selectors import (
     CONVERSATION_TITLE,
     RIGHT_TITLE,
     SEARCH_INPUT,
+    SEARCH_RESULT_ITEM,
     SEND_FAILURE_MARKERS,
 )
+
+MAX_LIST_SCROLLS = 8
+_ITEM_SELECTORS = (CONVERSATION_ITEM, SEARCH_RESULT_ITEM)
 
 
 class DomChangedError(RuntimeError):
@@ -56,22 +60,64 @@ class DouyinChat:
         await self._sleep(1.2)
 
     async def open_conversation(self, name: str) -> ConversationOpen:
-        items = await self.page.query_selector_all(CONVERSATION_ITEM)
-        for item in items:
-            title_element = await item.query_selector(CONVERSATION_TITLE)
-            if title_element is None:
-                continue
-            title = ((await title_element.inner_text()) or "").strip()
-            if title == name:
-                await item.click()
-                await self._sleep(1.2)
-                right_title = await self.right_panel_title()
-                return ConversationOpen(
-                    opened=True,
-                    title=right_title,
-                    exact=right_title == name,
-                )
+        # 1) 搜索优先：直接搜索昵称，从结果中精确匹配
+        try:
+            await self.page.fill(SEARCH_INPUT, name)
+            await self._sleep(1.5)
+            result = await self._scan_items(name)
+            if result.opened:
+                return result
+        except Exception:
+            pass
+        # 2) 清空搜索，滚动加载列表兜底（会话列表可能是懒加载）
+        try:
+            await self.page.fill(SEARCH_INPUT, "")
+            await self._sleep(0.8)
+        except Exception:
+            pass
+        for _ in range(MAX_LIST_SCROLLS):
+            result = await self._scan_items(name)
+            if result.opened:
+                return result
+            await self.page.evaluate("(el) => { el.scrollTop += 800 }", CONVERSATION_LIST)
+            await self._sleep(0.8)
         return ConversationOpen(opened=False, title=None, exact=False)
+
+    async def _scan_items(self, name: str) -> ConversationOpen:
+        for selector in _ITEM_SELECTORS:
+            items = await self.page.query_selector_all(selector)
+            for item in items:
+                title_element = await item.query_selector(CONVERSATION_TITLE)
+                if title_element is None:
+                    continue
+                title = ((await title_element.inner_text()) or "").strip()
+                if title == name:
+                    await item.click()
+                    await self._sleep(1.2)
+                    right_title = await self.right_panel_title()
+                    return ConversationOpen(
+                        opened=True,
+                        title=right_title,
+                        exact=right_title == name,
+                    )
+        return ConversationOpen(opened=False, title=None, exact=False)
+
+    async def visible_titles(self, limit: int = 40) -> list[str]:
+        titles: list[str] = []
+        seen: set[str] = set()
+        for selector in _ITEM_SELECTORS:
+            items = await self.page.query_selector_all(selector)
+            for item in items:
+                title_element = await item.query_selector(CONVERSATION_TITLE)
+                if title_element is None:
+                    continue
+                title = ((await title_element.inner_text()) or "").strip()
+                if title and title not in seen:
+                    seen.add(title)
+                    titles.append(title)
+                    if len(titles) >= limit:
+                        return titles
+        return titles
 
     async def send_text(self, text: str) -> None:
         editor = await self.page.query_selector(CHAT_EDITOR)

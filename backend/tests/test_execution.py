@@ -131,3 +131,70 @@ def test_dry_run_marks_auth_expired(settings):
             item for item in client.get("/api/accounts").json() if item["id"] == account["id"]
         )
         assert updated["status"] == "auth_expired"
+
+
+def test_dry_run_finds_friend_via_search(settings):
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B",),
+                right_title="好友A",
+                search_results={"好友A": ("好友A",)},
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "found"
+
+
+def test_dry_run_scroll_fallback_finds_friend(settings):
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B",),
+                right_title="好友A",
+                titles_revealed_by_scroll=("好友A",),
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "found"
+
+
+def test_dry_run_not_found_reports_visible_titles(settings):
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B", "群聊A(7)"),
+                right_title=None,
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "not_found"
+        assert result["visibleTitles"] == ["好友B", "群聊A(7)"]
+        assert "好友B" in result["targets"][0]["detail"]

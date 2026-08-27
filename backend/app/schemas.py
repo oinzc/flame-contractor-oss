@@ -189,6 +189,7 @@ class DryRunTargetRead(APIBase):
     target: str
     status: Literal["found", "not_found", "ambiguous"]
     title: str | None = None
+    detail: str | None = None
 
 
 class DryRunRead(APIBase):
@@ -196,6 +197,7 @@ class DryRunRead(APIBase):
     overall: Literal["ok", "auth_expired", "error"]
     detail: str | None = None
     targets: list[DryRunTargetRead]
+    visible_titles: list[str] = []
     artifact_path: str | None = None
 
 
