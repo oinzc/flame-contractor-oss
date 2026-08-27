@@ -222,3 +222,27 @@ def test_dry_run_finds_contact_via_send_message_button(settings):
         result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
         assert result["targets"][0]["status"] == "found"
         assert result["visibleTitles"] == ["好友B"]  # 搜索面板里看不到历史列表，符合真实页面
+
+
+def test_search_requires_warmup_first(settings):
+    """真实页面行为：刚打开时搜索索引为空，必须先滚动列表预热才能搜到。"""
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友B",),
+                right_title="oinzc",
+                search_results={"oinzc": ("oinzc",)},
+                search_requires_warmup=True,
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "oinzc"},
+        )
+        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert result["targets"][0]["status"] == "found"

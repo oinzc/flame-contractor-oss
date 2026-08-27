@@ -42,8 +42,12 @@ SEARCH_CHAT_BTN = 'div[class*="SearchPanelitemchat_btn"]'
 # 右侧会话面板标题，用于打开会话后的二次核对
 RIGHT_TITLE = ".RightPanelHeadertitleContainer"
 
-# 顶部搜索框（chat 页面）
+# 顶部搜索框（chat 页面；多套变体，优先 semi-input）
 SEARCH_INPUT = 'input.semi-input[placeholder="搜索"][type="text"]'
+SEARCH_INPUTS = (
+    'input.semi-input[placeholder="搜索"][type="text"]',
+    'input[placeholder="搜索"]',
+)
 
 # 消息编辑器（M3 发送使用）
 CHAT_EDITOR = 'div[data-slate-editor="true"][contenteditable="true"]'

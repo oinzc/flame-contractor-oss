@@ -10,12 +10,14 @@ from .selectors import (
     RIGHT_TITLE,
     SEARCH_CHAT_BTN,
     SEARCH_INPUT,
+    SEARCH_INPUTS,
     SEARCH_NAME_SELECTORS,
     SEARCH_RESULT_ITEM,
     SEND_FAILURE_MARKERS,
 )
 
 MAX_LIST_SCROLLS = 8
+WARMUP_SCROLLS = 5
 _ITEM_SELECTORS = (CONVERSATION_ITEM, SEARCH_RESULT_ITEM)
 OPEN_CONFIRM_TIMEOUT = 8.0
 
@@ -49,6 +51,7 @@ class DouyinChat:
         self.timeout_ms = timeout_ms
         self.confirm_timeout = confirm_timeout
         self._sleep = sleep
+        self._warmed = False
 
     async def open_chat_page(self) -> None:
         await self.page.goto(CHAT_URL)
@@ -66,22 +69,47 @@ class DouyinChat:
         return text.strip() if text else None
 
     async def search(self, name: str) -> None:
-        await self.page.fill(SEARCH_INPUT, name)
-        await self._sleep(1.2)
+        await self._fill_first(SEARCH_INPUTS, name)
+        await self._sleep(2.2)
+
+    async def _fill_first(self, selectors: tuple[str, ...], value: str) -> None:
+        for selector in selectors:
+            if await self.page.query_selector(selector) is not None:
+                await self.page.fill(selector, value)
+                return
+
+    async def warm_up_list(self) -> None:
+        """滚动列表触发懒加载：会话列表与搜索索引都是分页拉取的。
+
+        刚打开页面时列表为空、搜索索引也空（搜什么都是“未搜索到相关内容”）；
+        必须先滚动让数据加载，搜索才有结果。
+        """
+        if self._warmed:
+            return
+        for _ in range(WARMUP_SCROLLS):
+            await self.page.evaluate("(el) => { el.scrollTop += 800 }", CONVERSATION_LIST)
+            await self._sleep(0.8)
+        self._warmed = True
 
     async def open_conversation(self, name: str) -> ConversationOpen:
+        # 0) 预热：先滚动列表，让懒加载数据与搜索索引就绪
+        try:
+            await self.warm_up_list()
+        except Exception:
+            pass
         # 1) 搜索优先：直接搜索昵称，从结果中精确匹配
         try:
-            await self.page.fill(SEARCH_INPUT, name)
-            await self._sleep(1.5)
+            await self.search(name)
             result = await self._scan_items(name)
             if result.opened:
                 return result
+            if await self._try_click_exact_by_text(name):
+                return await self._confirm_opened(name)
         except Exception:
             pass
         # 2) 清空搜索，滚动加载列表兜底（会话列表可能是懒加载）
         try:
-            await self.page.fill(SEARCH_INPUT, "")
+            await self._fill_first(SEARCH_INPUTS, "")
             await self._sleep(0.8)
         except Exception:
             pass
@@ -92,6 +120,81 @@ class DouyinChat:
             await self.page.evaluate("(el) => { el.scrollTop += 800 }", CONVERSATION_LIST)
             await self._sleep(0.8)
         return ConversationOpen(opened=False, title=None, exact=False)
+
+    async def _try_click_exact_by_text(self, name: str) -> bool:
+        """不依赖类名的兜底：找文本精确等于昵称的行，点击其「发消息」按钮。
+
+        只在真实 Playwright page 上生效；身份安全仍由点击后的右侧标题确认兜底。
+        """
+        page = self.page
+        if not hasattr(page, "evaluate_handle"):
+            return False
+        handle = await page.evaluate_handle(
+            """(name) => {
+              const all = Array.from(document.querySelectorAll('div'));
+              for (const el of all) {
+                const txt = (el.textContent || '').trim();
+                if (txt !== name && !txt.startsWith(name + '\\n')) continue;
+                const row = el.closest('[class*="Search"], [class*="search"]') || el;
+                const btn = Array.from(row.querySelectorAll('*')).find(
+                  (n) => (n.textContent || '').trim() === '发消息'
+                );
+                return btn || row;
+              }
+              return null;
+            }""",
+            name,
+        )
+        if handle is None:
+            return False
+        element = handle.as_element()
+        if element is None:
+            return False
+        try:
+            await element.click(timeout=5000)
+            await self._sleep(1.2)
+            return True
+        except Exception:
+            return False
+
+    async def collect_search_diagnostics(self, name: str) -> dict:
+        """在搜索状态下采集真实 DOM 诊断（类名、输入框属性、文本命中元素）。"""
+        page = self.page
+        try:
+            await self.search(name)
+        except Exception:
+            pass
+        script = """(name) => {
+          const classes = new Set();
+          document.querySelectorAll('[class*="Search"], [class*="search"]').forEach((el) => {
+            if (typeof el.className === 'string' && el.className) classes.add(el.className);
+          });
+          const textHits = [];
+          document.querySelectorAll('div, span, button').forEach((el) => {
+            if (textHits.length >= 20) return;
+            if ((el.textContent || '').trim() === name) {
+              textHits.push({ tag: el.tagName, cls: typeof el.className === 'string' ? el.className : '' });
+            }
+          });
+          const inputs = Array.from(document.querySelectorAll('input[placeholder]')).map((i) => ({
+            placeholder: i.placeholder, cls: typeof i.className === 'string' ? i.className : '',
+          }));
+          return { inputs, searchClasses: Array.from(classes).slice(0, 60), textHits };
+        }"""
+        try:
+            if hasattr(page, "evaluate_js"):
+                result = await page.evaluate_js(script(name))
+            elif hasattr(page, "evaluate"):
+                result = await page.evaluate(script, name)
+            else:
+                result = {}
+        except Exception:
+            result = {}
+        try:
+            await self._fill_first(SEARCH_INPUTS, "")
+        except Exception:
+            pass
+        return result
 
     async def _scan_items(self, name: str) -> ConversationOpen:
         for selector in _ITEM_SELECTORS:

@@ -239,6 +239,7 @@ class BrowserManager:
         detail: str | None = None
         context = None
         visible_titles: list[str] = []
+        diagnostics: dict | None = None
         try:
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
@@ -248,6 +249,10 @@ class BrowserManager:
                 overall = "auth_expired"
                 detail = "登录已失效，请重新扫码"
             else:
+                try:
+                    await chat.warm_up_list()
+                except Exception:
+                    pass
                 visible_titles = await chat.visible_titles()
                 for target in targets:
                     opened = await chat.open_conversation(target.nickname_snapshot)
@@ -262,6 +267,13 @@ class BrowserManager:
                                 target.nickname_snapshot, "not_found", None, hint
                             )
                         )
+                        if diagnostics is None:
+                            diagnostics = (
+                                await chat.collect_search_diagnostics(
+                                    target.nickname_snapshot
+                                )
+                                or None
+                            )
                     elif not opened.exact:
                         results.append(
                             DryRunTargetResult(
@@ -300,6 +312,7 @@ class BrowserManager:
                 for item in results
             ],
             "visible_titles": visible_titles,
+            "diagnostics": diagnostics,
             "artifact_path": str(artifact_path),
         }
 

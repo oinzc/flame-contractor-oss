@@ -198,6 +198,7 @@ class DryRunRead(APIBase):
     detail: str | None = None
     targets: list[DryRunTargetRead]
     visible_titles: list[str] = []
+    diagnostics: dict | None = None
     artifact_path: str | None = None
 
 
