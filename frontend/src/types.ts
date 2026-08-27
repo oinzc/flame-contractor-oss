@@ -122,6 +122,7 @@ export interface DryRunTargetResult {
   target: string
   status: DryRunTargetStatus
   title: string | null
+  detail: string | null
 }
 
 export interface DryRunRead {
@@ -129,6 +130,7 @@ export interface DryRunRead {
   overall: 'ok' | 'auth_expired' | 'error'
   detail: string | null
   targets: DryRunTargetResult[]
+  visibleTitles: string[]
   artifactPath: string | null
 }
 

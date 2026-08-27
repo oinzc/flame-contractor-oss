@@ -207,15 +207,23 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     </div>
                     <ul>
                       {dry.targets.map((item) => (
-                        <li key={item.target}>
-                          <span className="dry-target">{item.target}</span>
-                          <span className={`dry-status ${item.status}`}>
-                            {DRY_RUN_LABELS[item.status]}
-                            {item.status === 'ambiguous' && item.title ? `（${item.title}）` : ''}
-                          </span>
+                        <li key={item.target} className="dry-li">
+                          <div className="dry-li-row">
+                            <span className="dry-target">{item.target}</span>
+                            <span className={`dry-status ${item.status}`}>
+                              {DRY_RUN_LABELS[item.status]}
+                              {item.status === 'ambiguous' && item.title ? `（${item.title}）` : ''}
+                            </span>
+                          </div>
+                          {item.detail && <div className="dry-detail">{item.detail}</div>}
                         </li>
                       ))}
                     </ul>
+                    {dry.visibleTitles.length > 0 && (
+                      <div className="flow-hint" style={{ marginTop: 8 }}>
+                        本次可见会话：{dry.visibleTitles.join('、')}
+                      </div>
+                    )}
                   </div>
                 )}
 

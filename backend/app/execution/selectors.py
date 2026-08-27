@@ -15,6 +15,9 @@ CONVERSATION_LIST = ".conversationConversationListwrapper"
 CONVERSATION_ITEM = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE = ".conversationConversationItemtitle"
 
+# 搜索结果条目（概念来自 ScriptCat 的 SearchPanelitem，类名需真实 E2E 核对）
+SEARCH_RESULT_ITEM = 'div[class*="SearchPanelitem"]'
+
 # 右侧会话面板标题，用于打开会话后的二次核对
 RIGHT_TITLE = ".RightPanelHeadertitleContainer"
 

@@ -53,6 +53,7 @@ class DryRunTargetResult:
     target: str
     status: str  # found | not_found | ambiguous
     title: str | None = None
+    detail: str | None = None
 
 
 class BrowserManager:
@@ -228,6 +229,7 @@ class BrowserManager:
         overall = "ok"
         detail: str | None = None
         context = None
+        visible_titles: list[str] = []
         try:
             context, page = await self._open(profile_path, headless=True)
             chat = DouyinChat(page, sleep=self._sleep)
@@ -237,17 +239,31 @@ class BrowserManager:
                 overall = "auth_expired"
                 detail = "登录已失效，请重新扫码"
             else:
+                visible_titles = await chat.visible_titles()
                 for target in targets:
                     opened = await chat.open_conversation(target.nickname_snapshot)
                     if not opened.opened:
-                        results.append(DryRunTargetResult(target.nickname_snapshot, "not_found"))
+                        hint = (
+                            f"未找到；当前列表可见会话：{', '.join(visible_titles[:12])}"
+                            if visible_titles
+                            else "未找到；请确认昵称与抖音列表显示完全一致"
+                        )
+                        results.append(
+                            DryRunTargetResult(
+                                target.nickname_snapshot, "not_found", None, hint
+                            )
+                        )
                     elif not opened.exact:
                         results.append(
-                            DryRunTargetResult(target.nickname_snapshot, "ambiguous", opened.title)
+                            DryRunTargetResult(
+                                target.nickname_snapshot, "ambiguous", opened.title, None
+                            )
                         )
                     else:
                         results.append(
-                            DryRunTargetResult(target.nickname_snapshot, "found", opened.title)
+                            DryRunTargetResult(
+                                target.nickname_snapshot, "found", opened.title, None
+                            )
                         )
                 self._touch_verified(account_id)
         except Exception as exc:
@@ -266,9 +282,15 @@ class BrowserManager:
             "overall": overall,
             "detail": detail,
             "targets": [
-                {"target": item.target, "status": item.status, "title": item.title}
+                {
+                    "target": item.target,
+                    "status": item.status,
+                    "title": item.title,
+                    "detail": item.detail,
+                }
                 for item in results
             ],
+            "visible_titles": visible_titles,
             "artifact_path": str(artifact_path),
         }
 
@@ -288,7 +310,12 @@ class BrowserManager:
             "detail": detail,
             "finished_at": _utcnow().isoformat(),
             "targets": [
-                {"target": item.target, "status": item.status, "title": item.title}
+                {
+                    "target": item.target,
+                    "status": item.status,
+                    "title": item.title,
+                    "detail": item.detail,
+                }
                 for item in results
             ],
         }
