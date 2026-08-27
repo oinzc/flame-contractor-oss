@@ -301,3 +301,69 @@ def test_scheduler_end_to_end_sends_via_run_send(settings):
             jobs = session.exec(select(SendJob)).all()
             assert len(jobs) == 1
             assert jobs[0].status == JobStatus.SUCCEEDED
+
+
+# ---------------------------------------------------------------- 通知挂接
+
+
+class RecordingNotifier:
+    """测试观测通知：记录每次 send。"""
+
+    def __init__(self):
+        self.sent: list[tuple[str, str, str]] = []
+        self.enabled = True
+
+    async def send(self, title: str, content: str, level: str = "active") -> bool:
+        self.sent.append((title, content, level))
+        return True
+
+
+def test_partial_result_triggers_notification(engine):
+    api = make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "partial"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert len(notifier.sent) >= 1
+    title, _, level = notifier.sent[0]
+    assert "未确认" in title or "复核" in title
+    assert level in ("timeSensitive", "critical")
+
+
+def test_auth_expired_triggers_notification(engine):
+    api = make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "auth_expired"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert any("登录失效" in title for title, _, _ in notifier.sent)

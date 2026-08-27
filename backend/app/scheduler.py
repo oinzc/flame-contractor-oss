@@ -33,6 +33,7 @@ from .models import (
     JobStatus,
     utc_now,
 )
+from .notifications import Notifier, NullNotifier
 
 # 账号级租约默认时长：调度点到触发发送的宽限，防另一 worker 误抢正在跑的账号
 DEFAULT_LEASE_SECONDS = 5.0
@@ -60,6 +61,7 @@ class Scheduler:
         settings: Settings,
         send_account: Callable[[str], Awaitable[dict]] | None = None,
         *,
+        notifier: "Notifier | None" = None,
         loop_interval: float = 60.0,
         lease_seconds: float = DEFAULT_LEASE_SECONDS,
         run_timeout: float = DEFAULT_RUN_TIMEOUT,
@@ -72,6 +74,7 @@ class Scheduler:
         self._engine = engine
         self._settings = settings
         self._send_account = send_account
+        self._notifier = notifier or NullNotifier()
         self._loop_interval = loop_interval
         self._lease_seconds = lease_seconds
         self._run_timeout = run_timeout
@@ -186,7 +189,13 @@ class Scheduler:
         now = self._utc_naive(now or self._clock())
         if self._paused:
             return {"dispatched": 0}
-        self._recover_expired(now)
+        recovered = self._recover_expired(now)
+        for account_id in recovered:
+            await self._notify(
+                "自动发送中断",
+                f"账号「{self._account_name(account_id)}」的自动发送曾中断，结果未确认，已转待人工复核。",
+                "timeSensitive",
+            )
         self.generate_due_schedules(now)
 
         # 到点且可派发的计划（pending；失败重试下次由独立规则处理）
@@ -258,8 +267,11 @@ class Scheduler:
                 session.add(row)
                 session.commit()
 
-    def _recover_expired(self, now: datetime) -> None:
-        """崩溃恢复：租约过期且仍停在 leased/sending → 转 unknown_requires_review（不自动重发）。"""
+    def _recover_expired(self, now: datetime) -> set[str]:
+        """崩溃恢复：租约过期且仍停在 leased/sending → 转 unknown_requires_review（不自动重发）。
+
+        返回被恢复的账号 ID 集合（供调用方决定是否通知）。
+        """
         recovered_accounts: set[str] = set()
         with Session(self._engine) as session:
             stale = session.exec(
@@ -285,6 +297,7 @@ class Scheduler:
             # 仅把这些「确实崩溃」的账号下，尚在中间态的 job 一并转待核（防重复再发）
             if recovered_accounts:
                 self._recover_stale_jobs(now, recovered_accounts)
+        return recovered_accounts
 
     def _recover_stale_jobs(self, now: datetime, account_ids: set[str]) -> None:
         if not account_ids:
@@ -335,14 +348,37 @@ class Scheduler:
                 self._send_account(account_id), timeout=self._run_timeout
             )
             self._finalize_from_result(schedule_id, result)
+            await self._notify_from_result(account_id, result)
         except asyncio.CancelledError:
             # 进程内取消（如 stop()）：转 unknown_requires_review 待核
             self._finalize(schedule_id, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW, "调度被取消")
             raise
         except Exception as exc:
             self._finalize(schedule_id, ScheduleStatus.FAILED, type(exc).__name__)
+            await self._notify("调度发送异常", self._account_name(account_id), "errors")
         finally:
             self._running.discard(account_id)
+
+    async def _notify_from_result(self, account_id: str, result: dict) -> None:
+        overall = result.get("overall")
+        name = self._account_name(account_id)
+        if overall == "partial":
+            await self._notify("部分好友结果未确认", f"账号「{name}」有好友发送结果未确认，请到任务记录人工核对。", "timeSensitive")
+        elif overall == "auth_expired":
+            await self._notify("账号登录失效", f"账号「{name}」登录已失效，请重新扫码登录以继续自动续火。", "critical")
+        elif overall == "error":
+            await self._notify("账号发送出错", f"账号「{name}」发送过程中出现错误，需人工处理。", "errors")
+
+    def _account_name(self, account_id: str) -> str:
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            return account.display_name if account is not None else account_id
+
+    async def _notify(self, title: str, content: str, level: str) -> None:
+        try:
+            await self._notifier.send(title, content, level)
+        except Exception:  # noqa: BLE001 - 通知失败不影响调度主流程
+            pass
 
     def _finalize_from_result(self, schedule_id: str, result: dict) -> None:
         overall = result.get("overall")

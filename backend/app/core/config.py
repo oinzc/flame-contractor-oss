@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
     profiles_dir: Path = PROJECT_ROOT / "data" / "profiles"
     artifacts_dir: Path = PROJECT_ROOT / "artifacts"
+    # Bark 通知推送地址（可选）：形如 https://api.day.app/<device_key>，空则不推送
+    bark_url: str | None = None
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",
