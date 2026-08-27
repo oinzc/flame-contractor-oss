@@ -86,7 +86,9 @@ class BarkNotifier:
             "body": content,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # trust_env=False：忽略本机环境 HTTPS/HTTP 代理，Bark 推送应直连 api.day.app，
+            # 避免因系统启用了 SOCKS 代理而要求额外依赖 socksio。
+            async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
                 resp = await client.post(url, json=payload)
                 resp.raise_for_status()
             return True
