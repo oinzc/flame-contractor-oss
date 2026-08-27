@@ -961,3 +961,28 @@ textarea:focus-visible {
 .dry-status.bad {
   color: var(--crimson);
 }
+
+.diag-box {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card-2);
+  padding: 6px 10px;
+}
+
+.diag-box summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ash);
+}
+
+.diag-box pre {
+  margin: 8px 0 2px;
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
+}

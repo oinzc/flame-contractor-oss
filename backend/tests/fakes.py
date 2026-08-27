@@ -162,13 +162,14 @@ class FakePage:
         if key == "Enter" and self.editor_text.strip() and self.clear_on_enter:
             self.editor_text = ""
 
-    async def evaluate(self, _expression: str, selector: str) -> None:
-        self.scrolls.append(selector)
-        if selector == CONVERSATION_LIST:
-            self.warmed = True
-            for title in self.titles_revealed_by_scroll:
-                if title not in self.conversation_titles:
-                    self.conversation_titles.append(title)
+    async def evaluate(self, _expression: str, target=None) -> None:
+        # 真实实现传入 CONVERSATION_LIST 的元素句柄；这里不区分句柄/选择器，
+        # 只要发生滚动就视为已预热并揭示懒加载标题。
+        self.scrolls.append("evaluate")
+        self.warmed = True
+        for title in self.titles_revealed_by_scroll:
+            if title not in self.conversation_titles:
+                self.conversation_titles.append(title)
 
     async def evaluate_js(self, _script: str) -> dict:
         return {}

@@ -224,6 +224,12 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                         本次可见会话：{dry.visibleTitles.join('、')}
                       </div>
                     )}
+                    {dry.diagnostics && (
+                      <details className="diag-box">
+                        <summary>诊断信息（如仍未找到，请展开复制发给开发者）</summary>
+                        <pre>{JSON.stringify(dry.diagnostics, null, 2)}</pre>
+                      </details>
+                    )}
                   </div>
                 )}
 
