@@ -8,13 +8,16 @@ from .selectors import (
     CONVERSATION_LIST,
     CONVERSATION_TITLE,
     RIGHT_TITLE,
+    SEARCH_CHAT_BTN,
     SEARCH_INPUT,
+    SEARCH_NAME_SELECTORS,
     SEARCH_RESULT_ITEM,
     SEND_FAILURE_MARKERS,
 )
 
 MAX_LIST_SCROLLS = 8
 _ITEM_SELECTORS = (CONVERSATION_ITEM, SEARCH_RESULT_ITEM)
+OPEN_CONFIRM_TIMEOUT = 8.0
 
 
 class DomChangedError(RuntimeError):
@@ -35,9 +38,16 @@ class DouyinChat:
     type_text/press_key，便于在测试中注入假实现，也便于未来替换执行后端。
     """
 
-    def __init__(self, page, timeout_ms: int = 15_000, sleep=asyncio.sleep):
+    def __init__(
+        self,
+        page,
+        timeout_ms: int = 15_000,
+        confirm_timeout: float = OPEN_CONFIRM_TIMEOUT,
+        sleep=asyncio.sleep,
+    ):
         self.page = page
         self.timeout_ms = timeout_ms
+        self.confirm_timeout = confirm_timeout
         self._sleep = sleep
 
     async def open_chat_page(self) -> None:
@@ -87,20 +97,47 @@ class DouyinChat:
         for selector in _ITEM_SELECTORS:
             items = await self.page.query_selector_all(selector)
             for item in items:
-                title_element = await item.query_selector(CONVERSATION_TITLE)
-                if title_element is None:
+                title = await self._title_of(item)
+                if title != name:
                     continue
-                title = ((await title_element.inner_text()) or "").strip()
-                if title == name:
-                    await item.click()
-                    await self._sleep(1.2)
-                    right_title = await self.right_panel_title()
-                    return ConversationOpen(
-                        opened=True,
-                        title=right_title,
-                        exact=right_title == name,
-                    )
+                target = await item.query_selector(SEARCH_CHAT_BTN)
+                if target is None:
+                    target = item
+                await target.click()
+                return await self._confirm_opened(name)
         return ConversationOpen(opened=False, title=None, exact=False)
+
+    async def _confirm_opened(self, name: str) -> ConversationOpen:
+        """点击后轮询右侧标题确认（SPA 切换有延迟，同 unmev 的 _confirm_opened）。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.confirm_timeout
+        right_title: str | None = None
+        while True:
+            right_title = await self.right_panel_title()
+            if right_title == name:
+                return ConversationOpen(opened=True, title=right_title, exact=True)
+            if loop.time() >= deadline:
+                return ConversationOpen(opened=True, title=right_title, exact=False)
+            await self._sleep(0.5)
+
+    async def _title_of(self, item) -> str | None:
+        """按 unmev 的顺序取标题：搜索行名称节点 → 会话标题子元素 → 整行首行兜底。"""
+        for selector in SEARCH_NAME_SELECTORS:
+            element = await item.query_selector(selector)
+            if element is not None:
+                text = await element.inner_text()
+                if text and text.strip():
+                    return text.strip()
+        title_element = await item.query_selector(CONVERSATION_TITLE)
+        if title_element is not None:
+            text = await title_element.inner_text()
+            if text and text.strip():
+                return text.strip()
+        text = await item.inner_text()
+        if not text:
+            return None
+        first_line = text.splitlines()[0].strip()
+        return first_line or None
 
     async def visible_titles(self, limit: int = 40) -> list[str]:
         titles: list[str] = []

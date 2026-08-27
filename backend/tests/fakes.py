@@ -13,6 +13,7 @@ from app.execution.selectors import (
     CONVERSATION_LIST,
     CONVERSATION_TITLE,
     RIGHT_TITLE,
+    SEARCH_CHAT_BTN,
     SEARCH_INPUT,
     SEARCH_RESULT_ITEM,
     SEND_FAILURE_MARKERS,
@@ -21,28 +22,44 @@ from app.main import create_app
 
 
 class FakeElement:
-    def __init__(self, text):
+    def __init__(self, text, on_click=None):
         self._text = text
+        self._on_click = on_click
 
     async def inner_text(self) -> str:
         value = self._text() if callable(self._text) else self._text
         return value
 
     async def click(self) -> None:
-        pass
+        if self._on_click is not None:
+            self._on_click()
 
 
 class FakeItem:
-    def __init__(self, title: str):
+    def __init__(self, page: "FakePage", title: str, search_style: bool = False):
+        self._page = page
         self._title = title
+        self._search_style = search_style
 
     async def query_selector(self, selector: str):
         if selector == CONVERSATION_TITLE:
-            return FakeElement(self._title)
+            return None if self._search_style else FakeElement(self._title)
+        if selector == SEARCH_CHAT_BTN:
+            if not self._search_style:
+                return None
+            return FakeElement(
+                "发消息",
+                on_click=lambda: self._page.clicked.append((self._title, "chat_btn")),
+            )
         return None
 
+    async def inner_text(self) -> str:
+        if self._search_style:
+            return f"{self._title}\n发消息"
+        return self._title
+
     async def click(self) -> None:
-        pass
+        self._page.clicked.append((self._title, "row"))
 
 
 class FakePage:
@@ -70,12 +87,14 @@ class FakePage:
         self.clear_on_enter = clear_on_enter
         self.search_results = search_results or {}
         self.titles_revealed_by_scroll = list(titles_revealed_by_scroll)
+        self.search_active = False
         self.editor_text = ""
         self.gotos: list[str] = []
         self.fills: list[tuple[str, str]] = []
         self.typed: list[tuple[str, str]] = []
         self.keys: list[str] = []
         self.scrolls: list[str] = []
+        self.clicked: list[tuple[str, str]] = []
         self.closed = False
 
     async def goto(self, url: str) -> None:
@@ -99,18 +118,26 @@ class FakePage:
         return None
 
     async def query_selector_all(self, selector: str):
-        if selector in (CONVERSATION_ITEM, SEARCH_RESULT_ITEM):
-            return [FakeItem(title) for title in self.conversation_titles]
+        if selector == SEARCH_RESULT_ITEM:
+            if not self.search_active:
+                return []
+            return [FakeItem(self, title, search_style=True) for title in self.conversation_titles]
+        if selector == CONVERSATION_ITEM:
+            if self.search_active:
+                return []
+            return [FakeItem(self, title) for title in self.conversation_titles]
         return []
 
     async def fill(self, selector: str, value: str) -> None:
         self.fills.append((selector, value))
         if selector == SEARCH_INPUT:
             if value.strip():
+                self.search_active = True
                 self.conversation_titles = list(
                     self.search_results.get(value.strip(), self._original_titles)
                 )
             else:
+                self.search_active = False
                 self.conversation_titles = list(self._original_titles)
 
     async def type_text(self, selector: str, text: str) -> None:
@@ -161,6 +188,7 @@ def make_app(settings, pages: list[FakePage]):
         send_timeout=0.2,
         send_poll_interval=0.05,
         send_stabilize_polls=2,
+        confirm_timeout=0.2,
         sleep=lambda _seconds: asyncio.sleep(0),
     )
     return create_app(settings, browser_manager=manager)
