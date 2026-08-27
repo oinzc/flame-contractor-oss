@@ -47,6 +47,17 @@ class AttemptStatus(str, Enum):
     FAILED = "failed"
 
 
+class ScheduleStatus(str, Enum):
+    PENDING = "pending"
+    LEASED = "leased"
+    SENDING = "sending"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN_REQUIRES_REVIEW = "unknown_requires_review"
+    SKIPPED = "skipped"
+    CANCELLED = "cancelled"
+
+
 class FailureClass(str, Enum):
     NETWORK = "network"
     AUTH = "auth"
@@ -149,3 +160,30 @@ class SendAttempt(SQLModel, table=True):
     artifact_ref: str | None = Field(default=None, max_length=256)
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
+
+
+class SendSchedule(SQLModel, table=True):
+    """账号级每日调度记录：同账号同业务日期唯一，驱动自动发送。
+
+    与 SendJob（好友级、幂等键）解耦：此处只决定「哪个账号今天何时发」，
+    具体每个好友的发送仍由 run_send 走 SendJob 幂等；账号级租约在此实现。
+    """
+
+    __tablename__ = "send_schedule"
+    __table_args__ = (
+        UniqueConstraint("account_id", "business_date", name="uq_send_schedule_account_date"),
+    )
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
+    business_date: date = Field(index=True)
+    scheduled_at: datetime | None = None
+    status: ScheduleStatus = Field(default=ScheduleStatus.PENDING, index=True)
+    lease_owner: str | None = Field(default=None, max_length=128)
+    lease_expires_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    last_error: str | None = Field(default=None, max_length=256)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

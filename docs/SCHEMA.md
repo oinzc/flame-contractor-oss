@@ -12,6 +12,7 @@ erDiagram
   CONTRACT_TARGET ||--o{ SEND_JOB : receives
   MESSAGE_TEMPLATE ||--o{ SEND_JOB : renders
   SEND_JOB ||--o{ SEND_ATTEMPT : has
+  ACCOUNT ||--o{ SEND_SCHEDULE : schedules_daily
 
   ACCOUNT {
     string id PK
@@ -81,6 +82,22 @@ erDiagram
     datetime started_at
     datetime finished_at
   }
+
+  SEND_SCHEDULE {
+    string id PK
+    string account_id FK
+    date business_date
+    datetime scheduled_at
+    string status
+    string lease_owner
+    datetime lease_expires_at
+    integer attempt_count
+    datetime started_at
+    datetime finished_at
+    string last_error
+    datetime created_at
+    datetime updated_at
+  }
 ```
 
 ## 2. 约束
@@ -122,6 +139,16 @@ UNIQUE (job_id, attempt_no)
 ```
 
 同一 Job 的尝试序号不可重复。
+
+### send_schedule
+
+M4 新增的「账号级每日调度」记录，只决定某账号某业务日期何时发（好友级发送仍走 send_job 幂等）。
+
+```sql
+UNIQUE (account_id, business_date)
+```
+
+保证同账号同一业务日期只有一条调度计划；Scheduler 重复运行也不会生成第二条。
 
 ## 3. SQLite 配置
 

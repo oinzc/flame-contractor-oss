@@ -1,0 +1,413 @@
+"""M4 调度器：按账号发送窗口自动触发真实发送。
+
+只负责「哪个账号今天何时发 + 账号级租约/互斥/恢复」，具体每个好友的发送仍走
+BrowserManager.run_send（SendJob 幂等键兜底、终态确认已实机验证）。
+
+设计约定（对齐 docs/TECHNICAL_DESIGN 5.2）：
+- 账号级随机取时：一账号在其 send_window 内取一个时刻，到点批量发该账号所有启用好友；
+- 账号级租约：pending→leased 用条件更新原子抢占，天然保证同账号并发=1；
+- 崩溃恢复：租约过期且已进入 leased/sending 的计划转 unknown_requires_review（不自动重发）；
+  pending（尚未开始）可重排；
+- 失败重试：failed 在当天窗口内有限次退避重试。
+
+所有时间以 UTC 存储；窗口换算按 account.timezone。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import random
+from datetime import date, datetime, time, timedelta
+from typing import Awaitable, Callable
+from zoneinfo import ZoneInfo
+
+from sqlmodel import Session, select
+
+from .core.config import Settings
+from .models import (
+    Account,
+    AccountStatus,
+    ScheduleStatus,
+    SendJob,
+    SendSchedule,
+    JobStatus,
+    utc_now,
+)
+
+# 账号级租约默认时长：调度点到触发发送的宽限，防另一 worker 误抢正在跑的账号
+DEFAULT_LEASE_SECONDS = 5.0
+# 触发后发给 run_send 的软超时（后台任务不管，仅用于租约判断），与 run_send 内部超时无关
+DEFAULT_RUN_TIMEOUT = 180.0
+# 失败重试退避基数（秒），指数退避
+RETRY_BACKOFF_BASE = 60.0
+RETRY_MAX_COUNT = 2
+
+# 可继续调度/重排的状态
+_RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
+# 人工接管（绝不自动重发）
+_TERMINAL = {ScheduleStatus.SUCCEEDED, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW}
+
+
+class Scheduler:
+    """进程内异步调度器。
+
+    server 启动时创建并 `start()`；`stop()` 时取消所有进行中的后台发送任务并关闭浏览器。
+    """
+
+    def __init__(
+        self,
+        engine,
+        settings: Settings,
+        send_account: Callable[[str], Awaitable[dict]] | None = None,
+        *,
+        loop_interval: float = 60.0,
+        lease_seconds: float = DEFAULT_LEASE_SECONDS,
+        run_timeout: float = DEFAULT_RUN_TIMEOUT,
+        retry_max_count: int = RETRY_MAX_COUNT,
+        retry_backoff_base: float = RETRY_BACKOFF_BASE,
+        rng: random.Random | None = None,
+        sleep=asyncio.sleep,
+        clock: Callable[[], datetime] | None = None,
+    ):
+        self._engine = engine
+        self._settings = settings
+        self._send_account = send_account
+        self._loop_interval = loop_interval
+        self._lease_seconds = lease_seconds
+        self._run_timeout = run_timeout
+        self._retry_max_count = retry_max_count
+        self._retry_backoff_base = retry_backoff_base
+        self._rng = rng or random.Random()
+        self._sleep = sleep
+        self._clock = clock or utc_now
+        self._running: set[str] = set()  # 当前正在发送的 account_id（进程内防并发的第二道闸）
+        self._paused = False
+        self._task: asyncio.Task | None = None
+        self._send_tasks: set[asyncio.Task] = set()
+        self._stopping = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @property
+    def running_accounts(self) -> set[str]:
+        return set(self._running)
+
+    def pause(self) -> None:
+        self._paused = True
+
+    def resume(self) -> None:
+        self._paused = False
+
+    # ---------------------------------------------------------------- 窗口换算
+
+    @staticmethod
+    def _parse_hhmm(value: str) -> time:
+        hour, minute = value.split(":")
+        return time(int(hour), int(minute))
+
+    def _window_for(self, account: Account) -> tuple[datetime, datetime]:
+        """返回账号本地时区窗口起点/终点（今天）；跨午夜窗口时 end 取次日合并处理。"""
+        tz = ZoneInfo(account.timezone)
+        local_now = self._clock().astimezone(tz)
+        start = self._parse_hhmm(account.send_window_start)
+        end = self._parse_hhmm(account.send_window_end)
+        start_dt = datetime.combine(local_now.date(), start, tzinfo=tz)
+        end_dt = datetime.combine(local_now.date(), end, tzinfo=tz)
+        if end < start:  # 跨午夜窗口（如 22:00-02:00）：end 移到次日
+            end_dt = end_dt + timedelta(days=1)
+        return start_dt, end_dt
+
+    def _pick_scheduled_at(self, account: Account) -> datetime:
+        start_dt, end_dt = self._window_for(account)
+        if end_dt <= start_dt:
+            return start_dt
+        chosen = start_dt + timedelta(
+            seconds=self._rng.uniform(0, (end_dt - start_dt).total_seconds())
+        )
+        return chosen.astimezone(ZoneInfo("UTC"))
+
+    def _local_date(self, account: Account) -> date:
+        return self._clock().astimezone(ZoneInfo(account.timezone)).date()
+
+    @staticmethod
+    def _utc_naive(dt: datetime | None) -> datetime | None:
+        """SQLite 读出的 datetime 为 naive；统一为 UTC-naive 以便与 aware 时钟比较。"""
+        if dt is None:
+            return None
+        if dt.tzinfo is not None:
+            return dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        return dt
+
+    # ---------------------------------------------------------------- 每日生成
+
+    def generate_due_schedules(self, now: datetime | None = None) -> list[SendSchedule]:
+        """为每个 enabled 账号幂等建当日计划（窗口内随机取时）。返回新建的计划。"""
+        now = now or self._clock()
+        created: list[SendSchedule] = []
+        with Session(self._engine) as session:
+            accounts = session.exec(
+                select(Account).where(Account.enabled)
+            ).all()
+            for account in accounts:
+                local_date = self._local_date(account)
+                existing = session.exec(
+                    select(SendSchedule).where(
+                        SendSchedule.account_id == account.id,
+                        SendSchedule.business_date == local_date,
+                    )
+                ).first()
+                if existing is not None:
+                    continue
+                schedule = SendSchedule(
+                    account_id=account.id,
+                    business_date=local_date,
+                    scheduled_at=self._pick_scheduled_at(account),
+                    status=ScheduleStatus.PENDING,
+                )
+                session.add(schedule)
+                created.append(schedule)
+            try:
+                session.commit()
+            except Exception:  # 撞唯一约束：另一 worker 已建，忽略
+                session.rollback()
+                created = []
+        return created
+
+    # ---------------------------------------------------------------- 派发
+
+    async def tick(self, now: datetime | None = None) -> dict:
+        """一轮调度：恢复游离计划 → 生成当日 → 到点抢租约并触发发送。"""
+        now = self._utc_naive(now or self._clock())
+        if self._paused:
+            return {"dispatched": 0}
+        self._recover_expired(now)
+        self.generate_due_schedules(now)
+
+        # 到点且可派发的计划（pending；失败重试下次由独立规则处理）
+        with Session(self._engine) as session:
+            due = session.exec(
+                select(SendSchedule).where(
+                    SendSchedule.status == ScheduleStatus.PENDING,
+                )
+            ).all()
+
+        dispatched = 0
+        for schedule in due:
+            if self._stopping:
+                break
+            scheduled_at = self._utc_naive(schedule.scheduled_at)
+            if scheduled_at is None or scheduled_at > now:
+                continue
+            if not self._try_lease(schedule.id, now):
+                continue  # 已被另一 worker 抢走或正在跑
+            account = self._load_account(schedule.account_id)
+            if account is None or not account.enabled:
+                self._finalize(schedule.id, ScheduleStatus.SKIPPED)
+                continue
+            if not self._account_ready(account):
+                # 账号状态不允许（未登录/失效/风控）：不派发，留待人工/后续轮次
+                self._release(schedule.id)
+                continue
+            dispatched += 1
+            self._spawn_send(schedule.id, schedule.account_id)
+        return {"dispatched": dispatched}
+
+    def _account_ready(self, account: Account) -> bool:
+        # 只允许明确可发的健康账号；其余（含 auth_expired/verification/dom_broken）由人工接管
+        return account.status == AccountStatus.HEALTHY
+
+    def _load_account(self, account_id: str) -> Account | None:
+        with Session(self._engine) as session:
+            return session.get(Account, account_id)
+
+    # ---------------------------------------------------------------- 租约
+
+    def _try_lease(self, schedule_id: str, now: datetime) -> bool:
+        """条件更新抢占租约：仅当仍是 pending 且租约未过期时置为 leased。"""
+        with Session(self._engine) as session:
+            row = session.get(SendSchedule, schedule_id)
+            if row is None:
+                return False
+            if row.status != ScheduleStatus.PENDING:
+                return False
+            lease_expires = self._utc_naive(row.lease_expires_at)
+            if lease_expires is not None and lease_expires > now:
+                return False  # 正被别的 worker 处理中
+            row.status = ScheduleStatus.LEASED
+            row.lease_owner = "scheduler"
+            row.lease_expires_at = now + timedelta(seconds=self._lease_seconds)
+            row.updated_at = now
+            session.add(row)
+            session.commit()
+            return True
+
+    def _release(self, schedule_id: str) -> None:
+        with Session(self._engine) as session:
+            row = session.get(SendSchedule, schedule_id)
+            if row is not None and row.status == ScheduleStatus.LEASED:
+                row.status = ScheduleStatus.PENDING
+                row.lease_owner = None
+                row.lease_expires_at = None
+                row.updated_at = utc_now()
+                session.add(row)
+                session.commit()
+
+    def _recover_expired(self, now: datetime) -> None:
+        """崩溃恢复：租约过期且仍停在 leased/sending → 转 unknown_requires_review（不自动重发）。"""
+        recovered_accounts: set[str] = set()
+        with Session(self._engine) as session:
+            stale = session.exec(
+                select(SendSchedule).where(
+                    SendSchedule.status == ScheduleStatus.LEASED,
+                )
+            ).all()
+            for row in stale:
+                # 若对应账号仍在进程中发送，不做恢复
+                if row.account_id in self._running:
+                    continue
+                lease_expires = self._utc_naive(row.lease_expires_at)
+                if lease_expires is not None and lease_expires > now:
+                    continue  # 租约未过期，仍在正常处理
+                row.status = ScheduleStatus.UNKNOWN_REQUIRES_REVIEW
+                row.last_error = "调度租约丢失，结果未确认"
+                row.lease_owner = None
+                row.lease_expires_at = None
+                row.updated_at = now
+                session.add(row)
+                recovered_accounts.add(row.account_id)
+            session.commit()
+            # 仅把这些「确实崩溃」的账号下，尚在中间态的 job 一并转待核（防重复再发）
+            if recovered_accounts:
+                self._recover_stale_jobs(now, recovered_accounts)
+
+    def _recover_stale_jobs(self, now: datetime, account_ids: set[str]) -> None:
+        if not account_ids:
+            return
+        with Session(self._engine) as session:
+            stale_jobs = session.exec(
+                select(SendJob).where(
+                    SendJob.account_id.in_(account_ids),
+                    SendJob.status.in_(
+                        [
+                            JobStatus.LEASED,
+                            JobStatus.OPENING_CHAT,
+                            JobStatus.SENDING,
+                            JobStatus.CONFIRMING,
+                        ]
+                    ),
+                )
+            ).all()
+            for job in stale_jobs:
+                job.status = JobStatus.UNKNOWN_REQUIRES_REVIEW
+                job.updated_at = now
+                session.add(job)
+            session.commit()
+
+    # ---------------------------------------------------------------- 发送
+
+    def _spawn_send(self, schedule_id: str, account_id: str) -> None:
+        self._running.add(account_id)
+        task = asyncio.create_task(self._run_send(schedule_id, account_id))
+        self._send_tasks.add(task)
+        task.add_done_callback(self._send_tasks.discard)
+
+    async def _run_send(self, schedule_id: str, account_id: str) -> None:
+        try:
+            with Session(self._engine) as session:
+                row = session.get(SendSchedule, schedule_id)
+                if row is not None:
+                    row.status = ScheduleStatus.SENDING
+                    row.started_at = utc_now()
+                    row.updated_at = utc_now()
+                    session.add(row)
+                    session.commit()
+
+            if self._send_account is None:
+                raise RuntimeError("未配置发送执行器")
+
+            result = await asyncio.wait_for(
+                self._send_account(account_id), timeout=self._run_timeout
+            )
+            self._finalize_from_result(schedule_id, result)
+        except asyncio.CancelledError:
+            # 进程内取消（如 stop()）：转 unknown_requires_review 待核
+            self._finalize(schedule_id, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW, "调度被取消")
+            raise
+        except Exception as exc:
+            self._finalize(schedule_id, ScheduleStatus.FAILED, type(exc).__name__)
+        finally:
+            self._running.discard(account_id)
+
+    def _finalize_from_result(self, schedule_id: str, result: dict) -> None:
+        overall = result.get("overall")
+        if overall == "ok":
+            self._finalize(schedule_id, ScheduleStatus.SUCCEEDED, None)
+        elif overall == "partial":
+            # 部分成功/未确认：既不误判成功也不自动重发 → 待人工核
+            self._finalize(schedule_id, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW, "部分好友结果未确认")
+        else:
+            # auth_expired / error
+            self._finalize(schedule_id, ScheduleStatus.FAILED, overall or "error")
+
+    def _finalize(self, schedule_id: str, status: ScheduleStatus, error: str | None) -> None:
+        with Session(self._engine) as session:
+            row = session.get(SendSchedule, schedule_id)
+            if row is None:
+                return
+            row.status = status
+            row.finished_at = utc_now()
+            row.updated_at = utc_now()
+            row.last_error = error
+            if status == ScheduleStatus.FAILED:
+                row.attempt_count += 1
+            row.lease_owner = None
+            row.lease_expires_at = None
+            session.add(row)
+            session.commit()
+
+    # ---------------------------------------------------------------- 生命周期
+
+    async def wait_idle(self) -> None:
+        """等待所有在途后台发送任务结束（测试/收尾用）。"""
+        if self._send_tasks:
+            await asyncio.gather(*tuple(self._send_tasks), return_exceptions=True)
+            self._send_tasks.clear()
+
+    async def _loop(self) -> None:
+        while not self._stopping:
+            try:
+                await self.tick()
+            except Exception:
+                # 调度循环自身绝不允许因单轮异常退出
+                pass
+            interval = self._loop_interval
+            if interval <= 0:
+                interval = 60.0
+            await self._sleep(interval)
+
+    def start(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        self._stopping = False
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        self._stopping = True
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+        if self._send_tasks:
+            for task in self._send_tasks:
+                task.cancel()
+            await asyncio.gather(*tuple(self._send_tasks), return_exceptions=True)
+            self._send_tasks.clear()

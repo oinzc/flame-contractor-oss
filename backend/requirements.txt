@@ -4,4 +4,5 @@ sqlmodel>=0.0.24,<0.1
 pydantic-settings>=2.10,<3
 tzdata>=2025.2
 alembic>=1.16,<2
+apscheduler>=3.10,<4
 playwright>=1.54,<2

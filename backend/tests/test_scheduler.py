@@ -1,0 +1,303 @@
+"""M4：调度器——当日计划生成、窗口随机取时、到期触发、账号互斥、崩溃恢复、暂停、端到端。"""
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from sqlmodel import Session, select
+
+from app.models import (
+    Account,
+    AccountStatus,
+    JobStatus,
+    ScheduleStatus,
+    SendJob,
+    SendSchedule,
+)
+from app.scheduler import Scheduler
+from tests.fakes import FakePage, create_account, make_app
+
+
+def make_clock(start: datetime):
+    now = {"value": start}
+
+    def clock() -> datetime:
+        return now["value"]
+
+    clock.set = lambda value: now.__setitem__("value", value)  # type: ignore[attr-defined]
+    return clock
+
+
+def make_account(engine, *, status=AccountStatus.HEALTHY, enabled=True, **kwargs) -> Account:
+    with Session(engine) as session:
+        account = Account(
+            display_name=kwargs.pop("display_name", "调度账号"),
+            status=status,
+            enabled=enabled,
+            **kwargs,
+        )
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+        return account
+
+
+def schedule_rows(engine) -> list[SendSchedule]:
+    with Session(engine) as session:
+        return session.exec(select(SendSchedule)).all()
+
+
+# ---------------------------------------------------------------- 窗口与随机取时
+
+
+def test_generate_creates_one_schedule_per_enabled_account(engine):
+    account = make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, sleep=asyncio.sleep, rng=__import__("random").Random(1), loop_interval=0)  # type: ignore[arg-type]
+
+    created = sched.generate_due_schedules()
+    assert len(created) == 1
+    rows = schedule_rows(engine)
+    assert rows[0].account_id == account.id
+    assert rows[0].business_date.year == 2026
+    assert rows[0].status == ScheduleStatus.PENDING
+    # scheduled_at 落在窗口内（20:00-22:00 Asia/Shanghai = 12:00-14:00 UTC）
+    assert datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc) <= rows[0].scheduled_at.replace(
+        tzinfo=timezone.utc
+    ) <= datetime(2026, 8, 27, 14, 0, tzinfo=timezone.utc)
+
+
+def test_generate_is_idempotent_per_date(engine):
+    make_account(engine, display_name="A")
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched.generate_due_schedules()
+    second = sched.generate_due_schedules()
+    assert second == []
+    assert len(schedule_rows(engine)) == 1  # 同账号同业务日期唯一
+
+
+def test_generate_skips_disabled_account(engine):
+    make_account(engine, enabled=False)
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    assert sched.generate_due_schedules() == []
+    assert schedule_rows(engine) == []
+
+
+# ---------------------------------------------------------------- 到期派发与互斥
+
+
+def test_tick_dispatches_only_when_due(engine):
+    import random
+
+    api = make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        rng=random.Random(1),
+        loop_interval=0,
+    )
+    # 生成计划（scheduled_at 在窗口内随机 = 12:00-14:00 UTC）
+    sched.generate_due_schedules()
+    # now=09:00 早于窗口起点 → 必然不派发
+    asyncio.run(sched.tick())
+    assert calls == []
+
+    # now 推到窗口之后（15:00）→ 派发并成功
+    clock.set(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    asyncio.run(sched.tick())
+    assert calls == [api.id]
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.SUCCEEDED
+
+
+def test_account_not_healthy_not_dispatched(engine):
+    api = make_account(engine, status=AccountStatus.AUTH_EXPIRED)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(engine, settings=None, send_account=send, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    assert calls == []  # 账号失效，不自动发
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.PENDING  # 释放回 pending，可人工接管
+
+
+def test_partial_result_becomes_unknown(engine):
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "partial"}
+
+    sched = Scheduler(engine, settings=None, send_account=send, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.UNKNOWN_REQUIRES_REVIEW
+
+
+# ---------------------------------------------------------------- 崩溃恢复
+
+
+def test_expired_lease_recovered_to_unknown(engine):
+    api = make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    # 手工造一个「租约过期且仍 leased」的计划（模拟 worker 崩溃）
+    with Session(engine) as session:
+        row = SendSchedule(
+            account_id=api.id,
+            business_date=datetime(2026, 8, 27, 0, 0).date(),
+            scheduled_at=datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc),
+            status=ScheduleStatus.LEASED,
+            lease_owner="dead-worker",
+            lease_expires_at=datetime(2026, 8, 27, 14, 0, tzinfo=timezone.utc),
+        )
+        session.add(row)
+        session.commit()
+
+    asyncio.run(sched.tick())
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.UNKNOWN_REQUIRES_REVIEW
+
+
+def test_crash_recovery_marks_stale_jobs_unknown(settings):
+    """账号调度崩溃：其下卡在中间态的 job 一并转 unknown_requires_review。"""
+    from fastapi.testclient import TestClient
+
+    app = make_app(settings, [])
+    with TestClient(app) as client:
+        account = create_account(client)
+        tmpl = client.post(
+            "/api/templates", json={"name": "T", "content": "{{target_name}}"}
+        ).json()
+        target = client.post(
+            "/api/targets",
+            json={
+                "accountId": account["id"],
+                "nicknameSnapshot": "好友A",
+                "templateId": tmpl["id"],
+            },
+        ).json()
+
+        clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+        sched = Scheduler(
+            app.state.engine, settings=None, clock=clock, sleep=asyncio.sleep, loop_interval=0
+        )
+        # 手工造「租约过期且仍 leased」的计划 + 其下卡在 SENDING 的 job
+        with Session(app.state.engine) as session:
+            row = SendSchedule(
+                account_id=account["id"],
+                business_date=datetime(2026, 8, 27, 0, 0).date(),
+                status=ScheduleStatus.LEASED,
+                lease_owner="dead-worker",
+                lease_expires_at=datetime(2026, 8, 27, 14, 0, tzinfo=timezone.utc),
+            )
+            session.add(row)
+            job = SendJob(
+                account_id=account["id"],
+                target_id=target["id"],
+                template_id=tmpl["id"],
+                business_date=datetime(2026, 8, 27, 0, 0).date(),
+                message_slot_id="T:v1",
+                status=JobStatus.SENDING,
+            )
+            session.add(job)
+            session.commit()
+
+        asyncio.run(sched.tick())
+        with Session(app.state.engine) as session:
+            refreshed = session.exec(select(SendJob)).one()
+            assert refreshed.status == JobStatus.UNKNOWN_REQUIRES_REVIEW
+
+
+# ---------------------------------------------------------------- 暂停
+
+
+def test_paused_stops_dispatch(engine):
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(engine, settings=None, send_account=send, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched.pause()
+    sched.generate_due_schedules()
+    result = asyncio.run(sched.tick())
+    assert calls == []
+    assert result == {"dispatched": 0}
+
+
+# ---------------------------------------------------------------- 端到端（真实路由调用 run_send）
+
+
+def test_scheduler_end_to_end_sends_via_run_send(settings):
+    """调度触发后复用 browser_manager.run_send 真实发送一名好友。"""
+    app = make_app(settings, [FakePage(logged_in=True, conversation_titles=("好友A",), right_title="好友A")])
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        create_account(client)
+        tmpl = client.post(
+            "/api/templates", json={"name": "T", "content": "{{target_name}}"}
+        ).json()
+        account_id = client.get("/api/accounts").json()[0]["id"]
+        target = client.post(
+            "/api/targets",
+            json={"accountId": account_id, "nicknameSnapshot": "好友A", "templateId": tmpl["id"]},
+        ).json()
+
+        # 账号置为 HEALTHY 才允许派发
+        with Session(app.state.engine) as session:
+            from app.models import Account as AccountModel
+
+            acc = session.get(AccountModel, account_id)
+            acc.status = AccountStatus.HEALTHY
+            session.add(acc)
+            session.commit()
+
+        # 独立调度器实例 + 复用 browser_manager.run_send（假浏览器）
+        import random
+
+        clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+        sched = Scheduler(
+            app.state.engine,
+            settings,
+            send_account=app.state.browser_manager.run_send,
+            clock=clock,
+            sleep=asyncio.sleep,
+            rng=random.Random(3),
+            loop_interval=0,
+        )
+        sched.generate_due_schedules()
+
+        async def drive():
+            await sched.tick()
+            await sched.wait_idle()
+
+        asyncio.run(drive())
+
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+            assert len(jobs) == 1
+            assert jobs[0].status == JobStatus.SUCCEEDED

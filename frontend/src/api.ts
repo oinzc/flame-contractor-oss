@@ -80,4 +80,14 @@ export const api = {
     request<import('./types').DryRunRead>(`/api/accounts/${id}/dry-run`, {
       method: 'POST',
     }),
+  schedulerStatus: () =>
+    request<import('./types').SchedulerStatus>('/api/scheduler'),
+  schedulerPause: () =>
+    request<import('./types').SchedulerStatus>('/api/scheduler/pause', {
+      method: 'POST',
+    }),
+  schedulerResume: () =>
+    request<import('./types').SchedulerStatus>('/api/scheduler/resume', {
+      method: 'POST',
+    }),
 }

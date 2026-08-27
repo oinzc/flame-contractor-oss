@@ -5,6 +5,7 @@ import type {
   DashboardSummary,
   Health,
   MessageTemplate,
+  SchedulerStatus,
 } from './types'
 import CreateAccountModal from './components/CreateAccountModal'
 import DashboardPage from './components/DashboardPage'
@@ -29,6 +30,7 @@ export default function App() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [targets, setTargets] = useState<ContractTarget[]>([])
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -36,16 +38,19 @@ export default function App() {
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [nextHealth, nextSummary, nextTargets, nextTemplates] = await Promise.all([
-        api.health(),
-        api.dashboard(),
-        api.targets(),
-        api.templates(),
-      ])
+      const [nextHealth, nextSummary, nextTargets, nextTemplates, nextScheduler] =
+        await Promise.all([
+          api.health(),
+          api.dashboard(),
+          api.targets(),
+          api.templates(),
+          api.schedulerStatus(),
+        ])
       setHealth(nextHealth)
       setSummary(nextSummary)
       setTargets(nextTargets)
       setTemplates(nextTemplates)
+      setSchedulerStatus(nextScheduler)
       setError(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '无法连接本机控制面')
@@ -61,6 +66,16 @@ export default function App() {
   async function handleCreateAccount(input: Parameters<typeof api.createAccount>[0]) {
     await api.createAccount(input)
     setShowCreate(false)
+    await refresh()
+  }
+
+  async function handleToggleScheduler() {
+    if (!schedulerStatus) return
+    if (schedulerStatus.paused) {
+      await api.schedulerResume()
+    } else {
+      await api.schedulerPause()
+    }
     await refresh()
   }
 
@@ -118,7 +133,13 @@ export default function App() {
         summary && (
           <main className="content">
             {page === 'dashboard' && (
-              <DashboardPage summary={summary} targets={targets} onNavigate={setPage} />
+              <DashboardPage
+                summary={summary}
+                targets={targets}
+                schedulerStatus={schedulerStatus}
+                onToggleScheduler={() => void handleToggleScheduler()}
+                onNavigate={setPage}
+              />
             )}
             {page === 'accounts' && (
               <AccountsPage
