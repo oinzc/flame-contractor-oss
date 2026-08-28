@@ -1,11 +1,11 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | HEAD = `d687f88`
+> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | HEAD = `0249a38`
 
 ## 当前状态
-**M4（自动调度）+ 异常推送（Bark）+ 图片发送 + 火花天数手动校准均已实机验证；M5 的 selector bundle 热更新也已完成**。当前能力：自动每日续火、异常推送、图片发送、火花天数手动校准、页面改版不重启适配选择器。
+**M4（自动调度）+ 异常推送（Bark）+ 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送，M5 全部达成**。当前能力：自动每日续火、异常推送、图片/表情发送、火花天数手动校准、页面改版不重启适配选择器。
 
-**M5 剩余项**：原生表情发送（photo 已做，原生 sticky 未做）。通知补渠道（钉钉/邮件）经评估决定不扩，保持仅 Bark。
+**M5 剩余项**：无——原生表情发送也已实机验证完成。通知补渠道（钉钉/邮件）经评估决定不扩，保持仅 Bark。
 
 **火花天数说明（已实机核实）**：`streak_days` 为本地累计值（发送成功 +1），**非抖音实时读取**。参考 ScriptCat-Douyin-Fire-Helper 同样采用"本地记录 + 每日 +1 + 手动调整"，抖音网页版不提供稳定、对所有好友都存在的火花天数 DOM（oinzc 会话实测无火花提示，且火花文案格式多变、类名被多会话共用，DOM 读取会串行误读，违背"宁可不发不错发"边界）。
 
@@ -53,7 +53,17 @@
 - **mtime 惰性重载**：`_Bundle` 在访问时检查 JSON 的 mtime，文件一变即自动重读，因此**抖音改版只需编辑 JSON，无需重启后端进程**——即将到达的登录/定位/发送自动用新选择器。
 - **运行期取值**：`douyin_chat.py` 统一改为 `from . import selectors as _s` 后以 `_s.X` 使用（而非 import 时捕获常量），这是热更新真正生效的前提。
 - **API**：`GET /api/selectors`（当前 bundle 快照）、`POST /api/selectors/reload`（强制重载）。
-- **验证**：新增 `tests/test_selectors_bundle.py` 7 条（默认加载/未知 key 报错/显式 reload/惰性 mtime/DouyinChat 运行期取值反映重载/API 读与重载），后端 pytest **69 passed**（62 + 7）。
+- **验证**：新增 `tests/test_selectors_bundle.py` 7 条（默认加载/未知 key 报错/显式 reload/惰性 mtime/DouyinChat 运行期取值反映重载/API 读与重载），后端 pytest **73 passed**（69 + 4 sticker）。
+
+### M5 原生表情发送（HEAD `0249a38`）
+- **TemplateType 加 `STICKER`**；`MessageTemplate` 加 `sticker_name/label/category/fallback_index`（迁移 `fe2a91c8b3d4`，仅加列）；schema 校验（缺表情名→422）+ 预览 `[表情] {name}`。
+- **`douyin_chat.send_sticker`**：点表情按钮 → 打开面板 → 按名称精确匹配表情项（`.emojiEmojiItememojiItem` + 名称节点）→ **一点即发**；`finally` 关闭面板并恢复输入框焦点（unmev issue #4 的面板遮挡教训——否则会挡住后续消息）。
+- **真机核对 + 修复**（HEAD `0249a38`）：
+  - 真机探针 `scripts/probe_sticker.py`（只定位不发）确认表情按钮 `svg.messageMsgInputiconAction`、面板 `.componentsemojiemojiPanel` 可用，24 个表情项（比心/续火花等）可定位。
+  - E2E 暴露两个 Bug 并修复：①面板打开后表情项异步渲染，须先 `_wait_sticker_items` 再遍历（否则 count=0 误报找不到）；②确认须复用图像 `image_bubble_confirmed`（`contentBox+isFromMe+非头像 img` 的 cur>before 锚定），不能用依赖 `messageMessageBoxcontentBox` 的图片专用 `_wait_image_bubble`（表情气泡未必匹配）。
+- **终态确认**与图片一致：`_confirm_send` 对 IMAGE/STICKER 都走「从我的 + 非头像」增图锚定，绝不把头像/旧图当成功；确认不了记 `unknown_requires_review`。
+- **验证**：`tests/test_sticker.py` 4 条（模板校验/匹配发送成功/找不到表情失败/无气泡不判成功）；**原生表情真实发送 E2E** 通过：oinzc 会话 exact=True，「比心」表情发出，`SEND_STICKER OK` + `last_bubble_seen True` + `IMAGE_BUBBLE_CONFIRMED True`。
+- 前端模板页支持「表情」类型 + 表情名称/分类字段。
 
 ## 关键技术决策
 - 登录态存于持久 Profile；登录检测=会话列表出现；身份确认=右侧标题严格等值，存疑即 ambiguous 不发。
@@ -89,11 +99,12 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **69 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载） |
+| 后端 pytest | **73 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载；4=原生表情：模板校验/匹配发送成功/找不到表情失败/无气泡不判成功） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |
 | **图片真实发送 E2E** | 绑定图片模板真实发图：图片气泡出现（base64 非头像图），`SEND_RESULT=succeeded`、`IMG_BUBBLE_CONFIRMED=True`；确认逻辑不误判成功 |
+| **原生表情真实发送 E2E** | 绑定「比心」表情模板真实发送：oinzc 会话 exact=True，`SEND_STICKER OK`、`last_bubble_seen=True`、`IMAGE_BUBBLE_CONFIRMED=True` |
 
 ## 已知问题 / 边界
 - 发送/定位的 DOM 选择器依赖抖音当前页面结构（`selectors.py`），页面改版可能失效；`SendConfirmer` 在无可靠信号时记 unknown 而非误判成功，是安全设计。
@@ -111,7 +122,7 @@ frontend/src/
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-1. **M5 剩余**：原生表情发送（原生 sticker，非图片）。selector bundle 热更新已完成；通知补渠道（钉钉/邮件）经评估**不扩**——仅 Bark 即满足无人值守异常推送。
+1. **M5 已全部完成**（自动调度/Bark/图片/火花校准/selector 热更/原生表情）。通知补渠道（钉钉/邮件）经评估**不扩**——仅 Bark 即满足无人值守异常推送。若转多用户/远程：加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
 2. 若转多用户/远程：加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
 
 ## 应急运维工具（backend/scripts，实机排查用）

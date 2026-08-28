@@ -223,6 +223,12 @@ password, cookie, token, storageState, profilePath
 |---|---|---|---|---|
 | 模板名称 | name | string(1..60) | 是 | 唯一名称 |
 | 模板内容 | content | string(1..1000) | 是 | 纯文本及安全变量 |
+| 模板类型 | type | enum | 否 | `text` / `image` / `sticker`，默认 `text` |
+| 图片路径 | imagePath | string(500) | 否 | `image` 类型必填，本地图片路径 |
+| 表情名称 | stickerName | string(64) | 否 | `sticker` 类型必填，表情面板按此名称匹配 |
+| 表情显示名 | stickerLabel | string(64) | 否 | 面板显示名，默认=stickerName |
+| 表情分类 | stickerCategory | string(32) | 否 | 表情分类，打开面板先定位该分类 |
+| 表情兜底索引 | stickerFallbackIndex | integer | 否 | 面板内第 n 个可点元素的兜底索引 |
 
 允许变量：
 
