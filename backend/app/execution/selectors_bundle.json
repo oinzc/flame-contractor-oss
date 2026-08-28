@@ -45,5 +45,19 @@
     ".e2e-send-msg-bt",
     "button[aria-label*=\"发送\"]",
     "[role=\"button\"][aria-label*=\"发送\"]"
-  ]
+  ],
+  "STICKER_BUTTONS": [
+    "svg.messageMsgInputiconAction",
+    "button[aria-label*=\"表情\"]",
+    "[role=\"button\"][aria-label*=\"表情\"]",
+    "[title*=\"表情\"]"
+  ],
+  "STICKER_PANELS": [
+    ".componentsemojiemojiPanel",
+    "[class*=\"emojiPanel\"]",
+    "[role=\"dialog\"]",
+    "[class*=\"sticker\"]"
+  ],
+  "STICKER_ITEM": ".emojiEmojiItememojiItem",
+  "STICKER_ITEM_NAME": ".emojiEmojiItememojiItemDesc"
 }

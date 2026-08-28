@@ -215,6 +215,8 @@ def send_preview(session: Session, account_id: str) -> dict:
         if template is not None and template.enabled:
             if template.type == TemplateType.IMAGE:
                 message = f"[图片] {template.image_path or ''}"
+            elif template.type == TemplateType.STICKER:
+                message = f"[表情] {template.sticker_name or ''}"
             else:
                 message = render_message(
                     template.content,

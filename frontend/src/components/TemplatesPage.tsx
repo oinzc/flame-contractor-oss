@@ -26,9 +26,11 @@ function previewContent(content: string): string {
 
 export default function TemplatesPage({ templates, onChanged }: Props) {
   const [name, setName] = useState('')
-  const [type, setType] = useState<'text' | 'image'>('text')
+  const [type, setType] = useState<'text' | 'image' | 'sticker'>('text')
   const [content, setContent] = useState('')
   const [imagePath, setImagePath] = useState('')
+  const [stickerName, setStickerName] = useState('')
+  const [stickerCategory, setStickerCategory] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -40,12 +42,17 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
       await api.createTemplate({
         name: name.trim(),
         type,
-        content: type === 'image' ? '' : content.trim(),
+        content: type === 'text' ? content.trim() : '',
         imagePath: type === 'image' ? imagePath.trim() : undefined,
+        stickerName: type === 'sticker' ? stickerName.trim() : undefined,
+        stickerCategory:
+          type === 'sticker' && stickerCategory.trim() ? stickerCategory.trim() : undefined,
       })
       setName('')
       setContent('')
       setImagePath('')
+      setStickerName('')
+      setStickerCategory('')
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败，请重试')
@@ -95,6 +102,8 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                     >
                       {template.type === 'image'
                         ? `🖼 图片模板：${template.imagePath ?? '—'}`
+                        : template.type === 'sticker'
+                        ? `😀 表情模板：${template.stickerName ?? '—'}`
                         : template.content}
                     </div>
                   </td>
@@ -132,6 +141,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
               >
                 <option value="text">文本</option>
                 <option value="image">图片</option>
+                <option value="sticker">表情</option>
               </select>
             </div>
           </div>
@@ -164,7 +174,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 </div>
               )}
             </>
-          ) : (
+          ) : type === 'image' ? (
             <div className="field">
               <label htmlFor="template-image-path">图片本地路径</label>
               <input
@@ -179,6 +189,36 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 发送时把这张本地图片作为消息投递给好友。路径必须本机可读，且为图片文件。
               </p>
             </div>
+          ) : (
+            <>
+              <div className="field">
+                <label htmlFor="template-sticker-name">表情名称</label>
+                <input
+                  id="template-sticker-name"
+                  value={stickerName}
+                  onChange={(event) => setStickerName(event.target.value)}
+                  placeholder="例如：比心"
+                  maxLength={64}
+                  required={type === 'sticker'}
+                />
+                <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                  抖音原生表情（贴纸）名称，发送时在表情面板里按名称匹配后一点即发。
+                </p>
+              </div>
+              <div className="field">
+                <label htmlFor="template-sticker-category">表情分类（可选）</label>
+                <input
+                  id="template-sticker-category"
+                  value={stickerCategory}
+                  onChange={(event) => setStickerCategory(event.target.value)}
+                  placeholder="例如：常用"
+                  maxLength={32}
+                />
+                <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                  若该表情在面板的某个分类页里，填分类可先切换到对应分类再匹配；不填则直接在当前面板查找。
+                </p>
+              </div>
+            </>
           )}
           {error && <div className="form-error">{error}</div>}
           <div className="form-actions">

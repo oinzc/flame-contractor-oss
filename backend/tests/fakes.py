@@ -82,6 +82,9 @@ class FakePage:
         search_requires_warmup: bool = False,
         search_results_after_polls: int = 0,
         image_bubble_render: bool = False,
+        sticker_items: list[str] = (),
+        sticker_button_available: bool = True,
+        sticker_panel_available: bool = True,
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
@@ -111,6 +114,10 @@ class FakePage:
         self.image_bubble_render = image_bubble_render
         self.image_uploaded = False
         self.attachment_clicked = False
+        self.sticker_items = list(sticker_items)
+        self.sticker_button_available = sticker_button_available
+        self.sticker_panel_available = sticker_panel_available
+        self.sticker_clicked = None
 
     async def goto(self, url: str) -> None:
         self.gotos.append(url)
@@ -265,20 +272,34 @@ class _FakeFileChooser:
 
 
 class _FakeLocator:
-    """模拟 Playwright Locator：能 count/click/is_visible，按 selector 匹配。
+    """模拟 Playwright Locator：能 count/click/is_visible/nth/inner_text，按 selector 匹配。
 
-    对图片上传触发器（.semi-upload-add）与确认弹窗「发送」返回可点击对象，
+    支持图片上传（.semi-upload-add）、确认弹窗「发送」、以及表情发送
+    （表情按钮/表情面板/表情项/表情项描述名），供 DouyinChat.send_sticker 走通。
     其它 selector 返回空（count=0）。
     """
 
-    def __init__(self, page: FakePage, selector: str, by_text: bool = False):
+    def __init__(self, page: FakePage, selector: str, by_text: bool = False, index: int | None = None):
         self._page = page
         self._selector = selector
         self._by_text = by_text
+        self._index = index
 
     async def count(self) -> int:
         if self._by_text:
             return 1 if self._selector == "发送" else 0
+        # 表情按钮
+        if "messageMsgInputiconAction" in self._selector or "表情" in self._selector or "[title*=\"表情\"]" in self._selector:
+            return 1 if self._page.sticker_button_available else 0
+        # 表情面板
+        if "componentsemojiemojiPanel" in self._selector or "emojiPanel" in self._selector or "[class*=\"sticker\"]" in self._selector:
+            return 1 if self._page.sticker_panel_available else 0
+        # 表情项容器
+        if "emojiEmojiItememojiItem" in self._selector and "Desc" not in self._selector:
+            return len(self._page.sticker_items)
+        # 表情项描述名（需绑定 nth index）
+        if "emojiEmojiItememojiItemDesc" in self._selector:
+            return 1 if (self._index is not None and self._index < len(self._page.sticker_items)) else 0
         # 附件图标 / 确认弹窗发送按钮 → 可点；否则 0
         if "semi-upload-add" in self._selector:
             return 1
@@ -292,11 +313,30 @@ class _FakeLocator:
     async def click(self, force: bool = False, timeout: int | None = None) -> None:
         if self._by_text or "semi-upload-add" in self._selector:
             self._page.attachment_clicked = True
+        if "emojiEmojiItememojiItem" in self._selector and "Desc" not in self._selector:
+            self._page.sticker_clicked = (
+                self._page.sticker_items[self._index] if self._index is not None else True
+            )
+            # 注意：这里不强制设置 image_bubble_render——「气泡是否出现」由测试设定，
+            # 以便能覆盖「表情点了但没发出（失败）」与「一点即发（成功）」两种场景。
         return None
+
+    async def inner_text(self) -> str:
+        if "emojiEmojiItememojiItemDesc" in self._selector and self._index is not None:
+            return self._page.sticker_items[self._index]
+        return ""
+
+    def locator(self, selector: str):
+        # panel.locator(item) / candidate.locator(desc)：带上当前 index 形成子树查询
+        # 注意：Playwright Locator.locator() 是同步方法，故本处不能是 async。
+        return _FakeLocator(self._page, selector, index=self._index)
 
     @property
     def first(self):
         return self
+
+    def nth(self, index: int):
+        return _FakeLocator(self._page, self._selector, by_text=self._by_text, index=index)
 
 
 def make_factory(pages: list[FakePage]):

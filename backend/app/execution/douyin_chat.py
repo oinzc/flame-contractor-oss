@@ -31,6 +31,20 @@ class ConversationOpen:
     exact: bool
 
 
+@dataclass
+class Sticker:
+    """抖音原生表情（sticker）配置（参考 unmev/douyin-auto-fire）。
+
+    name 为表情名（value）；label 为面板显示名（默认=name，用于精确匹配）；
+    category 为表情分类（可选，打开面板先点该分类）；fallback_index 为兜底索引。
+    """
+
+    name: str
+    label: str | None = None
+    category: str | None = None
+    fallback_index: int | None = None
+
+
 class DouyinChat:
     """对单个 Playwright page 的窄封装；所有页面交互集中在这里。
 
@@ -544,3 +558,119 @@ class DouyinChat:
             except Exception:
                 return False
         return False
+
+    # ------------------------------------------------------------ 表情(sticker)
+
+    async def _first_visible_locator(self, selectors: tuple[str, ...]):
+        """返回第一个可见的 locator；找不到返回 None。"""
+        if not hasattr(self.page, "locator"):
+            return None
+        for selector in selectors:
+            locator = self.page.locator(selector).first
+            try:
+                if await locator.count() and await locator.is_visible():
+                    return locator
+            except Exception:
+                continue
+        return None
+
+    async def send_sticker(self, sticker: Sticker) -> None:
+        """发送抖音原生表情：点表情按钮 → 打开面板 → 按名称选中表情 → 一点即发。
+
+        参考 unmev/douyin-auto-fire 的 send_douyin_sticker()：
+        - 抖音原生表情通常一点即发出（无需再点发送按钮）；
+        - 若没有一点即发（发布按钮仍在），则点发布按钮兜底；
+        - 终态确认 = 「从我的 + 非头像」新增图片气泡（复用图片数量锚定）：
+          表情是图片贴纸，与图片一样锚定非头像增图，绝不把头像/旧图当成功；
+        - 无论成败，finally 里关闭表情面板并把焦点点回输入框（unmev issue #4：
+          面板不关会挡住后续消息的输入框与发送按钮）。
+        """
+        self.last_bubble_seen = False
+        self._image_before_count = await self._count_non_avatar_images()
+        if not hasattr(self.page, "locator"):
+            raise DomChangedError("页面对象不支持表情选择器")
+        try:
+            button = await self._first_visible_locator(_s.STICKER_BUTTONS)
+            if button is None:
+                raise DomChangedError("未找到表情按钮")
+            await button.click(force=True)
+            panel = await self._first_visible_locator(_s.STICKER_PANELS)
+            if panel is None:
+                raise DomChangedError("未找到表情面板")
+            await self._select_sticker_in_panel(panel, sticker)
+        finally:
+            await self._restore_composer()
+
+    async def _select_sticker_in_panel(self, panel, sticker: Sticker) -> None:
+        name = sticker.label or sticker.name
+        # 分类：先点面板里的分类标签（可选）
+        if getattr(panel, "get_by_text", None) and sticker.category:
+            try:
+                category = panel.get_by_text(sticker.category, exact=True)
+                if await category.count() and await category.first.is_visible():
+                    await category.first.click()
+            except Exception:
+                pass
+        # 首选：在表情项容器里按名称节点精确匹配
+        try:
+            items = panel.locator(_s.STICKER_ITEM)
+            for index in range(await items.count()):
+                candidate = items.nth(index)
+                desc = candidate.locator(_s.STICKER_ITEM_NAME)
+                if await desc.count() and (await desc.first.inner_text()).strip() == name:
+                    await self._click_sticker(candidate)
+                    return
+        except Exception:
+            pass
+        # 兜底：role/aria-label/title/alt
+        for expr in (
+            f'[role="img"][aria-label="{name}"]',
+            f'img[aria-label="{name}"]',
+            f'button[aria-label="{name}"]',
+            f'[aria-label="{name}"]',
+            f'[title="{name}"]',
+            f'[alt="{name}"]',
+        ):
+            try:
+                candidate = panel.locator(expr).first
+                if await candidate.count() and await candidate.is_visible():
+                    await self._click_sticker(candidate)
+                    return
+            except Exception:
+                continue
+        # 兜底索引：面板内第 fallback_index 个可点元素
+        if sticker.fallback_index is not None:
+            try:
+                slots = panel.locator('[role="button"], img, [aria-label], [title]')
+                if await slots.count() > sticker.fallback_index:
+                    await self._click_sticker(slots.nth(sticker.fallback_index))
+                    return
+            except Exception:
+                pass
+        raise DomChangedError(f"表情面板中找不到表情: {sticker.name}")
+
+    async def _click_sticker(self, candidate) -> None:
+        await candidate.click(force=True)
+        await self._sleep(0.8)
+        await self._wait_image_bubble(timeout=15.0)
+        if not self.last_bubble_seen:
+            # 表情可能没有一点即发（发布按钮仍在）→ 点发布按钮兜底
+            await self._trigger_send()
+            await self._wait_image_bubble(timeout=15.0)
+        if not self.last_bubble_seen:
+            raise DomChangedError("表情已点击但未能确认进入会话")
+
+    async def _restore_composer(self) -> None:
+        """关闭表情面板并把焦点点回聊天输入框（unmev issue #4 的经验）。"""
+        page = self.page
+        if hasattr(page, "keyboard"):
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+        try:
+            editor = await page.query_selector(_s.CHAT_EDITOR)
+            if editor is not None and hasattr(editor, "click"):
+                await editor.click()
+        except Exception:
+            pass

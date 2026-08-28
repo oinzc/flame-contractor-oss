@@ -23,7 +23,7 @@ from ..models import (
     SendJob,
     TemplateType,
 )
-from .douyin_chat import DomChangedError, DouyinChat
+from .douyin_chat import DomChangedError, DouyinChat, Sticker
 from .message_renderer import render_message
 from .profile_store import ensure_profile_dir
 from .send_confirmer import SendConfirmer
@@ -427,6 +427,10 @@ class BrowserManager:
             template_type = template.type if template_ok else TemplateType.TEXT
             template_content = template.content if template_ok else None
             image_path = template.image_path if template_ok else None
+            sticker_name = template.sticker_name if template_ok else None
+            sticker_label = template.sticker_label if template_ok else None
+            sticker_category = template.sticker_category if template_ok else None
+            sticker_fallback_index = template.sticker_fallback_index if template_ok else None
             nickname = current.nickname_snapshot
             streak_days = current.streak_days
 
@@ -436,6 +440,9 @@ class BrowserManager:
         if template_type == TemplateType.IMAGE and not image_path:
             return {"target": nickname, "status": "skipped",
                     "detail": "图片模板缺少图片路径", "failure_class": None, "message": None}
+        if template_type == TemplateType.STICKER and not sticker_name:
+            return {"target": nickname, "status": "skipped",
+                    "detail": "表情模板缺少表情名称", "failure_class": None, "message": None}
 
         message = None
         if template_type == TemplateType.TEXT:
@@ -483,6 +490,15 @@ class BrowserManager:
         try:
             if template_type == TemplateType.IMAGE:
                 await chat.send_image(image_path)
+            elif template_type == TemplateType.STICKER:
+                await chat.send_sticker(
+                    Sticker(
+                        name=sticker_name,
+                        label=sticker_label,
+                        category=sticker_category,
+                        fallback_index=sticker_fallback_index,
+                    )
+                )
             else:
                 await chat.send_text(message)
         except DomChangedError:
@@ -545,14 +561,14 @@ class BrowserManager:
         """发送后的终态确认。
 
         文本：SendConfirmer（编辑框清空 + 无失败标记）。
-        图片：编辑框清空不适用（图片后编辑框可能本就空），改为等待图片气泡出现 +
-              无失败标记稳定。若气泡未出现/有失败标记 → unknown 或 failed。图片场景下
-              「气泡出现」用 chat.last_bubble_seen（由 _wait_image_bubble 设置）。
+        图片/表情：编辑框清空不适用（图片/表情后编辑框可能本就空），改为等待
+              「从我的 + 非头像」新增气泡出现 + 无失败标记稳定。若气泡未出现/
+              有失败标记 → unknown 或 failed。表情与图片都锚定非头像增图。
         """
-        if template_type == TemplateType.IMAGE:
+        if template_type in (TemplateType.IMAGE, TemplateType.STICKER):
             if await chat.failure_marker_visible():
                 return "failed_retryable"
-            # 图片：轮询等待「从我的 + 非头像图片」气泡出现（图片上传/发送有延迟，
+            # 图片/表情：轮询等待「从我的 + 非头像图片」气泡出现（上传/发送有延迟，
             # 用 image_bubble_confirmed 主动查询，比 wait_for_function 更可靠）。
             loop = asyncio.get_running_loop()
             deadline = loop.time() + self._send_timeout

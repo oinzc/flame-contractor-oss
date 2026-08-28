@@ -93,6 +93,10 @@ class TemplateCreate(APIBase):
     type: TemplateType = Field(default=TemplateType.TEXT)
     content: str = Field(default="", max_length=1000)
     image_path: str | None = Field(default=None, max_length=500)
+    sticker_name: str | None = Field(default=None, max_length=64)
+    sticker_label: str | None = Field(default=None, max_length=64)
+    sticker_category: str | None = Field(default=None, max_length=32)
+    sticker_fallback_index: int | None = Field(default=None, ge=0)
 
     @field_validator("name")
     @classmethod
@@ -110,6 +114,9 @@ class TemplateCreate(APIBase):
         elif self.type == TemplateType.IMAGE:
             if not self.image_path or not self.image_path.strip():
                 raise ValueError("图片模板必须指定图片路径")
+        elif self.type == TemplateType.STICKER:
+            if not self.sticker_name or not self.sticker_name.strip():
+                raise ValueError("表情模板必须指定表情名称(stickerName)")
         return self
 
 
@@ -119,6 +126,10 @@ class TemplateRead(APIBase):
     type: TemplateType
     content: str
     image_path: str | None
+    sticker_name: str | None
+    sticker_label: str | None
+    sticker_category: str | None
+    sticker_fallback_index: int | None
     version: int
     enabled: bool
     created_at: datetime
