@@ -75,6 +75,27 @@ class DouyinChat:
         element = await self.page.query_selector(_s.CONVERSATION_LIST)
         return element is not None
 
+    async def wait_logged_in(
+        self,
+        timeout: float,
+        poll_interval: float = 0.5,
+    ) -> bool:
+        """轮询等待会话列表出现（headless/登录后列表可能延迟渲染）。
+
+        背景：`is_logged_in()` 是单次查询——页面刚 goto 完、会话列表异步渲染，
+        立刻查询可能返回 False，被当作「未登录」误标 auth_expired 并跳过发送。
+        本方法在 timeout 内反复轮询会话列表：一旦出现即判已登录；超时仍未出现
+        才判未登录（未登录时最多等 timeout，避免无谓阻塞）。
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            if await self.is_logged_in():
+                return True
+            if loop.time() >= deadline:
+                return False
+            await self._sleep(poll_interval)
+
     async def right_panel_title(self) -> str | None:
         element = await self.page.query_selector(_s.RIGHT_TITLE)
         if element is None:
