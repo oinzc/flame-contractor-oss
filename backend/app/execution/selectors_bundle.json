@@ -1,0 +1,49 @@
+{
+  "CHAT_URL": "https://www.douyin.com/chat",
+  "CONVERSATION_LIST": ".conversationConversationListwrapper",
+  "CONVERSATION_ITEM": ".conversationConversationItemwrapper",
+  "CONVERSATION_TITLE": ".conversationConversationItemtitle",
+  "SEARCH_RESULT_ITEM": "div[class*=\"SearchPanelitembox\"], div[class*=\"SearchPanelitem-box\"], div[class*=\"SearchPanelitem_box\"]",
+  "SEARCH_NAME_SELECTORS": [
+    "[class*=\"SearchPanelitemtitle\"]",
+    "[class*=\"SearchPanelitemTitle\"]",
+    "[class*=\"SearchPanelitem_title\"]",
+    "[class*=\"SearchPanelitem-title\"]",
+    "[class*=\"SearchPanelitemname\"]",
+    "[class*=\"SearchPanelitemName\"]",
+    "[class*=\"SearchPanelitem_name\"]",
+    "[class*=\"SearchPanelitem-name\"]"
+  ],
+  "SEARCH_CHAT_BTN": "div[class*=\"SearchPanelitemchat_btn\"]",
+  "RIGHT_TITLE": ".RightPanelHeadertitleContainer",
+  "SEARCH_INPUT": "input.semi-input[placeholder=\"搜索\"][type=\"text\"]",
+  "SEARCH_INPUTS": [
+    "input.semi-input[placeholder=\"搜索\"][type=\"text\"]",
+    "input[placeholder=\"搜索\"]"
+  ],
+  "CHAT_EDITOR": "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
+  "IMAGE_INPUTS": [
+    "input[type=\"file\"][accept*=\"image\"]",
+    "input[type=\"file\"]"
+  ],
+  "IMAGE_UPLOAD_TRIGGER": ".semi-upload-add",
+  "IMAGE_DIALOG_SEND": [
+    ".semi-modal button[class*=\"primary\"]",
+    "button[class*=\"semi-button-primary\"]",
+    "[class*=\"confirm\"] button[class*=\"primary\"]"
+  ],
+  "SEND_FAILURE_MARKERS": [
+    "[class*=\"sendFailed\"]",
+    "[class*=\"SendFailed\"]",
+    "[class*=\"ContentSideSendStatusretry\"]",
+    "[class*=\"SendStatusretry\"]",
+    "[aria-label*=\"重试\"]",
+    "[title*=\"重试\"]"
+  ],
+  "SEND_BUTTONS": [
+    "[class*=\"messageMsgInputpublishBtn\"]",
+    ".e2e-send-msg-bt",
+    "button[aria-label*=\"发送\"]",
+    "[role=\"button\"][aria-label*=\"发送\"]"
+  ]
+}

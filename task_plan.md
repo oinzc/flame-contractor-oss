@@ -1,10 +1,10 @@
-# Task Plan: Flame Contractor — M4 + M5（Bark/图片/火花校准）已完成，剩 selector 热更
+# Task Plan: Flame Contractor — M4 + M5 已完成（Bark/图片/火花校准/selector 热更），剩通知补渠道 + 原生表情
 
 ## Goal
-M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准均已实机验证完成。当前目标：完成 M5 剩余——selector 热更新、通知补渠道（钉钉/邮件）、原生表情发送。
+M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新均已实机验证完成。当前目标：完成 M5 剩余——通知补渠道（钉钉/邮件）、原生表情发送。
 
 ## Next Step
-实现 M5 剩余：selector bundle 热更新（页面改版快速适配）、通知补渠道（钉钉/邮件）、原生表情发送。
+实现 M5 剩余：通知补渠道（钉钉/邮件）、原生表情发送。
 
 ## Current Phase
 Phase 1（M5 剩余）
@@ -16,7 +16,8 @@ Phase 1（M5 剩余）
 - [x] **M4 调度器**（HEAD `3684462`）：自动每日发送。方案 A——账号级窗口随机取时。
 - [x] **M5 通知（Bark）**（HEAD `226ee6e`）：异常推送接入；`trust_env=False` 修复 SOCKS 代理。
 - [x] **M5 图片发送 + 火花校准**（HEAD `18d9115`）：图片模板/发送链路/确认 + 火花天数手动校准。
-- [ ] **M5 剩余**：selector 热更、通知补渠道（钉钉/邮件）、原生表情发送。
+- [x] **M5 selector bundle 热更新**（HEAD `d687f88`）：选择器外置 JSON bundle + mtime 惰性重载 + `GET/POST /api/selectors`，改版不重启进程。
+- [ ] **M5 剩余**：通知补渠道（钉钉/邮件）、原生表情发送。
 
 ## M4 已完成（验收要点）
 - 新增 `SendSchedule`（账号级每日调度，`(account, business_date)` 唯一）+ Alembic 迁移 `15a5feca9ee1`。
@@ -35,7 +36,7 @@ Phase 1（M5 剩余）
 - [x] **图片发送**：`send_image`（点附件图标 → filechooser → 确认弹窗「发送」）+ `image_bubble_confirmed` 数量锚定确认；实机验证真实发出。
 - [ ] 原生表情（抖音原生 sticker，非图片）。
 ### Phase 3: 可靠性与诊断
-- [ ] selector bundle 热更新（页面改版快速适配）。
+- [x] selector bundle 热更新（页面改版快速适配）。
 - [x] **火花天数手动校准**（`PATCH /api/targets/{id}` + 好友页「校准」按钮；不 DOM 读取）。
 ### Phase 4: 验收与交接
 - [x] 后端测试 62 passed；前端 build；图片/E2E 实机验证通过。
