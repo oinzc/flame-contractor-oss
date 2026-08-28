@@ -21,6 +21,7 @@ from ..models import (
     MessageTemplate,
     SendAttempt,
     SendJob,
+    TemplateType,
 )
 from .douyin_chat import DomChangedError, DouyinChat
 from .message_renderer import render_message
@@ -423,20 +424,27 @@ class BrowserManager:
             template_ok = template is not None and template.enabled
             template_id = template.id if template_ok else None
             template_version = template.version if template_ok else None
+            template_type = template.type if template_ok else TemplateType.TEXT
             template_content = template.content if template_ok else None
+            image_path = template.image_path if template_ok else None
             nickname = current.nickname_snapshot
             streak_days = current.streak_days
 
-        if template_content is None:
+        if not template_ok:
             return {"target": nickname, "status": "skipped",
                     "detail": "未绑定可用模板", "failure_class": None, "message": None}
+        if template_type == TemplateType.IMAGE and not image_path:
+            return {"target": nickname, "status": "skipped",
+                    "detail": "图片模板缺少图片路径", "failure_class": None, "message": None}
 
-        message = render_message(
-            template_content,
-            target_name=nickname,
-            streak_days=streak_days,
-            timezone=account.timezone,
-        )
+        message = None
+        if template_type == TemplateType.TEXT:
+            message = render_message(
+                template_content,
+                target_name=nickname,
+                streak_days=streak_days,
+                timezone=account.timezone,
+            )
         slot = f"{template_id}:v{template_version}"
 
         job, created = self._get_or_create_job(
@@ -473,7 +481,10 @@ class BrowserManager:
 
         attempt_no = self._record_attempt(job.id)
         try:
-            await chat.send_text(message)
+            if template_type == TemplateType.IMAGE:
+                await chat.send_image(image_path)
+            else:
+                await chat.send_text(message)
         except DomChangedError:
             self._finalize_send(
                 job.id, target.id, account.id,
@@ -494,13 +505,7 @@ class BrowserManager:
                     "detail": type(exc).__name__, "message": message}
 
         self._update_job_status(job.id, JobStatus.CONFIRMING)
-        outcome = await SendConfirmer(
-            chat,
-            sleep=self._sleep,
-            timeout=self._send_timeout,
-            poll_interval=self._send_poll_interval,
-            stabilize_polls=self._send_stabilize_polls,
-        ).confirm()
+        outcome = await self._confirm_send(chat, template_type)
 
         outcome_map = {
             "succeeded": (JobStatus.SUCCEEDED, None, True),
@@ -515,8 +520,8 @@ class BrowserManager:
         bubble_confirmed = bool(getattr(chat, "last_bubble_seen", False))
         upgrade_detail: str | None = None
         if outcome == "unknown_requires_review" and bubble_confirmed:
-            # 权威证据：渲染文本已进入消息列表气泡，且整个观察窗内无失败标记。
-            # 仅状态指示（如零宽字符残留）未消失，按成功核销，防止重复发送。
+            # 权威证据：消息已进入消息列表气泡，且整个观察窗内无失败标记。
+            # 仅状态指示未消失，按成功核销，防止重复发送。
             job_status = JobStatus.SUCCEEDED
             failure = None
             confirmed = True
@@ -535,6 +540,33 @@ class BrowserManager:
         return {"target": nickname, "status": outcome,
                 "failure_class": failure.value if failure else None,
                 "detail": upgrade_detail, "message": message}
+
+    async def _confirm_send(self, chat: DouyinChat, template_type: TemplateType) -> str:
+        """发送后的终态确认。
+
+        文本：SendConfirmer（编辑框清空 + 无失败标记）。
+        图片：编辑框清空不适用（图片后编辑框可能本就空），改为等待图片气泡出现 +
+              无失败标记稳定。若气泡未出现/有失败标记 → unknown 或 failed。图片场景下
+              「气泡出现」用 chat.last_bubble_seen（由 _wait_image_bubble 设置）。
+        """
+        if template_type == TemplateType.IMAGE:
+            if await chat.failure_marker_visible():
+                return "failed_retryable"
+            # 用极短稳定窗确认图片气泡确实渲染（防 spinner 未消失即误判成功）
+            await self._sleep(self._send_poll_interval)
+            if await chat.failure_marker_visible():
+                return "failed_retryable"
+            if bool(getattr(chat, "last_bubble_seen", False)):
+                return "succeeded"
+            return "unknown_requires_review"
+
+        return await SendConfirmer(
+            chat,
+            sleep=self._sleep,
+            timeout=self._send_timeout,
+            poll_interval=self._send_poll_interval,
+            stabilize_polls=self._send_stabilize_polls,
+        ).confirm()
 
     def _get_or_create_job(
         self,

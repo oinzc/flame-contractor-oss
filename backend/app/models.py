@@ -26,6 +26,7 @@ class AccountStatus(str, Enum):
 
 class TemplateType(str, Enum):
     TEXT = "text"
+    IMAGE = "image"
 
 
 class JobStatus(str, Enum):
@@ -90,7 +91,9 @@ class MessageTemplate(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     name: str = Field(min_length=1, max_length=60, unique=True, index=True)
     type: TemplateType = Field(default=TemplateType.TEXT, max_length=16)
-    content: str = Field(min_length=1, max_length=1000)
+    content: str = Field(default="", max_length=1000)
+    # 图片类型模板的有效图片路径（本地图片）；文本无
+    image_path: str | None = Field(default=None, max_length=500)
     version: int = Field(default=1, ge=1)
     enabled: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utc_now)

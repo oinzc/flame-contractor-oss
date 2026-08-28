@@ -14,6 +14,7 @@ from .models import (
     JobStatus,
     MessageTemplate,
     SendJob,
+    TemplateType,
     utc_now,
 )
 from .schemas import (
@@ -114,7 +115,9 @@ def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
     if existing:
         raise HTTPException(status_code=409, detail="模板名称已存在")
 
-    _validate_template_content(payload.content)
+    # 仅文本模板校验受控变量；图片模板无文本内容
+    if payload.type == TemplateType.TEXT:
+        _validate_template_content(payload.content)
 
     template = MessageTemplate.model_validate(payload)
     session.add(template)
@@ -210,12 +213,15 @@ def send_preview(session: Session, account_id: str) -> dict:
             session.get(MessageTemplate, target.template_id) if target.template_id else None
         )
         if template is not None and template.enabled:
-            message = render_message(
-                template.content,
-                target_name=target.nickname_snapshot,
-                streak_days=target.streak_days,
-                timezone=account.timezone,
-            )
+            if template.type == TemplateType.IMAGE:
+                message = f"[图片] {template.image_path or ''}"
+            else:
+                message = render_message(
+                    template.content,
+                    target_name=target.nickname_snapshot,
+                    streak_days=target.streak_days,
+                    timezone=account.timezone,
+                )
             items.append(
                 {
                     "target_id": target.id,

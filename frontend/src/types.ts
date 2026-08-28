@@ -89,8 +89,9 @@ export interface ContractTarget {
 export interface MessageTemplate {
   id: string
   name: string
-  type: 'text'
+  type: 'text' | 'image'
   content: string
+  imagePath: string | null
   version: number
   enabled: boolean
   createdAt: string
@@ -174,7 +175,9 @@ export interface TargetCreateInput {
 
 export interface TemplateCreateInput {
   name: string
+  type: 'text' | 'image'
   content: string
+  imagePath?: string
 }
 
 export interface SendPreviewItem {

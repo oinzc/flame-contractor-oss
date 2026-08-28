@@ -52,6 +52,12 @@ SEARCH_INPUTS = (
 # 消息编辑器（M3 发送使用）
 CHAT_EDITOR = 'div[data-slate-editor="true"][contenteditable="true"]'
 
+# 图片上传控件（M5 图片发送；概念参考 unmev/douyin-auto-fire）
+IMAGE_INPUTS = (
+    'input[type="file"][accept*="image"]',
+    'input[type="file"]',
+)
+
 # 发送失败/重试标记（概念参考 unmev/douyin-auto-fire Issue #11；
 # 结构标记随页面版本变化，真实 E2E 前必须核对，并保持“检测不到就按结果未知处理”。
 # 注意裸 SendStatusicon 是多状态共用类，绝不能当作失败条件）
