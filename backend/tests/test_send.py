@@ -370,12 +370,15 @@ def test_send_image_not_misreads_avatar_as_success(settings):
 
 
 def test_send_image_injects_path_into_file_input():
-    """图片发送：把本地路径真正注入到 input[type=file]。"""
+    """图片发送：点附件图标 → filechooser 注入路径 → 确认弹窗发送 → 图片气泡出现。"""
     import asyncio
 
     from app.execution.douyin_chat import DouyinChat
 
-    page = FakePage(logged_in=True, editor_present=True)
+    page = FakePage(logged_in=True, editor_present=True, image_bubble_render=True)
     chat = DouyinChat(page, sleep=lambda _s: asyncio.sleep(0))
     asyncio.run(chat.send_image("D:/some/image.png"))
+    # 附件图标被点击、图片路径被注入 filechooser、确认弹窗发送被点击
+    assert page.attachment_clicked is True
     assert page.image_input_log == ["D:/some/image.png"]
+    assert chat.last_bubble_seen is True

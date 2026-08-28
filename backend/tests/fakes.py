@@ -109,6 +109,8 @@ class FakePage:
         self.closed = False
         self.image_input_log: list[str] = []
         self.image_bubble_render = image_bubble_render
+        self.image_uploaded = False
+        self.attachment_clicked = False
 
     async def goto(self, url: str) -> None:
         self.gotos.append(url)
@@ -136,6 +138,32 @@ class FakePage:
 
     async def _set_image_input(self, path: str) -> None:
         self.image_input_log.append(path)
+
+    # --- 图片上传 fake API（匹配真实 Playwright 图片发送流程）---
+    def expect_file_chooser(self, timeout: int | None = None):
+        import contextlib
+
+        chooser = _FakeFileChooser(self)
+
+        @contextlib.asynccontextmanager
+        async def _cm():
+            class _Info:
+                @property
+                def value(self):
+                    async def _resolve():
+                        return chooser
+
+                    return _resolve()
+
+            yield _Info()
+
+        return _cm()
+
+    def locator(self, selector: str):
+        return _FakeLocator(self, selector)
+
+    def get_by_text(self, text: str, exact: bool = False):
+        return _FakeLocator(self, text, by_text=True)
 
     async def query_selector_all(self, selector: str):
         if selector == SEARCH_RESULT_ITEM:
@@ -222,6 +250,53 @@ class FakeContext:
 
     async def close(self) -> None:
         self.page.closed = True
+
+
+class _FakeFileChooser:
+    """模拟 Playwright FileChooser，set_files 记录到 page.image_input_log。"""
+
+    def __init__(self, page: FakePage):
+        self._page = page
+
+    async def set_files(self, path: str) -> None:
+        self._page.image_input_log.append(path)
+        # 图片注入后模拟上传完成（供确认弹窗出现）
+        self._page.image_uploaded = True
+
+
+class _FakeLocator:
+    """模拟 Playwright Locator：能 count/click/is_visible，按 selector 匹配。
+
+    对图片上传触发器（.semi-upload-add）与确认弹窗「发送」返回可点击对象，
+    其它 selector 返回空（count=0）。
+    """
+
+    def __init__(self, page: FakePage, selector: str, by_text: bool = False):
+        self._page = page
+        self._selector = selector
+        self._by_text = by_text
+
+    async def count(self) -> int:
+        if self._by_text:
+            return 1 if self._selector == "发送" else 0
+        # 附件图标 / 确认弹窗发送按钮 → 可点；否则 0
+        if "semi-upload-add" in self._selector:
+            return 1
+        if any(tok in self._selector for tok in ("primary", "semi-button", "confirm")):
+            return 1 if self._page.image_uploaded else 0
+        return 0
+
+    async def is_visible(self) -> bool:
+        return await self.count() > 0
+
+    async def click(self, force: bool = False, timeout: int | None = None) -> None:
+        if self._by_text or "semi-upload-add" in self._selector:
+            self._page.attachment_clicked = True
+        return None
+
+    @property
+    def first(self):
+        return self
 
 
 def make_factory(pages: list[FakePage]):

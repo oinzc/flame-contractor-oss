@@ -58,6 +58,16 @@ IMAGE_INPUTS = (
     'input[type="file"]',
 )
 
+# 图片/附件上传入口：当前抖音聊天版点是 `.semi-upload-add`（附件图标）唤起文件选择器。
+IMAGE_UPLOAD_TRIGGER = '.semi-upload-add'
+
+# 上传确认弹窗里的「发送」按钮：选图后会弹「发送给 xxx」确认弹窗，点弹窗内发送。
+IMAGE_DIALOG_SEND = (
+    '.semi-modal button[class*="primary"]',
+    'button[class*="semi-button-primary"]',
+    '[class*="confirm"] button[class*="primary"]',
+)
+
 # 发送失败/重试标记（概念参考 unmev/douyin-auto-fire Issue #11；
 # 结构标记随页面版本变化，真实 E2E 前必须核对，并保持“检测不到就按结果未知处理”。
 # 注意裸 SendStatusicon 是多状态共用类，绝不能当作失败条件）

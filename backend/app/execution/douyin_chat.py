@@ -8,7 +8,9 @@ from .selectors import (
     CONVERSATION_ITEM,
     CONVERSATION_LIST,
     CONVERSATION_TITLE,
+    IMAGE_DIALOG_SEND,
     IMAGE_INPUTS,
+    IMAGE_UPLOAD_TRIGGER,
     RIGHT_TITLE,
     SEARCH_CHAT_BTN,
     SEARCH_INPUT,
@@ -407,23 +409,64 @@ class DouyinChat:
     # ------------------------------------------------------------ 图片发送
 
     async def send_image(self, image_path: str) -> None:
-        """发送一张本地图片。
+        """发送一张本地图片（当前抖音聊天版流程：点附件图标 → 选图 → 确认弹窗发）。
 
-        找图片上传控件 input[type=file] → 注入本地文件 → 触发发送。
-        - 真实 Playwright 页面：set_input_files 注入后点发送按钮，等待图片气泡出现。
-        - 若页面找不到上传控件，抛 DomChangedError（进入可重试而非半成功）。
-        终态确认在 manager 层用 _confirm_send 兜底；此处记录 last_bubble_seen 作为
-        "本次发出的图片气泡已出现"的权威信号（排除头像，避免把头像误当图片气泡）。
+        步骤：
+        1. 点 `.semi-upload-add`（附件图标）唤起文件选择器；
+        2. 通过 filechooser 注入本地图片；
+        3. 等待上传并弹出「发送给 xxx」确认弹窗，点弹窗内的「发送」；
+        4. 等待图片气泡真实出现（排除头像，防误判）。
+
+        找不到附件图标时抛 DomChangedError（进入可重试而非半成功）。
+        last_bubble_seen 记录"本次发出的图片气泡已出现"，供 _confirm_send 判定。
         """
         self.last_bubble_seen = False
         self._image_before_count = await self._count_outgoing_boxes()
-        file_input = await self._find_file_input()
-        if file_input is None:
-            raise DomChangedError("未找到图片上传控件")
-        await self._set_input_files(file_input, image_path)
-        await self._sleep(1.5)
-        await self._trigger_send()
-        await self._wait_image_bubble(timeout=10.0)
+        if not hasattr(self.page, "expect_file_chooser"):
+            raise DomChangedError("页面对象不支持文件选择器")
+        try:
+            async with self.page.expect_file_chooser(timeout=8000) as fc_info:
+                await self._click_upload_trigger()
+            file_chooser = await fc_info.value
+        except DomChangedError:
+            raise
+        except Exception as exc:
+            raise DomChangedError(f"未找到图片上传入口：{type(exc).__name__}") from None
+
+        await file_chooser.set_files(image_path)
+        await self._sleep(2.0)
+        # 上传后确认弹窗出现，点弹窗内「发送」
+        await self._click_dialog_send()
+        await self._wait_image_bubble(timeout=15.0)
+
+    async def _click_upload_trigger(self) -> None:
+        if hasattr(self.page, "locator"):
+            locator = self.page.locator(IMAGE_UPLOAD_TRIGGER).first
+            if await locator.count():
+                await locator.click(force=True)
+                return
+            # 兜底：找 IMAGE_INPUTS 任一 input 的父上传区
+        raise DomChangedError("未找到图片上传按钮")
+
+    async def _click_dialog_send(self) -> None:
+        """点击上传确认弹窗里的「发送」按钮。"""
+        if hasattr(self.page, "locator"):
+            for selector in IMAGE_DIALOG_SEND:
+                locator = self.page.locator(selector).first
+                try:
+                    if await locator.count() and await locator.is_visible():
+                        await locator.click()
+                        return
+                except Exception:
+                    continue
+        # 兜底：找文本为「发送」的可点按钮
+        if hasattr(self.page, "get_by_text"):
+            try:
+                await self.page.get_by_text("发送", exact=True).first.click(timeout=3000)
+                return
+            except Exception:
+                pass
+        raise DomChangedError("未找到图片确认弹窗的发送按钮")
 
     async def _count_outgoing_boxes(self) -> int:
         """统计当前「从我的」消息盒数量（用于锚定发送前后变化）。"""
@@ -437,25 +480,6 @@ class DouyinChat:
             except Exception:
                 return 0
         return 0
-
-    async def _find_file_input(self):
-        for selector in IMAGE_INPUTS:
-            element = await self.page.query_selector(selector)
-            if element is not None:
-                return element
-        return None
-
-    async def _set_input_files(self, element, image_path: str) -> None:
-        # 真实 Playwright 页面：element.set_input_files(path)
-        setter = getattr(element, "set_input_files", None)
-        if setter is not None:
-            await setter(image_path)
-            return
-        # 兜底：直接调 page.set_input_files（部分实现把该方法挂在 page 上）
-        if hasattr(self.page, "set_input_files"):
-            await self.page.set_input_files(image_path)
-            return
-        raise DomChangedError("页面对象不支持图片注入")
 
     async def _trigger_send(self) -> None:
         """优先点发布按钮，Enter 兜底（与文本发送一致）。"""
