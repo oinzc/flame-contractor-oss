@@ -1,10 +1,10 @@
-# Task Plan: Flame Contractor — M4 + M5 已完成（Bark/图片/火花校准/selector 热更），剩通知补渠道 + 原生表情
+# Task Plan: Flame Contractor — M4 + M5 已完成（Bark/图片/火花校准/selector 热更），剩原生表情
 
 ## Goal
-M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新均已实机验证完成。当前目标：完成 M5 剩余——通知补渠道（钉钉/邮件）、原生表情发送。
+M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新均已实机验证完成。通知渠道经评估**只保留 Bark**（不扩钉钉/邮件）。当前目标：完成 M5 剩余——原生表情发送。
 
 ## Next Step
-实现 M5 剩余：通知补渠道（钉钉/邮件）、原生表情发送。
+实现 M5 剩余：原生表情发送（抖音原生 sticker，非图片）。
 
 ## Current Phase
 Phase 1（M5 剩余）
@@ -17,7 +17,7 @@ Phase 1（M5 剩余）
 - [x] **M5 通知（Bark）**（HEAD `226ee6e`）：异常推送接入；`trust_env=False` 修复 SOCKS 代理。
 - [x] **M5 图片发送 + 火花校准**（HEAD `18d9115`）：图片模板/发送链路/确认 + 火花天数手动校准。
 - [x] **M5 selector bundle 热更新**（HEAD `d687f88`）：选择器外置 JSON bundle + mtime 惰性重载 + `GET/POST /api/selectors`，改版不重启进程。
-- [ ] **M5 剩余**：通知补渠道（钉钉/邮件）、原生表情发送。
+- [ ] **M5 剩余**：原生表情发送（通知补渠道经评估决定不扩，仅 Bark 够用）。
 
 ## M4 已完成（验收要点）
 - 新增 `SendSchedule`（账号级每日调度，`(account, business_date)` 唯一）+ Alembic 迁移 `15a5feca9ee1`。
@@ -30,8 +30,8 @@ Phase 1（M5 剩余）
 ## M5 子阶段
 ### Phase 1: 通知适配器
 - [x] Bark 通知接入（实现 + `trust_env=False` 修复 SOCKS 代理）；异常推送已验证。
-- [ ] 补充渠道：钉钉/邮件通知（可选）。
-- [ ] 通知配置与其安全存储（令牌不入库、不上传）。
+- [x] 通知渠道：经评估决定不扩钉钉/邮件，保持仅 Bark（用户 2026-08-28 决定）。
+- [x] 通知配置安全存储：Bark 密钥只存本机 `.env`（gitignore），不入库、不上传。
 ### Phase 2: 发送内容增强
 - [x] **图片发送**：`send_image`（点附件图标 → filechooser → 确认弹窗「发送」）+ `image_bubble_confirmed` 数量锚定确认；实机验证真实发出。
 - [ ] 原生表情（抖音原生 sticker，非图片）。
