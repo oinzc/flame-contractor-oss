@@ -412,9 +412,11 @@ class DouyinChat:
         找图片上传控件 input[type=file] → 注入本地文件 → 触发发送。
         - 真实 Playwright 页面：set_input_files 注入后点发送按钮，等待图片气泡出现。
         - 若页面找不到上传控件，抛 DomChangedError（进入可重试而非半成功）。
-        终态确认仍在 manager 层用 SendConfirmer 兜底（图片气泡出现 + 无失败标记）。
+        终态确认在 manager 层用 _confirm_send 兜底；此处记录 last_bubble_seen 作为
+        "本次发出的图片气泡已出现"的权威信号（排除头像，避免把头像误当图片气泡）。
         """
         self.last_bubble_seen = False
+        self._image_before_count = await self._count_outgoing_boxes()
         file_input = await self._find_file_input()
         if file_input is None:
             raise DomChangedError("未找到图片上传控件")
@@ -422,6 +424,19 @@ class DouyinChat:
         await self._sleep(1.5)
         await self._trigger_send()
         await self._wait_image_bubble(timeout=10.0)
+
+    async def _count_outgoing_boxes(self) -> int:
+        """统计当前「从我的」消息盒数量（用于锚定发送前后变化）。"""
+        if hasattr(self.page, "evaluate"):
+            try:
+                return int(
+                    await self.page.evaluate(
+                        "() => document.querySelectorAll('[class*=\"messageMessageBoxcontentBox\"][class*=\"isFromMe\"]').length"
+                    )
+                )
+            except Exception:
+                return 0
+        return 0
 
     async def _find_file_input(self):
         for selector in IMAGE_INPUTS:
@@ -456,23 +471,36 @@ class DouyinChat:
         await self._press_key("Enter")
 
     async def _wait_image_bubble(self, timeout: float) -> None:
-        """等待图片气泡出现。真实 Playwright 页用 wait_for_function 检测后发出的
-        img；FakePage 不走该路径（无真实渲染），由 _image_bubble_present 兜底判定。"""
+        """等待「本次发出的图片气泡」真实出现。
+
+        正确性要求（unmev 思路 + 本机 DOM 核实）：
+        - 只统计「从我的」消息盒（isFromMe），排除对方消息；
+        - 只把「非头像 img」（src 不含 avatar）当作图片气泡，头像会被误判；
+        - 以发送前的盒子数为锚，要求新出现一条 isFromMe 且含非头像 img。
+        满足才置 last_bubble_seen=True；否则视为图片未真正发出，交给 manager 判 unknown。
+        """
+        before_count = int(getattr(self, "_image_before_count", 0))
         if hasattr(self.page, "wait_for_function"):
             try:
                 await self.page.wait_for_function(
-                    """() => {
-                        const boxes = document.querySelectorAll('.messageMessageBoxcontentBox');
-                        for (const box of boxes) {
-                            if (box.querySelector('img')) return true;
-                        }
-                        return false;
+                    """([before]) => {
+                        const boxes = [...document.querySelectorAll('[class*="messageMessageBoxcontentBox"][class*="isFromMe"]')];
+                        if (boxes.length <= before) return false;
+                        const latest = boxes[boxes.length - 1];
+                        const hasRealImage = [...latest.querySelectorAll('img')].some(
+                            (img) => !(img.src || '').includes('avatar')
+                        );
+                        return hasRealImage;
                     }""",
+                    arg=[before_count],
                     timeout=int(timeout * 1000),
                 )
                 self.last_bubble_seen = True
             except Exception:
                 self.last_bubble_seen = False
             return
-        # FakePage：由测试注入标记
-        self.last_bubble_seen = True
+        # FakePage：由测试注入图片已出现的标记
+        if bool(getattr(self.page, "image_bubble_render", False)):
+            self.last_bubble_seen = True
+        else:
+            self.last_bubble_seen = False

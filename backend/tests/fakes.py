@@ -81,6 +81,7 @@ class FakePage:
         titles_revealed_by_scroll: tuple[str, ...] = (),
         search_requires_warmup: bool = False,
         search_results_after_polls: int = 0,
+        image_bubble_render: bool = False,
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
@@ -107,7 +108,7 @@ class FakePage:
         self.clicked: list[tuple[str, str]] = []
         self.closed = False
         self.image_input_log: list[str] = []
-        self.image_bubble_render: bool = False
+        self.image_bubble_render = image_bubble_render
 
     async def goto(self, url: str) -> None:
         self.gotos.append(url)
