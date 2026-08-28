@@ -358,6 +358,7 @@ def make_app(settings, pages: list[FakePage]):
         browser_factory=make_factory(pages),
         login_poll_interval=0.02,
         login_timeout=1.0,
+        login_check_timeout=0.2,
         send_timeout=0.2,
         send_poll_interval=0.05,
         send_stabilize_polls=2,

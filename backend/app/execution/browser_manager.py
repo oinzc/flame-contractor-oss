@@ -28,6 +28,7 @@ from .message_renderer import render_message
 from .profile_store import ensure_profile_dir
 from .send_confirmer import SendConfirmer
 
+LOGIN_CHECK_TIMEOUT = 8.0
 LOGIN_POLL_INTERVAL = 2.0
 LOGIN_TIMEOUT_SECONDS = 180.0
 SEND_TIMEOUT_SECONDS = 15.0
@@ -74,6 +75,7 @@ class BrowserManager:
         *,
         login_poll_interval: float = LOGIN_POLL_INTERVAL,
         login_timeout: float = LOGIN_TIMEOUT_SECONDS,
+        login_check_timeout: float = LOGIN_CHECK_TIMEOUT,
         send_timeout: float = SEND_TIMEOUT_SECONDS,
         send_poll_interval: float = SEND_POLL_INTERVAL,
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
@@ -88,6 +90,7 @@ class BrowserManager:
         self._browser_factory = browser_factory
         self._login_poll_interval = login_poll_interval
         self._login_timeout = login_timeout
+        self._login_check_timeout = login_check_timeout
         self._send_timeout = send_timeout
         self._send_poll_interval = send_poll_interval
         self._send_stabilize_polls = send_stabilize_polls
@@ -169,16 +172,14 @@ class BrowserManager:
             chat = DouyinChat(page, sleep=self._sleep)
             await chat.open_chat_page()
 
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + self._login_timeout
-            logged_in = await chat.is_logged_in()
-            while not logged_in:
-                if loop.time() >= deadline:
-                    flow.state = "expired"
-                    flow.detail = "等待扫码超时，请重新发起"
-                    return
-                await self._sleep(self._login_poll_interval)
-                logged_in = await chat.is_logged_in()
+            logged_in = await chat.wait_logged_in(
+                timeout=self._login_timeout,
+                poll_interval=self._login_poll_interval,
+            )
+            if not logged_in:
+                flow.state = "expired"
+                flow.detail = "等待扫码超时，请重新发起"
+                return
 
             flow.state = "succeeded"
             self._mark_healthy(flow.account_id)
@@ -248,7 +249,10 @@ class BrowserManager:
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
             await chat.open_chat_page()
-            if not await chat.is_logged_in():
+            if not await chat.wait_logged_in(
+                timeout=self._login_check_timeout,
+                poll_interval=self._login_poll_interval,
+            ):
                 self._mark_auth_expired(account_id)
                 overall = "auth_expired"
                 detail = "登录已失效，请重新扫码"
@@ -378,7 +382,10 @@ class BrowserManager:
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
             await chat.open_chat_page()
-            if not await chat.is_logged_in():
+            if not await chat.wait_logged_in(
+                timeout=self._login_check_timeout,
+                poll_interval=self._login_poll_interval,
+            ):
                 self._mark_auth_expired(account_id)
                 overall = "auth_expired"
                 detail = "登录已失效，请重新扫码"
