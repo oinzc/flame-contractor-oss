@@ -95,6 +95,14 @@ curl -X POST http://127.0.0.1:8000/api/selectors/reload
 
 安全约定不变：无把握的 selector 宁可记 unknown 不误发；改版后必须真实 E2E 复核。
 
+## 原生表情发送（M5）
+
+支持抖音**原生表情（sticker，非图片）**。模板页新建「表情」类型模板，填**表情名称**（如"比心"）与可选分类；发送时 `send_sticker` 点开表情面板、按名称精确匹配表情项、**一点即发**（抖音原生表情单击即发出），随后关闭面板并把焦点点回输入框（避免挡住后续消息）。
+
+- 终态确认与图片一致：**「从我的 + 非头像」新增气泡**锚定，绝不把头像/旧图当成功；确认不了记 `unknown_requires_review`，绝不自动重发。
+- 参考 unmev/douyin-auto-fire 的 `send_douyin_sticker()`；选择器已纳入 `selectors_bundle.json`，页面改版可通过热更新适配。
+- 真机排查工具：`backend/scripts/probe_sticker.py`（只定位不发，核对表情选择器）、`backend/scripts/probe_sticker_send.py`（真实发送一次）。默认账号为 oinzc。
+
 ## 测试与构建
 
 ```powershell
@@ -117,8 +125,8 @@ npm run build                              # 生产构建
 - ✅ 图片模板发送（点附件图标→选图→确认弹窗发送，实机验证）；
 - ✅ 火花天数手动校准（本地累计 + 手动校正入口）；
 - ✅ selector bundle 热更新（页面改版改 `selectors_bundle.json` 即热生效，无需重启进程）；
-- ✅ 凭据字段在任何 API 中一律拒绝（不接收 Cookie/密码/Token）；
-- ⏳ 原生表情。
+- ✅ 原生表情发送（抖音原生 sticker，按名称匹配表情面板）；图片/表情共用「从我的 + 非头像」增图终态确认；
+- ✅ 凭据字段在任何 API 中一律拒绝（不接收 Cookie/密码/Token）。
 
 ## 安全约定
 
