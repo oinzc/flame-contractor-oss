@@ -321,8 +321,8 @@ def test_create_image_template_validates(settings):
 
 
 def test_send_image_uploads_and_succeeds(settings):
-    """图片模板：图片注入到 input[type=file] 并成功发送。"""
-    app = make_app(settings, [_page_for_send()])
+    """图片模板：图片注入到 input[type=file] 并成功发送（图片气泡真实出现）。"""
+    app = make_app(settings, [_page_for_send(image_bubble_render=True)])
     with TestClient(app) as client:
         account = create_account(client)
         tmpl = client.post(
@@ -343,6 +343,30 @@ def test_send_image_uploads_and_succeeds(settings):
 
         targets = client.get("/api/targets").json()
         assert targets[0]["streakDays"] == 1  # 成功后火花天数 +1
+
+
+def test_send_image_not_misreads_avatar_as_success(settings):
+    """回归：图片气泡未真实出现（只有头像）时，绝不能误判成功。"""
+    app = make_app(settings, [_page_for_send(image_bubble_render=False)])
+    with TestClient(app) as client:
+        account = create_account(client)
+        tmpl = client.post(
+            "/api/templates",
+            json={"name": "Img", "type": "image", "imagePath": "D:/test.png"},
+        ).json()
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A", "templateId": tmpl["id"]},
+        )
+
+        result = client.post(f"/api/accounts/{account['id']}/send").json()
+        status = result["results"][0]["status"]
+        # 不误判成功；可能 unknown_requires_review（待人工复核）
+        assert status != "succeeded", result
+
+        with Session(app.state.engine) as session:
+            job = session.exec(select(SendJob)).one()
+            assert job.status != JobStatus.SUCCEEDED
 
 
 def test_send_image_injects_path_into_file_input():
