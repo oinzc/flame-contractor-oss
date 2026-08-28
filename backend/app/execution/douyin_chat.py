@@ -602,6 +602,8 @@ class DouyinChat:
             await self._restore_composer()
 
     async def _select_sticker_in_panel(self, panel, sticker: Sticker) -> None:
+        # 面板打开后表情项是异步渲染的，先等它们出现再遍历（否则 count=0 找不到）
+        await self._wait_sticker_items(panel)
         name = sticker.label or sticker.name
         # 分类：先点面板里的分类标签（可选）
         if getattr(panel, "get_by_text", None) and sticker.category:
@@ -652,13 +654,15 @@ class DouyinChat:
     async def _click_sticker(self, candidate) -> None:
         await candidate.click(force=True)
         await self._sleep(0.8)
-        await self._wait_image_bubble(timeout=15.0)
-        if not self.last_bubble_seen:
-            # 表情可能没有一点即发（发布按钮仍在）→ 点发布按钮兜底
-            await self._trigger_send()
-            await self._wait_image_bubble(timeout=15.0)
-        if not self.last_bubble_seen:
-            raise DomChangedError("表情已点击但未能确认进入会话")
+        if await self._wait_sticker_bubble(timeout=15.0):
+            self.last_bubble_seen = True
+            return
+        # 表情可能没有一点即发（发布按钮仍在）→ 点发布按钮兜底再确认
+        await self._trigger_send()
+        if await self._wait_sticker_bubble(timeout=15.0):
+            self.last_bubble_seen = True
+            return
+        raise DomChangedError("表情已点击但未能确认进入会话")
 
     async def _restore_composer(self) -> None:
         """关闭表情面板并把焦点点回聊天输入框（unmev issue #4 的经验）。"""
@@ -674,3 +678,30 @@ class DouyinChat:
                 await editor.click()
         except Exception:
             pass
+
+    async def _wait_sticker_items(self, panel, timeout: float = 5.0) -> None:
+        """等待表情面板里的表情项渲染出来（异步），避免 count=0 导致找不到。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            try:
+                if await panel.locator(_s.STICKER_ITEM).count() > 0:
+                    return
+            except Exception:
+                pass
+            await self._sleep(0.3)
+
+    async def _wait_sticker_bubble(self, timeout: float) -> bool:
+        """轮询「从我的 + 非头像」新增图片气泡（与图片/表情确认一致的锚定）。
+
+        不用图片专用的 _wait_image_bubble：其 wait_for_function 依赖
+        messageMessageBoxcontentBox，表情气泡未必匹配；改用 image_bubble_confirmed
+        主动查询（contentBox + isFromMe + 非头像 img，cur>before），真机已验证能命中。
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if await self.image_bubble_confirmed():
+                return True
+            await self._sleep(0.5)
+        return False
