@@ -27,6 +27,7 @@ class AccountStatus(str, Enum):
 class TemplateType(str, Enum):
     TEXT = "text"
     IMAGE = "image"
+    STICKER = "sticker"
 
 
 class JobStatus(str, Enum):
@@ -94,6 +95,14 @@ class MessageTemplate(SQLModel, table=True):
     content: str = Field(default="", max_length=1000)
     # 图片类型模板的有效图片路径（本地图片）；文本无
     image_path: str | None = Field(default=None, max_length=500)
+    # 表情(sticker)模板：sticker_name 为表情名（value），必填当 type=STICKER；
+    # sticker_label 为表情面板显示名（默认等于 sticker_name，用于精确匹配）；
+    # sticker_category 为表情分类（可选，打开面板先点该分类）；
+    # sticker_fallback_index 为兜底索引（可选，面板内第 n 个可点元素）。
+    sticker_name: str | None = Field(default=None, max_length=64)
+    sticker_label: str | None = Field(default=None, max_length=64)
+    sticker_category: str | None = Field(default=None, max_length=32)
+    sticker_fallback_index: int | None = Field(default=None, ge=0)
     version: int = Field(default=1, ge=1)
     enabled: bool = Field(default=True, index=True)
     created_at: datetime = Field(default_factory=utc_now)

@@ -98,6 +98,22 @@ _DEFAULTS: dict[str, object] = {
         'button[aria-label*="发送"]',
         '[role="button"][aria-label*="发送"]',
     ),
+    # 表情(sticker)发送：打开表情面板的按钮 / 表情面板容器 / 表情项及其名称节点
+    # （概念与类名参考 unmev/douyin-auto-fire；真机 E2E 前必须核对并尽量走 bundle 热更）
+    "STICKER_BUTTONS": (
+        'svg.messageMsgInputiconAction',
+        'button[aria-label*="表情"]',
+        '[role="button"][aria-label*="表情"]',
+        '[title*="表情"]',
+    ),
+    "STICKER_PANELS": (
+        '.componentsemojiemojiPanel',
+        '[class*="emojiPanel"]',
+        '[role="dialog"]',
+        '[class*="sticker"]',
+    ),
+    "STICKER_ITEM": '.emojiEmojiItememojiItem',
+    "STICKER_ITEM_NAME": '.emojiEmojiItememojiItemDesc',
 }
 
 

@@ -89,9 +89,13 @@ export interface ContractTarget {
 export interface MessageTemplate {
   id: string
   name: string
-  type: 'text' | 'image'
+  type: 'text' | 'image' | 'sticker'
   content: string
   imagePath: string | null
+  stickerName: string | null
+  stickerLabel: string | null
+  stickerCategory: string | null
+  stickerFallbackIndex: number | null
   version: number
   enabled: boolean
   createdAt: string
@@ -175,9 +179,12 @@ export interface TargetCreateInput {
 
 export interface TemplateCreateInput {
   name: string
-  type: 'text' | 'image'
+  type: 'text' | 'image' | 'sticker'
   content: string
   imagePath?: string
+  stickerName?: string
+  stickerLabel?: string
+  stickerCategory?: string
 }
 
 export interface SendPreviewItem {
