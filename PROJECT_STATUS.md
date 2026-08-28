@@ -99,7 +99,7 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **73 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载；4=原生表情：模板校验/匹配发送成功/找不到表情失败/无气泡不判成功） |
+| 后端 pytest | **77 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载；4=原生表情：模板校验/匹配发送成功/找不到表情失败/无气泡不判成功；4=登录检测：轮询直到渲染/永不渲染超时/延迟渲染发送成功/仍未渲染判过期） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |
@@ -113,7 +113,7 @@ frontend/src/
 - Starlette httpx→httpx2 弃用警告存在，功能无影响。
 - **调度器为进程内内存循环（APScheduler），未用持久化 jobstore**：进程重启后后台循环自动重跑 `tick`，会重新生成当日/补跑当日计划（幂等键兜底不会重复发送）。真正需要的持久调度语义由 `SendSchedule` 表承载（唯一约束 + 租约字段），重启安全。
 - 调度默认每 60s 轮询一次，到点判定依赖 `scheduled_at`；若进程在窗口内长时间挂起，重启后可能补发当日计划（幂等兜底）。
-- **headless 下登录检测波动**：`run_send` 用 headless 打开持久 profile，`is_logged_in()`（查会话列表元素）有时返回 False（实机多次出现 headed 下为 True、headless 下偶发 False），会导致 `run_send` 误标账号 auth_expired 并跳过发送。这是本机浏览器/页面时序的波动，独立于图片/调度功能；真实发送链路本身可用但登录检测这层可能假阴性。后续建议：登录检测对 headless 增加重试/轮询，或改为「会话列表出现即算、超时才判失效」。
+- **headless 下登录检测波动（已修复，HEAD `4aa851b`）**：原 `run_send`/Dry Run 用 headless 打开持久 profile 后立即 `is_logged_in()` 单次查询会话列表，页面加载早期列表未渲染完易返回 False，被误判 auth_expired 并跳过发送。已改为 `DouyinChat.wait_logged_in(timeout, poll_interval)` 轮询：会话列表一旦出现即算已登录、超时才判失效；run_send / run_dry_run / 扫码登录三处统一走它，并新增 `login_check_timeout` 构造参数（默认 8s）。真机验证 `wait_logged_in=True`，截图经视觉桥确认会话列表完整渲染（实机复现偶发单次 False 不总是发生，但轮询逻辑已由单测覆盖「延迟渲染→True / 永不渲染→False」）。
 - **selector bundle 依赖 JSON 有效性**：`selectors_bundle.json` 语法错误或字段缺失时，`_Bundle` 会保留内存中的默认/上一版值继续运行（安全方向、不误发），但需人工修正并按需 `POST /api/selectors/reload`（或进程内惰性 mtime）才会刷新。
 
 ## 尝试过但失败的方案
