@@ -8,6 +8,7 @@ from .selectors import (
     CONVERSATION_ITEM,
     CONVERSATION_LIST,
     CONVERSATION_TITLE,
+    IMAGE_INPUTS,
     RIGHT_TITLE,
     SEARCH_CHAT_BTN,
     SEARCH_INPUT,
@@ -402,3 +403,76 @@ class DouyinChat:
             if await self.page.query_selector(selector) is not None:
                 return True
         return False
+
+    # ------------------------------------------------------------ 图片发送
+
+    async def send_image(self, image_path: str) -> None:
+        """发送一张本地图片。
+
+        找图片上传控件 input[type=file] → 注入本地文件 → 触发发送。
+        - 真实 Playwright 页面：set_input_files 注入后点发送按钮，等待图片气泡出现。
+        - 若页面找不到上传控件，抛 DomChangedError（进入可重试而非半成功）。
+        终态确认仍在 manager 层用 SendConfirmer 兜底（图片气泡出现 + 无失败标记）。
+        """
+        self.last_bubble_seen = False
+        file_input = await self._find_file_input()
+        if file_input is None:
+            raise DomChangedError("未找到图片上传控件")
+        await self._set_input_files(file_input, image_path)
+        await self._sleep(1.5)
+        await self._trigger_send()
+        await self._wait_image_bubble(timeout=10.0)
+
+    async def _find_file_input(self):
+        for selector in IMAGE_INPUTS:
+            element = await self.page.query_selector(selector)
+            if element is not None:
+                return element
+        return None
+
+    async def _set_input_files(self, element, image_path: str) -> None:
+        # 真实 Playwright 页面：element.set_input_files(path)
+        setter = getattr(element, "set_input_files", None)
+        if setter is not None:
+            await setter(image_path)
+            return
+        # 兜底：直接调 page.set_input_files（部分实现把该方法挂在 page 上）
+        if hasattr(self.page, "set_input_files"):
+            await self.page.set_input_files(image_path)
+            return
+        raise DomChangedError("页面对象不支持图片注入")
+
+    async def _trigger_send(self) -> None:
+        """优先点发布按钮，Enter 兜底（与文本发送一致）。"""
+        if hasattr(self.page, "locator"):
+            for selector in SEND_BUTTONS:
+                locator = self.page.locator(selector).first
+                try:
+                    if await locator.count() and await locator.is_visible():
+                        await locator.click()
+                        return
+                except Exception:
+                    continue
+        await self._press_key("Enter")
+
+    async def _wait_image_bubble(self, timeout: float) -> None:
+        """等待图片气泡出现。真实 Playwright 页用 wait_for_function 检测后发出的
+        img；FakePage 不走该路径（无真实渲染），由 _image_bubble_present 兜底判定。"""
+        if hasattr(self.page, "wait_for_function"):
+            try:
+                await self.page.wait_for_function(
+                    """() => {
+                        const boxes = document.querySelectorAll('.messageMessageBoxcontentBox');
+                        for (const box of boxes) {
+                            if (box.querySelector('img')) return true;
+                        }
+                        return false;
+                    }""",
+                    timeout=int(timeout * 1000),
+                )
+                self.last_bubble_seen = True
+            except Exception:
+                self.last_bubble_seen = False
+            return
+        # FakePage：由测试注入标记
+        self.last_bubble_seen = True

@@ -90,7 +90,9 @@ class AccountRead(APIBase):
 
 class TemplateCreate(APIBase):
     name: str = Field(min_length=1, max_length=60)
-    content: str = Field(min_length=1, max_length=1000)
+    type: TemplateType = Field(default=TemplateType.TEXT)
+    content: str = Field(default="", max_length=1000)
+    image_path: str | None = Field(default=None, max_length=500)
 
     @field_validator("name")
     @classmethod
@@ -100,12 +102,23 @@ class TemplateCreate(APIBase):
             raise ValueError("模板名称不能为空")
         return value
 
+    @model_validator(mode="after")
+    def _validate_payload(self) -> "TemplateCreate":
+        if self.type == TemplateType.TEXT:
+            if not self.content.strip():
+                raise ValueError("文本模板内容不能为空")
+        elif self.type == TemplateType.IMAGE:
+            if not self.image_path or not self.image_path.strip():
+                raise ValueError("图片模板必须指定图片路径")
+        return self
+
 
 class TemplateRead(APIBase):
     id: str
     name: str
     type: TemplateType
     content: str
+    image_path: str | None
     version: int
     enabled: bool
     created_at: datetime

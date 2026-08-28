@@ -300,3 +300,58 @@ def test_send_uses_account_business_date(settings, engine):
         assert job.business_date == date.today()
         account = session.get(AccountModel, job.account_id)
         assert account is not None
+
+
+def test_create_image_template_validates(settings):
+    """图片模板需 imagePath；文本模板需内容。"""
+    app = make_app(settings, [])
+    with TestClient(app) as client:
+        missing = client.post(
+            "/api/templates", json={"name": "T", "type": "image"}
+        )
+        assert missing.status_code == 422
+
+        ok = client.post(
+            "/api/templates",
+            json={"name": "T", "type": "image", "imagePath": "D:/pic.png"},
+        )
+        assert ok.status_code == 201, ok.text
+        assert ok.json()["type"] == "image"
+        assert ok.json()["imagePath"] == "D:/pic.png"
+
+
+def test_send_image_uploads_and_succeeds(settings):
+    """图片模板：图片注入到 input[type=file] 并成功发送。"""
+    app = make_app(settings, [_page_for_send()])
+    with TestClient(app) as client:
+        account = create_account(client)
+        tmpl = client.post(
+            "/api/templates",
+            json={"name": "Img", "type": "image", "imagePath": "D:/test.png"},
+        ).json()
+        client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A", "templateId": tmpl["id"]},
+        )
+
+        result = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert result["results"][0]["status"] == "succeeded", result
+
+        with Session(app.state.engine) as session:
+            job = session.exec(select(SendJob)).one()
+            assert job.status == JobStatus.SUCCEEDED
+
+        targets = client.get("/api/targets").json()
+        assert targets[0]["streakDays"] == 1  # 成功后火花天数 +1
+
+
+def test_send_image_injects_path_into_file_input():
+    """图片发送：把本地路径真正注入到 input[type=file]。"""
+    import asyncio
+
+    from app.execution.douyin_chat import DouyinChat
+
+    page = FakePage(logged_in=True, editor_present=True)
+    chat = DouyinChat(page, sleep=lambda _s: asyncio.sleep(0))
+    asyncio.run(chat.send_image("D:/some/image.png"))
+    assert page.image_input_log == ["D:/some/image.png"]

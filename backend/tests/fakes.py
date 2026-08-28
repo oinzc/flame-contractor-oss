@@ -12,6 +12,7 @@ from app.execution.selectors import (
     CONVERSATION_ITEM,
     CONVERSATION_LIST,
     CONVERSATION_TITLE,
+    IMAGE_INPUTS,
     RIGHT_TITLE,
     SEARCH_CHAT_BTN,
     SEARCH_INPUT,
@@ -33,6 +34,9 @@ class FakeElement:
     async def click(self, timeout: int | None = None) -> None:
         if self._on_click is not None:
             self._on_click()
+
+    async def set_input_files(self, path: str) -> None:
+        self.uploaded_path = path
 
 
 class FakeItem:
@@ -102,6 +106,8 @@ class FakePage:
         self.scrolls: list[str] = []
         self.clicked: list[tuple[str, str]] = []
         self.closed = False
+        self.image_input_log: list[str] = []
+        self.image_bubble_render: bool = False
 
     async def goto(self, url: str) -> None:
         self.gotos.append(url)
@@ -119,9 +125,16 @@ class FakePage:
             return FakeElement("")
         if selector == CHAT_EDITOR:
             return FakeElement(lambda: self.editor_text) if self.editor_present else None
+        if selector in IMAGE_INPUTS:
+            element = FakeElement("")
+            element.set_input_files = self._set_image_input  # type: ignore[method-assign]
+            return element
         if selector in SEND_FAILURE_MARKERS:
             return FakeElement("") if self.failure_marker else None
         return None
+
+    async def _set_image_input(self, path: str) -> None:
+        self.image_input_log.append(path)
 
     async def query_selector_all(self, selector: str):
         if selector == SEARCH_RESULT_ITEM:

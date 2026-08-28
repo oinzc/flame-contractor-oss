@@ -26,7 +26,9 @@ function previewContent(content: string): string {
 
 export default function TemplatesPage({ templates, onChanged }: Props) {
   const [name, setName] = useState('')
+  const [type, setType] = useState<'text' | 'image'>('text')
   const [content, setContent] = useState('')
+  const [imagePath, setImagePath] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -35,9 +37,15 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
     setError(null)
     setSubmitting(true)
     try {
-      await api.createTemplate({ name: name.trim(), content: content.trim() })
+      await api.createTemplate({
+        name: name.trim(),
+        type,
+        content: type === 'image' ? '' : content.trim(),
+        imagePath: type === 'image' ? imagePath.trim() : undefined,
+      })
       setName('')
       setContent('')
+      setImagePath('')
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败，请重试')
@@ -85,7 +93,9 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                         color: 'var(--text-2)',
                       }}
                     >
-                      {template.content}
+                      {template.type === 'image'
+                        ? `🖼 图片模板：${template.imagePath ?? '—'}`
+                        : template.content}
                     </div>
                   </td>
                   <td className="mono">v{template.version}</td>
@@ -100,41 +110,74 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
         <div className="card-head">
           <h2>新建模板</h2>
         </div>
-        <div className="variable-doc">
-          {VARIABLE_DOC.map((item) => (
-            <span className="variable-chip" key={item.token}>
-              <code>{item.token}</code> {item.meaning}
-            </span>
-          ))}
-        </div>
         <form className="form-grid" onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="template-name">模板名称</label>
-            <input
-              id="template-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：每日一言"
-              maxLength={60}
-              required
-            />
+          <div className="field-row">
+            <div className="field">
+              <label htmlFor="template-name">模板名称</label>
+              <input
+                id="template-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="例如：每日一言"
+                maxLength={60}
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="template-type">模板类型</label>
+              <select
+                id="template-type"
+                value={type}
+                onChange={(event) => setType(event.target.value as 'text' | 'image')}
+              >
+                <option value="text">文本</option>
+                <option value="image">图片</option>
+              </select>
+            </div>
           </div>
-          <div className="field">
-            <label htmlFor="template-content">文案内容</label>
-            <textarea
-              id="template-content"
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              placeholder="{{target_name}}，今天也要开心。第 {{streak_days}} 天。"
-              maxLength={1000}
-              rows={3}
-              required
-            />
-          </div>
-          {content.trim() && (
-            <div className="preview-box">
-              <div className="preview-label">发送预览</div>
-              <div className="preview-text">{previewContent(content)}</div>
+
+          {type === 'text' ? (
+            <>
+              <div className="variable-doc">
+                {VARIABLE_DOC.map((item) => (
+                  <span className="variable-chip" key={item.token}>
+                    <code>{item.token}</code> {item.meaning}
+                  </span>
+                ))}
+              </div>
+              <div className="field">
+                <label htmlFor="template-content">文案内容</label>
+                <textarea
+                  id="template-content"
+                  value={content}
+                  onChange={(event) => setContent(event.target.value)}
+                  placeholder="{{target_name}}，今天也要开心。第 {{streak_days}} 天。"
+                  maxLength={1000}
+                  rows={3}
+                  required={type === 'text'}
+                />
+              </div>
+              {content.trim() && (
+                <div className="preview-box">
+                  <div className="preview-label">发送预览</div>
+                  <div className="preview-text">{previewContent(content)}</div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="field">
+              <label htmlFor="template-image-path">图片本地路径</label>
+              <input
+                id="template-image-path"
+                value={imagePath}
+                onChange={(event) => setImagePath(event.target.value)}
+                placeholder="例：D:/images/比心.png"
+                maxLength={500}
+                required={type === 'image'}
+              />
+              <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                发送时把这张本地图片作为消息投递给好友。路径必须本机可读，且为图片文件。
+              </p>
             </div>
           )}
           {error && <div className="form-error">{error}</div>}
