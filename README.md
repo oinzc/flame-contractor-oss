@@ -118,7 +118,7 @@ npm run build                              # 生产构建
 - ✅ 火花天数手动校准（本地累计 + 手动校正入口）；
 - ✅ selector bundle 热更新（页面改版改 `selectors_bundle.json` 即热生效，无需重启进程）；
 - ✅ 凭据字段在任何 API 中一律拒绝（不接收 Cookie/密码/Token）；
-- ⏳ 原生表情、通知补渠道（钉钉/邮件）。
+- ⏳ 原生表情。
 
 ## 安全约定
 
