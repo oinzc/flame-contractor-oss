@@ -421,7 +421,7 @@ class DouyinChat:
         last_bubble_seen 记录"本次发出的图片气泡已出现"，供 _confirm_send 判定。
         """
         self.last_bubble_seen = False
-        self._image_before_count = await self._count_outgoing_boxes()
+        self._image_before_count = await self._count_non_avatar_images()
         if not hasattr(self.page, "expect_file_chooser"):
             raise DomChangedError("页面对象不支持文件选择器")
         try:
@@ -468,18 +468,20 @@ class DouyinChat:
                 pass
         raise DomChangedError("未找到图片确认弹窗的发送按钮")
 
-    async def _count_outgoing_boxes(self) -> int:
-        """统计当前「从我的」消息盒数量（用于锚定发送前后变化）。"""
+    async def _count_non_avatar_images(self) -> int:
+        """统计「从我的」消息里的非头像图片总数（锚定发送前后，防历史图片误判）。"""
         if hasattr(self.page, "evaluate"):
             try:
                 return int(
                     await self.page.evaluate(
-                        "() => document.querySelectorAll('[class*=\"messageMessageBoxcontentBox\"][class*=\"isFromMe\"]').length"
+                        """() => [...document.querySelectorAll('[class*="contentBox"][class*="isFromMe"] img')]
+                            .filter(img => !(img.src || '').includes('avatar')).length"""
                     )
                 )
             except Exception:
                 return 0
-        return 0
+        # FakePage
+        return 1 if bool(getattr(self.page, "image_bubble_render", False)) else 0
 
     async def _trigger_send(self) -> None:
         """优先点发布按钮，Enter 兜底（与文本发送一致）。"""
@@ -528,3 +530,28 @@ class DouyinChat:
             self.last_bubble_seen = True
         else:
             self.last_bubble_seen = False
+
+    async def image_bubble_confirmed(self, before_count: int | None = None) -> bool:
+        """检测「从我的」消息里是否出现了非头像图片气泡（真实图）。
+
+        与 _wait_image_bubble 不同：这里是主动查询（供 manager 轮询），
+        用与实机一致的 selector（contentBox + isFromMe），只认非头像 img。
+        before_count 提供时要求「新增一条」；None 则只要出现非头像图即算。
+        """
+        # FakePage：以 image_bubble_render 标记为准（真实 Playwright page 无此属性）
+        if hasattr(self.page, "image_bubble_render"):
+            return bool(self.page.image_bubble_render)
+        if hasattr(self.page, "evaluate"):
+            try:
+                before = int(before_count if before_count is not None else getattr(self, "_image_before_count", 0))
+                cur = int(
+                    await self.page.evaluate(
+                        """() => [...document.querySelectorAll('[class*="contentBox"][class*="isFromMe"] img')]
+                            .filter(img => !(img.src || '').includes('avatar')).length"""
+                    )
+                )
+                # 本次发送后非头像图片数 > 发送前 → 本次的图片气泡已渲染（防历史图片误判）
+                return cur > before
+            except Exception:
+                return False
+        return False

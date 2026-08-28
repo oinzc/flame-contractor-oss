@@ -552,12 +552,17 @@ class BrowserManager:
         if template_type == TemplateType.IMAGE:
             if await chat.failure_marker_visible():
                 return "failed_retryable"
-            # 用极短稳定窗确认图片气泡确实渲染（防 spinner 未消失即误判成功）
-            await self._sleep(self._send_poll_interval)
-            if await chat.failure_marker_visible():
-                return "failed_retryable"
-            if bool(getattr(chat, "last_bubble_seen", False)):
-                return "succeeded"
+            # 图片：轮询等待「从我的 + 非头像图片」气泡出现（图片上传/发送有延迟，
+            # 用 image_bubble_confirmed 主动查询，比 wait_for_function 更可靠）。
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._send_timeout
+            while loop.time() < deadline:
+                if await chat.failure_marker_visible():
+                    return "failed_retryable"
+                if await chat.image_bubble_confirmed():
+                    return "succeeded"
+                await self._sleep(self._send_poll_interval)
+            # 无失败标记但未确认到图片气泡 → unknown（绝不自动重发）
             return "unknown_requires_review"
 
         return await SendConfirmer(
