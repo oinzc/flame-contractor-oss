@@ -2,24 +2,9 @@ import asyncio
 import re
 from dataclasses import dataclass
 
-from .selectors import (
-    CHAT_EDITOR,
-    CHAT_URL,
-    CONVERSATION_ITEM,
-    CONVERSATION_LIST,
-    CONVERSATION_TITLE,
-    IMAGE_DIALOG_SEND,
-    IMAGE_INPUTS,
-    IMAGE_UPLOAD_TRIGGER,
-    RIGHT_TITLE,
-    SEARCH_CHAT_BTN,
-    SEARCH_INPUT,
-    SEARCH_INPUTS,
-    SEARCH_NAME_SELECTORS,
-    SEARCH_RESULT_ITEM,
-    SEND_BUTTONS,
-    SEND_FAILURE_MARKERS,
-)
+# 关键：必须用「模块引用 + 运行期取值」，不能在导入时 `from .selectors import X`
+# 捕获常量——那样 selector 热更新对这个文件就失效了。
+from . import selectors as _s
 
 # 抖音输入框发送后会残留零宽字符，普通 strip() 判不清空
 _BLANK_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff]+")
@@ -27,8 +12,12 @@ _BLANK_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff]+")
 MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
 SEARCH_RESULTS_TIMEOUT = 12.0
-_ITEM_SELECTORS = (CONVERSATION_ITEM, SEARCH_RESULT_ITEM)
 OPEN_CONFIRM_TIMEOUT = 8.0
+
+
+def _item_selectors() -> tuple:
+    """运行期返回「会话列表项 + 搜索结果行」两组选择器（随 bundle 热更）。"""
+    return (_s.CONVERSATION_ITEM, _s.SEARCH_RESULT_ITEM)
 
 
 class DomChangedError(RuntimeError):
@@ -65,22 +54,22 @@ class DouyinChat:
         self._warmed = False
 
     async def open_chat_page(self) -> None:
-        await self.page.goto(CHAT_URL)
+        await self.page.goto(_s.CHAT_URL)
         await self._sleep(3)
 
     async def is_logged_in(self) -> bool:
-        element = await self.page.query_selector(CONVERSATION_LIST)
+        element = await self.page.query_selector(_s.CONVERSATION_LIST)
         return element is not None
 
     async def right_panel_title(self) -> str | None:
-        element = await self.page.query_selector(RIGHT_TITLE)
+        element = await self.page.query_selector(_s.RIGHT_TITLE)
         if element is None:
             return None
         text = await element.inner_text()
         return text.strip() if text else None
 
     async def search(self, name: str) -> None:
-        await self._fill_first(SEARCH_INPUTS, name)
+        await self._fill_first(_s.SEARCH_INPUTS, name)
         await self._sleep(2.2)
 
     async def _fill_first(self, selectors: tuple[str, ...], value: str) -> None:
@@ -98,7 +87,7 @@ class DouyinChat:
         if self._warmed:
             return
         for _ in range(WARMUP_SCROLLS):
-            element = await self.page.query_selector(CONVERSATION_LIST)
+            element = await self.page.query_selector(_s.CONVERSATION_LIST)
             if element is None:
                 break
             try:
@@ -124,7 +113,7 @@ class DouyinChat:
             pass
         # 2) 清空搜索，滚动加载列表兜底（会话列表可能是懒加载）
         try:
-            await self._fill_first(SEARCH_INPUTS, "")
+            await self._fill_first(_s.SEARCH_INPUTS, "")
             await self._sleep(0.8)
         except Exception:
             pass
@@ -132,7 +121,7 @@ class DouyinChat:
             result = await self._scan_items(name)
             if result.opened:
                 return result
-            scroll_element = await self.page.query_selector(CONVERSATION_LIST)
+            scroll_element = await self.page.query_selector(_s.CONVERSATION_LIST)
             if scroll_element is None:
                 break
             await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
@@ -209,7 +198,7 @@ class DouyinChat:
         except Exception:
             result = {}
         try:
-            await self._fill_first(SEARCH_INPUTS, "")
+            await self._fill_first(_s.SEARCH_INPUTS, "")
         except Exception:
             pass
         return result
@@ -230,13 +219,13 @@ class DouyinChat:
         return None
 
     async def _scan_items(self, name: str) -> ConversationOpen:
-        for selector in _ITEM_SELECTORS:
+        for selector in _item_selectors():
             items = await self.page.query_selector_all(selector)
             for item in items:
                 title = await self._title_of(item)
                 if title != name:
                     continue
-                target = await item.query_selector(SEARCH_CHAT_BTN)
+                target = await item.query_selector(_s.SEARCH_CHAT_BTN)
                 if target is None:
                     target = item
                 try:
@@ -261,13 +250,13 @@ class DouyinChat:
 
     async def _title_of(self, item) -> str | None:
         """按 unmev 的顺序取标题：搜索行名称节点 → 会话标题子元素 → 整行首行兜底。"""
-        for selector in SEARCH_NAME_SELECTORS:
+        for selector in _s.SEARCH_NAME_SELECTORS:
             element = await item.query_selector(selector)
             if element is not None:
                 text = await element.inner_text()
                 if text and text.strip():
                     return text.strip()
-        title_element = await item.query_selector(CONVERSATION_TITLE)
+        title_element = await item.query_selector(_s.CONVERSATION_TITLE)
         if title_element is not None:
             text = await title_element.inner_text()
             if text and text.strip():
@@ -281,10 +270,10 @@ class DouyinChat:
     async def visible_titles(self, limit: int = 40) -> list[str]:
         titles: list[str] = []
         seen: set[str] = set()
-        for selector in _ITEM_SELECTORS:
+        for selector in _item_selectors():
             items = await self.page.query_selector_all(selector)
             for item in items:
-                title_element = await item.query_selector(CONVERSATION_TITLE)
+                title_element = await item.query_selector(_s.CONVERSATION_TITLE)
                 if title_element is None:
                     continue
                 title = ((await title_element.inner_text()) or "").strip()
@@ -299,7 +288,7 @@ class DouyinChat:
         """输入文本：真实页面走 IME 安全的 insert_text；测试协议方法兜底。"""
         page = self.page
         if hasattr(page, "type_text"):
-            await page.type_text(CHAT_EDITOR, text)
+            await page.type_text(_s.CHAT_EDITOR, text)
         elif hasattr(page, "keyboard"):
             await page.keyboard.insert_text(text)
         else:
@@ -332,7 +321,7 @@ class DouyinChat:
                 return True
             except Exception:
                 return False
-        editor = await self.page.query_selector(CHAT_EDITOR)
+        editor = await self.page.query_selector(_s.CHAT_EDITOR)
         if editor is None:
             return False
         text = await editor.inner_text()
@@ -342,7 +331,7 @@ class DouyinChat:
         """新版编辑器按 Enter 不发送：优先点击发布按钮，Enter 仅兜底（同 unmev）。"""
         page = self.page
         if hasattr(page, "locator"):
-            for selector in SEND_BUTTONS:
+            for selector in _s.SEND_BUTTONS:
                 locator = page.locator(selector).first
                 try:
                     if await locator.count() and await locator.is_visible():
@@ -354,7 +343,7 @@ class DouyinChat:
 
     async def send_text(self, text: str) -> None:
         self.last_bubble_seen = False
-        editor = await self.page.query_selector(CHAT_EDITOR)
+        editor = await self.page.query_selector(_s.CHAT_EDITOR)
         if editor is None:
             raise DomChangedError("未找到消息输入框")
         await editor.click()
@@ -394,14 +383,14 @@ class DouyinChat:
                 self.last_bubble_seen = False
 
     async def editor_is_cleared(self) -> bool:
-        element = await self.page.query_selector(CHAT_EDITOR)
+        element = await self.page.query_selector(_s.CHAT_EDITOR)
         if element is None:
             return True
         text = await element.inner_text()
         return not (_BLANK_RE.sub("", text or ""))
 
     async def failure_marker_visible(self) -> bool:
-        for selector in SEND_FAILURE_MARKERS:
+        for selector in _s.SEND_FAILURE_MARKERS:
             if await self.page.query_selector(selector) is not None:
                 return True
         return False
@@ -441,7 +430,7 @@ class DouyinChat:
 
     async def _click_upload_trigger(self) -> None:
         if hasattr(self.page, "locator"):
-            locator = self.page.locator(IMAGE_UPLOAD_TRIGGER).first
+            locator = self.page.locator(_s.IMAGE_UPLOAD_TRIGGER).first
             if await locator.count():
                 await locator.click(force=True)
                 return
@@ -451,7 +440,7 @@ class DouyinChat:
     async def _click_dialog_send(self) -> None:
         """点击上传确认弹窗里的「发送」按钮。"""
         if hasattr(self.page, "locator"):
-            for selector in IMAGE_DIALOG_SEND:
+            for selector in _s.IMAGE_DIALOG_SEND:
                 locator = self.page.locator(selector).first
                 try:
                     if await locator.count() and await locator.is_visible():
@@ -486,7 +475,7 @@ class DouyinChat:
     async def _trigger_send(self) -> None:
         """优先点发布按钮，Enter 兜底（与文本发送一致）。"""
         if hasattr(self.page, "locator"):
-            for selector in SEND_BUTTONS:
+            for selector in _s.SEND_BUTTONS:
                 locator = self.page.locator(selector).first
                 try:
                     if await locator.count() and await locator.is_visible():

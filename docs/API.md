@@ -342,3 +342,36 @@ password, cookie, token, storageState, profilePath
 - 日期幂等按账号配置时区计算；
 - 当前 API 不代表真实抖音执行能力已经实现；
 - 不要在请求、日志、Issue 或截图中粘贴真实账号凭据。
+
+## 9. Selector Bundle 热更新
+
+> 抖音页面可随时改版。选择器已外置为 `app/execution/selectors_bundle.json`（运行时唯一来源），编辑后调用重载即可生效，**无需重启后端进程**。
+
+### 9.1 查询当前 selector bundle
+
+- **请求 URL**：`/selectors`
+- **请求方式**：GET
+- **返回**：当前 bundle 全量快照（纯选择器字符串/字符串数组，不含任何凭据）。
+
+```json
+{
+  "file_path": "D:/Workspace/Flame Contractor/backend/app/execution/selectors_bundle.json",
+  "count": 16,
+  "loaded_mtime": 1724820000.0,
+  "selectors": {
+    "CHAT_EDITOR": "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
+    "SEND_BUTTONS": ["[class*=\"messageMsgInputpublishBtn\"]", ".e2e-send-msg-bt"]
+  }
+}
+```
+
+### 9.2 强制重载 selector bundle
+
+- **接口说明**：立即重新读取 `selectors_bundle.json` 并刷新进程内快照。bundle 本身还会在每次访问时惰性检查 mtime，因此本端点仅为「立刻、显式」刷新提供入口。
+- **请求 URL**：`/selectors/reload`
+- **请求方式**：POST
+- **返回**：重载后的 bundle 全量快照（同 9.1）。
+
+### 安全边界
+
+本组端点**只读**当前 bundle / **触发重载**；不接收任何凭据或脚本。选择器 JSON 中只允许字符串与字符串数组字段，避免注入任意对象。改版后必须真机复核。

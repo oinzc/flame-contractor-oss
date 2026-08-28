@@ -83,6 +83,18 @@ FLAME_BARK_URL=https://api.day.app/<你的device_key>
 
 未配置时通知自动跳过，调度照常运行。
 
+## Selector 热更新（M5）
+
+抖音页面随时可能改版，选择器（`app/execution/selectors_bundle.json`）已外置为 **JSON bundle**，运行时惰性检测文件 mtime——页面改版时只需编辑该 JSON（或调接口重载），**无需重启后端进程**，即将到达的登录/定位/发送会自动用新选择器。
+
+```powershell
+# 查看当前 bundle / 强制重载（编辑 selectors_bundle.json 后调用）
+curl http://127.0.0.1:8000/api/selectors
+curl -X POST http://127.0.0.1:8000/api/selectors/reload
+```
+
+安全约定不变：无把握的 selector 宁可记 unknown 不误发；改版后必须真实 E2E 复核。
+
 ## 测试与构建
 
 ```powershell
@@ -104,8 +116,9 @@ npm run build                              # 生产构建
 - ✅ 异常通知（Bark：登录失效/发送中断/结果未确认主动推送）；
 - ✅ 图片模板发送（点附件图标→选图→确认弹窗发送，实机验证）；
 - ✅ 火花天数手动校准（本地累计 + 手动校正入口）；
+- ✅ selector bundle 热更新（页面改版改 `selectors_bundle.json` 即热生效，无需重启进程）；
 - ✅ 凭据字段在任何 API 中一律拒绝（不接收 Cookie/密码/Token）；
-- ⏳ 原生表情、selector 热更、通知补渠道（钉钉/邮件）。
+- ⏳ 原生表情、通知补渠道（钉钉/邮件）。
 
 ## 安全约定
 
