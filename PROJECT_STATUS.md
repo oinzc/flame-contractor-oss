@@ -1,11 +1,11 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-27 | 由 DeepSeek Harness Agent 更新 | HEAD = `226ee6e`
+> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | HEAD = `18d9115`
 
 ## 当前状态
-**M4 已完成并通过后端测试 + 端到端验证**：自动每日调度发送接入——每账号窗口内随机取时、账号级租约互斥、崩溃恢复（中间态转 unknown 不自动重发）、可控暂停，复用 M3 已验证的 `run_send` 发送链路。**异常推送（Bark）也已接入**。
+**M4（自动调度）+ 异常推送（Bark）已完成**，**M5 图片发送也已完成**。当前能力：自动每日续火、异常推送、图片发送、火花天数手动校准，全部实机验证通过。
 
-**下一目标（M5）**：原生表情/图片、selector 热更新、火花天数手动校准（见下方决策说明）。
+**M5 剩余项**：selector 热更新、通知补渠道（钉钉/邮件）、原生表情发送（photo 已做，原生 sticky 未做）。
 
 **火花天数说明（已实机核实）**：`streak_days` 为本地累计值（发送成功 +1），**非抖音实时读取**。参考 ScriptCat-Douyin-Fire-Helper 同样采用"本地记录 + 每日 +1 + 手动调整"，抖音网页版不提供稳定、对所有好友都存在的火花天数 DOM（oinzc 会话实测无火花提示，且火花文案格式多变、类名被多会话共用，DOM 读取会串行误读，违背"宁可不发不错发"边界）。
 
@@ -37,6 +37,17 @@
 - 新增 `app/api/scheduler.py`：`GET /api/scheduler`（状态+今日计划）、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
 
+### M5 图片发送 + 火花校准（HEAD `18d9115`）
+- **图片模板**：`TemplateType` 新增 `IMAGE` + `MessageTemplate.image_path`（Alembic 迁移 `a0737c65f237`，仅加列不重建表）。前端模板页支持选文本/图片 + 图片路径。
+- **图片发送链路**（参考 unmev/douyin-auto-fire，实机验证）：
+  - 当前抖音聊天版发图流程是「点附件图标 `.semi-upload-add` → 唤起 filechooser → 选图 → 弹出「发送给 xx」确认弹窗 → 点弹窗内「发送」」。
+  - `send_image` 用 `expect_file_chooser` + `set_files` 注入 + 点确认弹窗发送。
+  - **兼容 DOM 改版**：新增 selector `IMAGE_UPLOAD_TRIGGER`/`IMAGE_DIALOG_SEND`。
+- **图片终态确认**：`_confirm_send` 图片分支轮询 `image_bubble_confirmed` —— 发送前统计非头像图片数（`_count_non_avatar_images`），发送后要求数量增加才判成功，防历史图片误判。实机验证：图片真实发出且记 succeeded。
+- **火花天数手动校准**：`PATCH /api/targets/{id}` 仅改 `streakDays`（`TargetPatch`），参考 ScriptCat"手动调整"；好友列表「校准」按钮。
+- **Bark 通知**：`app/notifications.py`，异常推送（登录失效/发送中断/部分未确认）；`FLAME_BARK_URL` 环境变量配置，`trust_env=False` 绕过 SOCKS 代理。
+- 前端：DashboardPage「自动调度」卡片 + 模板页图片类型 + 好友页火花校准按钮。
+
 ## 关键技术决策
 - 登录态存于持久 Profile；登录检测=会话列表出现；身份确认=右侧标题严格等值，存疑即 ambiguous 不发。
 - 同账号浏览器流程互斥（登录/Dry Run/发送）；`unknown_requires_review` 禁止当日自动重发。
@@ -46,6 +57,7 @@
 - SQLite 读出的 datetime 为 naive：调度器内统一用 `_utc_naive` 归一化后再比较，避免 aware/naive 比较错误。
 - 迁移替换 create_all；真实运行与测试均走 `alembic upgrade head`。
 - **火花天数 = 本地累计（`streak_days` 发送成功 +1），非抖音实时读取**：抖音网页版不提供稳定、对所有好友存在的火花天数 DOM；参考 ScriptCat-Douyin-Fire-Helper（本地记录+每日+1+手动调整）。DOM 读取已实机验证不可靠（误读风险 > 收益），放弃。
+- **图片确认 = 发送前后非头像图片数量锚定**：图片气泡出现有延迟，且会话里头像图片会污染「contentBox 有 img」判断。`image_bubble_confirmed` 发送前记非头像图片数，发送后要求数量增加才判成功，规避历史图片误判，绝不把头像/旧图当成功。
 - 不加载任何反检测脚本；验证码与风控仅本人处理。
 
 ## 当前核心代码结构
@@ -70,10 +82,11 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **49 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度：生成/窗口随机/到期触发/账号失效不派发/partial→unknown/租约过期恢复/中间态 job 恢复/暂停/端到端经 run_send 真实发送） |
+| 后端 pytest | **62 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |
+| **图片真实发送 E2E** | 绑定图片模板真实发图：图片气泡出现（base64 非头像图），`SEND_RESULT=succeeded`、`IMG_BUBBLE_CONFIRMED=True`；确认逻辑不误判成功 |
 
 ## 已知问题 / 边界
 - 发送/定位的 DOM 选择器依赖抖音当前页面结构（`selectors.py`），页面改版可能失效；`SendConfirmer` 在无可靠信号时记 unknown 而非误判成功，是安全设计。
@@ -86,10 +99,11 @@ frontend/src/
 
 ## 尝试过但失败的方案
 - **火花天数 DOM 读取（已放弃）**：尝试从抖音会话页读取真实火花天数，结论是不可靠——火花提示只在会话列表项的特定标签里出现、文案随状态变化（为你恢复 N 天火花 / 重燃中 N/M / 已连续 N 天）、不是每个好友都有（oinzc 实测无提示），且类名被多会话共用、抓整页会串行误读。读错天数发给好友比不读更糟，违背"宁可不发不错发"。采纳参考项目 ScriptCat 的"本地累计 + 手动调整"做法。
+- **图片发送旧实现（已替换）**：旧 `send_image` 直接找 `input[type=file]` 注入后点编辑器发布按钮 —— 但当前抖音聊天版发图是「点附件图标 → 选图 → 确认弹窗「发送」」，旧实现导致图发不出。实机验证改用确认弹窗发送后才真正发出。
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-1. **M5 增强**：原生表情/图片发送、selector 热更新、通知补充渠道（钉钉/邮件）、火花天数手动校准（参考 ScriptCat，提供手动校正入口）。
+1. **M5 剩余**：selector bundle 热更新（页面改版快速适配，不重启改 selector）、通知补充渠道（钉钉/邮件）、原生表情发送（原生 sticker，非图片）。
 2. 若转多用户/远程：加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
 
 ## 应急运维工具（backend/scripts，实机排查用）
