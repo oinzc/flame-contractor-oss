@@ -2,7 +2,7 @@
 
 > 你与它立下契约，每日以一言续之，焰不可熄。
 
-本机优先的多账号抖音续火控制台。当前进度：**M4 已完成** —— 控制平面、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复，以及**自动每日调度发送**全部就绪，并在真实账号上验证通过。
+本机优先的多账号抖音续火控制台。当前进度：**M5 已完成** —— 控制平面、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复、自动每日调度、图片/原生表情发送、异常通知、selector 热更新全部就绪，并在真实账号上验证通过。
 
 ## 目录结构
 
@@ -103,6 +103,10 @@ curl -X POST http://127.0.0.1:8000/api/selectors/reload
 - 参考 unmev/douyin-auto-fire 的 `send_douyin_sticker()`；选择器已纳入 `selectors_bundle.json`，页面改版可通过热更新适配。
 - 真机排查工具：`backend/scripts/probe_sticker.py`（只定位不发，核对表情选择器）、`backend/scripts/probe_sticker_send.py`（真实发送一次）。默认账号为 oinzc。
 
+## 自动调度真机验证（M4）
+
+`backend/scripts/probe_scheduler_e2e.py` 会给指定账号创建一个已到期的当日计划，调用真实 `Scheduler.tick()`，等待 `BrowserManager.run_send` 完成，再核对 `SendSchedule` 与 `SendJob` 的终态。该脚本会真实发送消息，只能在确认后运行；验证完成后应恢复测试模板绑定。
+
 ## 测试与构建
 
 ```powershell
@@ -114,8 +118,10 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-## 当前能力边界
+- 后端 pytest 当前为 **77 passed**；
+- 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
+## 当前能力边界
 - ✅ 账号/好友/消息模板管理；仪表盘聚合、账号启停、受控模板变量；
 - ✅ Alembic 迁移 + 每日幂等唯一约束；
 - ✅ 扫码登录（独立 Profile + 状态轮询）与定位校验（严格匹配、绝不发送）；

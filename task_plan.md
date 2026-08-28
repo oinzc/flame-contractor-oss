@@ -1,7 +1,7 @@
 # Task Plan: Flame Contractor — M4 + M5 全部完成
 
 ## Goal
-M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送均已实机验证完成。通知渠道经评估**只保留 Bark**（不扩钉钉/邮件）。**M5 里程碑达成**。
+M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送均已实机验证完成。通知渠道经评估**只保留 Bark**（不扩钉钉/邮件）。**M5 里程碑达成**；完整自动调度真机 E2E 也已通过。
 
 ## Next Step
 M5 已全部完成。后续仅当转多用户/远程时，再加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
@@ -25,7 +25,8 @@ Phase 完成（M5 达成）
 - `app/main.py` lifespan 挂载 `AsyncIOScheduler`，执行器复用 `browser_manager.run_send`；`requirements.txt` 加 `apscheduler>=3.10,<4`。
 - `app/api/scheduler.py`：`GET /api/scheduler`、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
-- **验证**：后端 pytest 49 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
+- **验证**：后端 pytest 77 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
+- **完整真机 E2E**：到期计划 → `Scheduler.tick()` 派发 1 个账号 → `BrowserManager.run_send` 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 tick `dispatched=0` 且不调用发送执行器。
 
 ## M5 子阶段
 ### Phase 1: 通知适配器
@@ -39,7 +40,8 @@ Phase 完成（M5 达成）
 - [x] selector bundle 热更新（页面改版快速适配）。
 - [x] **火花天数手动校准**（`PATCH /api/targets/{id}` + 好友页「校准」按钮；不 DOM 读取）。
 ### Phase 4: 验收与交接
-- [x] 后端测试 62 passed；前端 build；图片/E2E 实机验证通过。
+- [x] 后端测试 77 passed；前端 build；图片/原生表情 E2E 实机验证通过。
+- [x] 完整自动调度真机 E2E：到期计划 → `tick` 派发 1 个账号 → 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 `tick` `dispatched=0` 且不调用发送执行器。
 - [x] 更新 PROJECT_STATUS / task_plan / docs。
 
 ## M4 关键技术决策
@@ -50,7 +52,7 @@ Phase 完成（M5 达成）
 - 调度器为进程内内存循环（APScheduler），持久调度语义由 `SendSchedule` 表承载。
 
 ## 复用 Success Criteria 参考（M3 保持）
-- 后端 pytest **62 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded。
+- 后端 pytest **77 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

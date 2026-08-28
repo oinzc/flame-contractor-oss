@@ -1,6 +1,6 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | HEAD = `0249a38`
+> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | M5 收尾验证已完成
 
 ## 当前状态
 **M4（自动调度）+ 异常推送（Bark）+ 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送，M5 全部达成**。当前能力：自动每日续火、异常推送、图片/表情发送、火花天数手动校准、页面改版不重启适配选择器。
@@ -36,6 +36,7 @@
 - 部署：`requirements.txt` 追加 `apscheduler>=3.10,<4`。
 - 新增 `app/api/scheduler.py`：`GET /api/scheduler`（状态+今日计划）、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
+- **完整真机 E2E**：到期计划由 `Scheduler.tick()` 派发 1 个账号，`BrowserManager.run_send` 真实发送并确认，最终 `SendSchedule.succeeded` + 对应 `SendJob.succeeded`；再次 `tick()` 返回 `dispatched=0` 且不调用发送执行器。
 
 ### M5 图片发送 + 火花校准（HEAD `18d9115`）
 - **图片模板**：`TemplateType` 新增 `IMAGE` + `MessageTemplate.image_path`（Alembic 迁移 `a0737c65f237`，仅加列不重建表）。前端模板页支持选文本/图片 + 图片路径。
@@ -87,8 +88,9 @@ backend/app/
   scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
+                   probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
 frontend/src/
   App.tsx(顶栏导航+页面切换+全局刷新+scheduler 状态)、components/DashboardPage/AccountsPage/
@@ -102,6 +104,7 @@ frontend/src/
 | 后端 pytest | **77 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载；4=原生表情：模板校验/匹配发送成功/找不到表情失败/无气泡不判成功；4=登录检测：轮询直到渲染/永不渲染超时/延迟渲染发送成功/仍未渲染判过期） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
+| 端到端自动调度真机 E2E | 到期计划 → `Scheduler.tick()` 派发 1 个账号 → 真实 `run_send` 发送与终态确认；计划 `succeeded`、任务 `succeeded`；再次 tick `dispatched=0` 且未调用发送执行器 |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |
 | **图片真实发送 E2E** | 绑定图片模板真实发图：图片气泡出现（base64 非头像图），`SEND_RESULT=succeeded`、`IMG_BUBBLE_CONFIRMED=True`；确认逻辑不误判成功 |
 | **原生表情真实发送 E2E** | 绑定「比心」表情模板真实发送：oinzc 会话 exact=True，`SEND_STICKER OK`、`last_bubble_seen=True`、`IMAGE_BUBBLE_CONFIRMED=True` |
@@ -122,7 +125,7 @@ frontend/src/
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-1. **M5 已全部完成**（自动调度/Bark/图片/火花校准/selector 热更/原生表情）。通知补渠道（钉钉/邮件）经评估**不扩**——仅 Bark 即满足无人值守异常推送。若转多用户/远程：加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
+1. **M5 已全部完成**（自动调度/Bark/图片/火花校准/selector 热更/原生表情）。通知补渠道（钉钉/邮件）经评估**不扩**——仅 Bark 即满足无人值守异常推送。
 2. 若转多用户/远程：加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
 
 ## 应急运维工具（backend/scripts，实机排查用）
