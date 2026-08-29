@@ -82,6 +82,8 @@ class AccountRead(APIBase):
     send_window_end: str
     last_verified_at: datetime | None
     last_success_at: datetime | None
+    # 登录成功后读到的抖音身份昵称（与 display_name 的对照）
+    douyin_nickname: str | None = None
     created_at: datetime
     updated_at: datetime
 

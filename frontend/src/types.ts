@@ -68,6 +68,8 @@ export interface Account {
   sendWindowEnd: string
   lastVerifiedAt: string | null
   lastSuccessAt: string | null
+  /** 登录成功后读到的抖音身份昵称（与平台标签 display_name 的对照） */
+  douyinNickname: string | null
   createdAt: string
   updatedAt: string
 }
