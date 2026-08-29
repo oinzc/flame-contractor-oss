@@ -39,9 +39,15 @@ from .notifications import Notifier, NullNotifier
 DEFAULT_LEASE_SECONDS = 5.0
 # 触发后发给 run_send 的软超时（后台任务不管，仅用于租约判断），与 run_send 内部超时无关
 DEFAULT_RUN_TIMEOUT = 180.0
-# 失败重试退避基数（秒），指数退避
+# 失败重试退避基数（秒），指数退避：60s, 120s, ...
 RETRY_BACKOFF_BASE = 60.0
 RETRY_MAX_COUNT = 2
+# 网络不可用时每轮延迟重试的基数（秒）
+NETWORK_DEFERRAL_BACKOFF = 60.0
+# 网络不可用最多连续延迟次数，超过则终态失败并通知
+NETWORK_MAX_DEFERRALS = 5
+# 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰）；dispatch=到点即发（旧行为）
+WINDOW_EXPIRY_POLICY_DEFAULT = "skip"
 
 # 可继续调度/重排的状态
 _RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
@@ -67,6 +73,9 @@ class Scheduler:
         run_timeout: float = DEFAULT_RUN_TIMEOUT,
         retry_max_count: int = RETRY_MAX_COUNT,
         retry_backoff_base: float = RETRY_BACKOFF_BASE,
+        network_max_deferrals: int = NETWORK_MAX_DEFERRALS,
+        network_deferral_backoff: float = NETWORK_DEFERRAL_BACKOFF,
+        window_expiry_policy: str = WINDOW_EXPIRY_POLICY_DEFAULT,
         rng: random.Random | None = None,
         sleep=asyncio.sleep,
         clock: Callable[[], datetime] | None = None,
@@ -80,6 +89,9 @@ class Scheduler:
         self._run_timeout = run_timeout
         self._retry_max_count = retry_max_count
         self._retry_backoff_base = retry_backoff_base
+        self._network_max_deferrals = network_max_deferrals
+        self._network_deferral_backoff = network_deferral_backoff
+        self._window_expiry_policy = window_expiry_policy
         self._rng = rng or random.Random()
         self._sleep = sleep
         self._clock = clock or utc_now
@@ -88,6 +100,12 @@ class Scheduler:
         self._task: asyncio.Task | None = None
         self._send_tasks: set[asyncio.Task] = set()
         self._stopping = False
+        # M6-2 重试/延迟状态（进程内）：重启即清零，重新计数；
+        # 发送幂等由 SendJob 唯一键兜底，重复派发不会导致重复发送。
+        self._retries: dict[str, int] = {}
+        self._next_attempt_at: dict[str, datetime] = {}
+        self._network_deferrals: dict[str, int] = {}
+        self._gave_up: set[str] = set()
 
     @property
     def enabled(self) -> bool:
@@ -198,11 +216,13 @@ class Scheduler:
             )
         self.generate_due_schedules(now)
 
-        # 到点且可派发的计划（pending；失败重试下次由独立规则处理）
+        # 到点且可派发的计划（pending + failed 重试）
         with Session(self._engine) as session:
             due = session.exec(
                 select(SendSchedule).where(
-                    SendSchedule.status == ScheduleStatus.PENDING,
+                    SendSchedule.status.in_(
+                        [ScheduleStatus.PENDING, ScheduleStatus.FAILED]
+                    )
                 )
             ).all()
 
@@ -210,6 +230,11 @@ class Scheduler:
         for schedule in due:
             if self._stopping:
                 break
+            if schedule.id in self._gave_up:
+                continue  # 重试已耗尽，保持终态
+            next_at = self._next_attempt_at.get(schedule.id)
+            if next_at is not None and now < next_at:
+                continue  # 退避窗口内，未到下次尝试时间
             scheduled_at = self._utc_naive(schedule.scheduled_at)
             if scheduled_at is None or scheduled_at > now:
                 continue
@@ -223,6 +248,16 @@ class Scheduler:
                 # 账号状态不允许（未登录/失效/风控）：不派发，留待人工/后续轮次
                 self._release(schedule.id)
                 continue
+            if self._window_expiry_policy == "skip" and self._window_expired(account):
+                self._finalize(schedule.id, ScheduleStatus.SKIPPED, "窗口已结束，未派发")
+                self._clear_retry_state(schedule.id)
+                await self._notify(
+                    "今日发送窗口已结束",
+                    f"账号「{self._account_name(account.id)}」的今日计划未能在窗口内完成，已跳过；"
+                    "如需补发请在控制台手动发送。",
+                    "timeSensitive",
+                )
+                continue
             dispatched += 1
             self._spawn_send(schedule.id, schedule.account_id)
         return {"dispatched": dispatched}
@@ -231,6 +266,11 @@ class Scheduler:
         # 只允许明确可发的健康账号；其余（含 auth_expired/verification/dom_broken）由人工接管
         return account.status == AccountStatus.HEALTHY
 
+    def _window_expired(self, account: Account) -> bool:
+        """当前账号本地时间是否已过发送窗口终点。"""
+        _, end_dt = self._window_for(account)
+        return self._clock().astimezone(ZoneInfo(account.timezone)) >= end_dt
+
     def _load_account(self, account_id: str) -> Account | None:
         with Session(self._engine) as session:
             return session.get(Account, account_id)
@@ -238,12 +278,12 @@ class Scheduler:
     # ---------------------------------------------------------------- 租约
 
     def _try_lease(self, schedule_id: str, now: datetime) -> bool:
-        """条件更新抢占租约：仅当仍是 pending 且租约未过期时置为 leased。"""
+        """条件更新抢占租约：仅当仍是 pending/failed（重试）且租约未过期时置为 leased。"""
         with Session(self._engine) as session:
             row = session.get(SendSchedule, schedule_id)
             if row is None:
                 return False
-            if row.status != ScheduleStatus.PENDING:
+            if row.status not in (ScheduleStatus.PENDING, ScheduleStatus.FAILED):
                 return False
             lease_expires = self._utc_naive(row.lease_expires_at)
             if lease_expires is not None and lease_expires > now:
@@ -259,7 +299,10 @@ class Scheduler:
     def _release(self, schedule_id: str) -> None:
         with Session(self._engine) as session:
             row = session.get(SendSchedule, schedule_id)
-            if row is not None and row.status == ScheduleStatus.LEASED:
+            if row is not None and row.status in (
+                ScheduleStatus.LEASED,
+                ScheduleStatus.SENDING,
+            ):
                 row.status = ScheduleStatus.PENDING
                 row.lease_owner = None
                 row.lease_expires_at = None
@@ -347,27 +390,104 @@ class Scheduler:
             result = await asyncio.wait_for(
                 self._send_account(account_id), timeout=self._run_timeout
             )
-            self._finalize_from_result(schedule_id, result)
-            await self._notify_from_result(account_id, result)
+            await self._handle_result(schedule_id, account_id, result)
         except asyncio.CancelledError:
             # 进程内取消（如 stop()）：转 unknown_requires_review 待核
             self._finalize(schedule_id, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW, "调度被取消")
             raise
         except Exception as exc:
-            self._finalize(schedule_id, ScheduleStatus.FAILED, type(exc).__name__)
-            await self._notify("调度发送异常", self._account_name(account_id), "errors")
+            await self._handle_failure(
+                schedule_id, account_id, overall="error", detail=type(exc).__name__
+            )
         finally:
             self._running.discard(account_id)
 
-    async def _notify_from_result(self, account_id: str, result: dict) -> None:
+    async def _handle_result(self, schedule_id: str, account_id: str, result: dict) -> None:
         overall = result.get("overall")
+        if overall == "ok":
+            self._finalize(schedule_id, ScheduleStatus.SUCCEEDED, None)
+            self._clear_retry_state(schedule_id)
+            return
+        if overall == "network_unavailable":
+            await self._defer_network(schedule_id, account_id)
+            return
+        await self._handle_failure(
+            schedule_id, account_id, overall=overall or "error", detail=overall
+        )
+
+    async def _handle_failure(
+        self, schedule_id: str, account_id: str, *, overall: str, detail: str | None
+    ) -> None:
+        """partial/error/执行异常：窗口内有限次指数退避重试，耗尽才转终态并通知。
+
+        重试复用 run_send 的幂等：已成功/unknown 的好友任务自动跳过，仅重试可重试项。
+        auth_expired 需人工重新登录，重试无意义，直接终态。
+        """
+        if overall == "auth_expired":
+            self._finalize(schedule_id, ScheduleStatus.FAILED, overall)
+            self._clear_retry_state(schedule_id)
+            await self._notify(
+                "账号登录失效",
+                f"账号「{self._account_name(account_id)}」登录已失效，请重新扫码登录以继续自动续火。",
+                "critical",
+            )
+            return
+        retries = self._retries.get(schedule_id, 0)
+        if retries < self._retry_max_count:
+            self._retries[schedule_id] = retries + 1
+            backoff = self._retry_backoff_base * (2**retries)
+            self._next_attempt_at[schedule_id] = self._utc_naive(
+                self._clock()
+            ) + timedelta(seconds=backoff)
+            self._release(schedule_id)
+            return
+        self._gave_up.add(schedule_id)
+        self._clear_retry_state(schedule_id)
         name = self._account_name(account_id)
         if overall == "partial":
-            await self._notify("部分好友结果未确认", f"账号「{name}」有好友发送结果未确认，请到任务记录人工核对。", "timeSensitive")
-        elif overall == "auth_expired":
-            await self._notify("账号登录失效", f"账号「{name}」登录已失效，请重新扫码登录以继续自动续火。", "critical")
-        elif overall == "error":
-            await self._notify("账号发送出错", f"账号「{name}」发送过程中出现错误，需人工处理。", "errors")
+            self._finalize(
+                schedule_id,
+                ScheduleStatus.UNKNOWN_REQUIRES_REVIEW,
+                "部分好友结果未确认（已重试仍未全部确认）",
+            )
+            await self._notify(
+                "部分好友结果未确认",
+                f"账号「{name}」有好友发送结果未确认（已含重试），请到任务记录人工核对。",
+                "timeSensitive",
+            )
+        else:
+            self._finalize(schedule_id, ScheduleStatus.FAILED, detail or overall)
+            await self._notify(
+                "账号发送出错",
+                f"账号「{name}」发送过程中出现错误（已重试仍未成功），需人工处理。",
+                "errors",
+            )
+
+    async def _defer_network(self, schedule_id: str, account_id: str) -> None:
+        """网络不可用：不消耗重试次数，延迟到下一轮再试；连续多次仍不可用则终态。"""
+        count = self._network_deferrals.get(schedule_id, 0) + 1
+        self._network_deferrals[schedule_id] = count
+        if count > self._network_max_deferrals:
+            self._gave_up.add(schedule_id)
+            self._clear_retry_state(schedule_id)
+            self._finalize(schedule_id, ScheduleStatus.FAILED, "网络持续不可用")
+            await self._notify(
+                "网络持续不可用",
+                f"账号「{self._account_name(account_id)}」因网络不可用连续 "
+                f"{self._network_max_deferrals + 1} 轮未能开始发送，今日计划已停止；"
+                "网络恢复后请在控制台手动补发。",
+                "errors",
+            )
+            return
+        self._release(schedule_id)
+        self._next_attempt_at[schedule_id] = self._utc_naive(
+            self._clock()
+        ) + timedelta(seconds=self._network_deferral_backoff)
+
+    def _clear_retry_state(self, schedule_id: str) -> None:
+        self._retries.pop(schedule_id, None)
+        self._next_attempt_at.pop(schedule_id, None)
+        self._network_deferrals.pop(schedule_id, None)
 
     def _account_name(self, account_id: str) -> str:
         with Session(self._engine) as session:
@@ -379,17 +499,6 @@ class Scheduler:
             await self._notifier.send(title, content, level)
         except Exception:  # noqa: BLE001 - 通知失败不影响调度主流程
             pass
-
-    def _finalize_from_result(self, schedule_id: str, result: dict) -> None:
-        overall = result.get("overall")
-        if overall == "ok":
-            self._finalize(schedule_id, ScheduleStatus.SUCCEEDED, None)
-        elif overall == "partial":
-            # 部分成功/未确认：既不误判成功也不自动重发 → 待人工核
-            self._finalize(schedule_id, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW, "部分好友结果未确认")
-        else:
-            # auth_expired / error
-            self._finalize(schedule_id, ScheduleStatus.FAILED, overall or "error")
 
     def _finalize(self, schedule_id: str, status: ScheduleStatus, error: str | None) -> None:
         with Session(self._engine) as session:

@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     bark_url: str | None = None
     # artifacts 诊断产物保留天数（失败截图/工件 JSON），0 表示永不过期
     artifact_retention_days: int = 30
+    # 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰，默认）；dispatch=到点即发
+    window_expiry_policy: str = "skip"
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",

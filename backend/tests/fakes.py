@@ -362,6 +362,10 @@ def make_factory(pages: list[FakePage]):
 def make_app(settings, pages: list[FakePage]):
     engine = build_engine(settings.database_url)
     run_migrations(settings.database_url)
+
+    async def _online() -> bool:
+        return True  # 测试默认网络可用（真实探测由 BrowserManager._default_network_ok 实现）
+
     manager = BrowserManager(
         engine,
         settings,
@@ -374,6 +378,7 @@ def make_app(settings, pages: list[FakePage]):
         send_stabilize_polls=2,
         confirm_timeout=0.2,
         search_timeout=0.2,
+        network_checker=_online,
         sleep=lambda _seconds: asyncio.sleep(0),
     )
     return create_app(settings, browser_manager=manager)

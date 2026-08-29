@@ -42,6 +42,7 @@ def create_app(
                 settings,
                 send_account=browser_manager.run_send,
                 notifier=BarkNotifier(base_url=settings.bark_url),
+                window_expiry_policy=settings.window_expiry_policy,
             )
             sched.start()
         app.state.scheduler = sched

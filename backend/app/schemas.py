@@ -282,7 +282,7 @@ class SendTargetResultRead(APIBase):
 
 class SendRead(APIBase):
     account_id: str
-    overall: Literal["ok", "partial", "auth_expired", "error"]
+    overall: Literal["ok", "partial", "auth_expired", "error", "network_unavailable"]
     detail: str | None = None
     results: list[SendTargetResultRead]
     artifact_path: str | None = None
