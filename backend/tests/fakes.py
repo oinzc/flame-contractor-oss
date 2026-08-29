@@ -1,6 +1,7 @@
 """测试用假浏览器实现：只覆盖 DouyinChat 使用到的页面协议。"""
 
 import asyncio
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -118,6 +119,15 @@ class FakePage:
         self.sticker_button_available = sticker_button_available
         self.sticker_panel_available = sticker_panel_available
         self.sticker_clicked = None
+        self.url = "https://www.douyin.com/chat"
+        self.screenshots: list[str] = []
+
+    async def screenshot(self, path=None, full_page=False, **kwargs):
+        """记录截图调用并落一个占位文件（诊断截图路径断言用）。"""
+        self.screenshots.append(str(path) if path else None)
+        if path:
+            Path(path).write_bytes(b"fake-png")
+        return path
 
     async def goto(self, url: str) -> None:
         self.gotos.append(url)

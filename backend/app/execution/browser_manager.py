@@ -26,6 +26,7 @@ from ..models import (
 from .douyin_chat import DomChangedError, DouyinChat, Sticker
 from .message_renderer import render_message
 from .profile_store import ensure_profile_dir
+from .selectors import bundle_digest
 from .send_confirmer import SendConfirmer
 
 LOGIN_CHECK_TIMEOUT = 8.0
@@ -109,6 +110,37 @@ class BrowserManager:
             confirm_timeout=self._confirm_timeout,
             search_timeout=self._search_timeout,
         )
+
+    # ------------------------------------------------------------ diagnostics
+
+    def _diagnostics_meta(self) -> dict[str, str]:
+        """诊断工件的版本标识：定位改版问题时先对版本。"""
+        return {
+            "app_version": self._settings.version,
+            "bundle_digest": bundle_digest(),
+        }
+
+    async def _capture_shot(self, chat: DouyinChat, account_id: str, label: str) -> str | None:
+        """失败/未确认时的现场截图，存 artifacts/<账号>/shots/。
+
+        截图属诊断核心功能，但绝不能因截图失败影响发送主流程：任何异常吞掉并返回 None。
+        """
+        page = getattr(chat, "page", None)
+        if page is None:
+            return None
+        try:
+            directory = self._settings.artifacts_dir / account_id / "shots"
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{_utcnow():%Y%m%d-%H%M%S}-{label}.png"
+            await page.screenshot(path=str(path), full_page=False)
+            return str(path)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _page_url(chat: DouyinChat) -> str | None:
+        url = getattr(getattr(chat, "page", None), "url", None)
+        return url if isinstance(url, str) else None
 
     # ------------------------------------------------------------ browser
 
@@ -344,6 +376,7 @@ class BrowserManager:
             "overall": overall,
             "detail": detail,
             "finished_at": _utcnow().isoformat(),
+            "meta": self._diagnostics_meta(),
             "targets": [
                 {
                     "target": item.target,
@@ -383,6 +416,7 @@ class BrowserManager:
         overall = "ok"
         detail: str | None = None
         context = None
+        diagnostics: dict | None = None
         try:
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
@@ -394,6 +428,11 @@ class BrowserManager:
                 self._mark_auth_expired(account_id)
                 overall = "auth_expired"
                 detail = "登录已失效，请重新扫码"
+                diagnostics = {
+                    "stage": "auth_expired",
+                    "screenshot": await self._capture_shot(chat, account_id, "auth_expired"),
+                    "page_url": self._page_url(chat),
+                }
             else:
                 business_date = datetime.now(ZoneInfo(account.timezone)).date()
                 for target in targets:
@@ -411,7 +450,9 @@ class BrowserManager:
                 except Exception:
                     pass
 
-        artifact_path = self._write_send_artifact(account_id, overall, detail, results)
+        artifact_path = self._write_send_artifact(
+            account_id, overall, detail, results, diagnostics=diagnostics
+        )
         return {
             "account_id": account_id,
             "overall": overall,
@@ -479,6 +520,7 @@ class BrowserManager:
 
         opened = await chat.open_conversation(nickname)
         if not opened.opened:
+            screenshot = await self._capture_shot(chat, account.id, "target_not_found")
             self._finalize_send(
                 job.id, target.id, account.id,
                 status=JobStatus.FAILED_TERMINAL, failure=FailureClass.TARGET_UNCERTAIN,
@@ -486,8 +528,10 @@ class BrowserManager:
             )
             return {"target": nickname, "status": "not_found",
                     "failure_class": FailureClass.TARGET_UNCERTAIN.value,
-                    "detail": "会话列表中未找到该好友", "message": message}
+                    "detail": "会话列表中未找到该好友", "message": message,
+                    "screenshot": screenshot, "page_url": self._page_url(chat)}
         if not opened.exact:
+            screenshot = await self._capture_shot(chat, account.id, "target_ambiguous")
             self._finalize_send(
                 job.id, target.id, account.id,
                 status=JobStatus.FAILED_TERMINAL, failure=FailureClass.TARGET_UNCERTAIN,
@@ -496,7 +540,8 @@ class BrowserManager:
             return {"target": nickname, "status": "ambiguous",
                     "failure_class": FailureClass.TARGET_UNCERTAIN.value,
                     "detail": f"右侧标题为「{opened.title}」，与好友名不一致",
-                    "message": message}
+                    "message": message,
+                    "screenshot": screenshot, "page_url": self._page_url(chat)}
 
         attempt_no = self._record_attempt(job.id)
         try:
@@ -514,6 +559,7 @@ class BrowserManager:
             else:
                 await chat.send_text(message)
         except DomChangedError:
+            screenshot = await self._capture_shot(chat, account.id, "dom_changed")
             self._finalize_send(
                 job.id, target.id, account.id,
                 status=JobStatus.FAILED_RETRYABLE, failure=FailureClass.DOM_CHANGED,
@@ -521,8 +567,10 @@ class BrowserManager:
             )
             return {"target": nickname, "status": "failed_retryable",
                     "failure_class": FailureClass.DOM_CHANGED.value,
-                    "detail": "页面结构变化，未找到输入框", "message": message}
+                    "detail": "页面结构变化，未找到输入框", "message": message,
+                    "screenshot": screenshot, "page_url": self._page_url(chat)}
         except Exception as exc:
+            screenshot = await self._capture_shot(chat, account.id, "send_error")
             self._finalize_send(
                 job.id, target.id, account.id,
                 status=JobStatus.FAILED_RETRYABLE, failure=FailureClass.OTHER,
@@ -530,10 +578,16 @@ class BrowserManager:
             )
             return {"target": nickname, "status": "failed_retryable",
                     "failure_class": FailureClass.OTHER.value,
-                    "detail": type(exc).__name__, "message": message}
+                    "detail": type(exc).__name__, "message": message,
+                    "screenshot": screenshot, "page_url": self._page_url(chat)}
 
         self._update_job_status(job.id, JobStatus.CONFIRMING)
         outcome = await self._confirm_send(chat, template_type)
+
+        screenshot: str | None = None
+        if outcome != "succeeded":
+            label = "unknown_outcome" if outcome == "unknown_requires_review" else "confirm_failed"
+            screenshot = await self._capture_shot(chat, account.id, label)
 
         outcome_map = {
             "succeeded": (JobStatus.SUCCEEDED, None, True),
@@ -567,7 +621,8 @@ class BrowserManager:
         )
         return {"target": nickname, "status": outcome,
                 "failure_class": failure.value if failure else None,
-                "detail": upgrade_detail, "message": message}
+                "detail": upgrade_detail, "message": message,
+                "screenshot": screenshot, "page_url": self._page_url(chat)}
 
     async def _confirm_send(self, chat: DouyinChat, template_type: TemplateType) -> str:
         """发送后的终态确认。
@@ -723,6 +778,7 @@ class BrowserManager:
         overall: str,
         detail: str | None,
         results: list[dict],
+        diagnostics: dict | None = None,
     ) -> Path:
         directory = self._settings.artifacts_dir / account_id
         directory.mkdir(parents=True, exist_ok=True)
@@ -732,6 +788,8 @@ class BrowserManager:
             "overall": overall,
             "detail": detail,
             "finished_at": _utcnow().isoformat(),
+            "meta": self._diagnostics_meta(),
+            "diagnostics": diagnostics,
             "results": results,
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

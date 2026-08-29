@@ -275,6 +275,9 @@ class SendTargetResultRead(APIBase):
     failure_class: FailureClass | None = None
     detail: str | None = None
     message: str | None = None
+    # M6-1 诊断字段：失败/未确认时的现场截图与当时页面 URL
+    screenshot: str | None = None
+    page_url: str | None = None
 
 
 class SendRead(APIBase):

@@ -25,6 +25,7 @@ dr-190/ScriptCat-Douyin-Fire-Helper、2061360308/DouYinSparkFlow），
 本项目不做任何浏览器指纹伪装。
 """
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -179,6 +180,18 @@ class _Bundle:
         self._reload()
         return dict(self._values)
 
+    def digest(self) -> str:
+        """当前 bundle 内容摘要（前 12 位十六进制），用于诊断工件标识选择器版本。
+
+        以 bundle 文件字节为准；文件缺失时退化为对内存值的规范化序列化取摘要。
+        """
+        self._reload()
+        try:
+            payload = self.path.read_bytes()
+        except OSError:
+            payload = json.dumps(self._values, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()[:12]
+
 
 # 进程内单例
 _bundle = _Bundle()
@@ -192,6 +205,11 @@ def current(name: str):
 def all_selectors() -> dict[str, object]:
     """返回当前 bundle 全量快照。"""
     return _bundle.as_dict()
+
+
+def bundle_digest() -> str:
+    """当前 selector bundle 的内容摘要（诊断工件用，标识选择器版本）。"""
+    return _bundle.digest()
 
 
 def reload_bundle(*, force: bool | None = None) -> dict[str, object]:

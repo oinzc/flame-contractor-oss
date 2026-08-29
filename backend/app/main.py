@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.health import router as health_router
 from .api.router import api_router
+from .core.artifacts import prune_old_artifacts
 from .core.config import Settings, get_settings
 from .core.database import build_engine
 from .core.migrations import run_migrations
@@ -28,6 +29,11 @@ def create_app(
         app.state.engine = engine
         app.state.browser_manager = browser_manager
         run_migrations(settings.database_url)
+        # 启动时清理过期诊断产物（保守策略：仅删文件，失败不阻断启动）
+        try:
+            prune_old_artifacts(settings.artifacts_dir, settings.artifact_retention_days)
+        except Exception:
+            pass
         # 调度器：发送执行器复用 browser_manager.run_send（账号级批量、幂等、终态确认）
         sched = scheduler
         if sched is None:
