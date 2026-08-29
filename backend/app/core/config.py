@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     artifact_retention_days: int = 30
     # 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰，默认）；dispatch=到点即发
     window_expiry_policy: str = "skip"
+    # 成功汇总推送：自动发送完成后推送「今日续焰完成 N/M」（Bark）
+    notify_on_success: bool = True
+    # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断
+    failure_streak_limit: int = 3
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",

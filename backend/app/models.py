@@ -82,6 +82,9 @@ class Account(SQLModel, table=True):
     send_window_end: str = Field(default="22:00", max_length=5)
     last_verified_at: datetime | None = None
     last_success_at: datetime | None = None
+    # M6-3 连续失败计数：每次自动发送终态失败（含重试耗尽）+1，成功清零；
+    # 达到阈值（FLAME_FAILURE_STREAK_LIMIT，默认 3）账号转 cooldown 熔断，需人工介入
+    failure_streak: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

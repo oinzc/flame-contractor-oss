@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.execution.browser_manager import BrowserManager
-from app.models import ScheduleStatus, SendJob
+from app.models import AccountStatus, ScheduleStatus, SendJob
 from app.scheduler import Scheduler
 from tests.fakes import FakePage, create_account, make_app
 from tests.test_diagnostics import _account_with_target
@@ -89,6 +89,7 @@ def test_error_retries_then_succeeds(engine):
 
     sched, _ = _due_scheduler(
         engine, clock, send_account=send, notifier=notifier, retry_backoff_base=0,
+        notify_on_success=False,
     )
     asyncio.run(sched.tick())
     asyncio.run(sched.wait_idle())
@@ -254,3 +255,135 @@ def _make_account_with_two_targets(engine, settings) -> object:
             )
         session.commit()
     return account
+
+
+# ---------------------------------------------------------------- M6-3 熔断与成功推送
+
+
+def _set_streak(engine, account_id: str, streak: int) -> None:
+    from app.models import Account as AccountModel
+
+    with Session(engine) as session:
+        acc = session.get(AccountModel, account_id)
+        acc.failure_streak = streak
+        session.add(acc)
+        session.commit()
+
+
+def test_success_resets_streak_and_pushes_digest(engine):
+    """发送成功：连续失败清零，并推送「今日续焰完成 N/M」。"""
+    clock = make_clock(datetime(2026, 8, 27, 14, 30, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {
+            "overall": "ok",
+            "results": [
+                {"target": "好友A", "status": "succeeded"},
+                {"target": "好友B", "status": "duplicate_succeeded"},
+            ],
+        }
+
+    sched, account = _due_scheduler(
+        engine, clock, send_account=send, notifier=notifier,
+        window_expiry_policy="dispatch",
+    )
+    _set_streak(engine, account.id, 2)
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    from app.models import Account as AccountModel
+
+    with Session(engine) as session:
+        acc = session.get(AccountModel, account.id)
+        assert acc.failure_streak == 0
+        assert acc.status == AccountStatus.HEALTHY
+    digest = [item for item in notifier.sent if item[0] == "今日续焰完成"]
+    assert len(digest) == 1
+    assert "2/2" in digest[0][1]
+
+
+def test_success_digest_can_be_disabled(engine):
+    clock = make_clock(datetime(2026, 8, 27, 14, 30, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "ok", "results": [{"target": "好友A", "status": "succeeded"}]}
+
+    sched, _ = _due_scheduler(
+        engine, clock, send_account=send, notifier=notifier, notify_on_success=False,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert notifier.sent == []
+
+
+def test_failure_increments_streak(engine):
+    clock = make_clock(datetime(2026, 8, 27, 14, 30, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        raise RuntimeError("boom")
+
+    sched, account = _due_scheduler(
+        engine, clock, send_account=send, notifier=notifier,
+        retry_max_count=0, retry_backoff_base=0, notify_on_success=False,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    from app.models import Account as AccountModel
+
+    with Session(engine) as session:
+        acc = session.get(AccountModel, account.id)
+        assert acc.failure_streak == 1
+        assert acc.status == AccountStatus.HEALTHY  # 未达阈值不熔断
+
+
+def test_streak_reaches_limit_cooldowns_account(engine):
+    """连续失败达到阈值：账号转 cooldown 熔断并推送 critical 通知。"""
+    clock = make_clock(datetime(2026, 8, 27, 14, 30, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        raise RuntimeError("boom")
+
+    sched, account = _due_scheduler(
+        engine, clock, send_account=send, notifier=notifier,
+        retry_max_count=0, retry_backoff_base=0, notify_on_success=False,
+        failure_streak_limit=3,
+    )
+    _set_streak(engine, account.id, 2)  # 本次失败即达 3
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    from app.models import Account as AccountModel
+
+    with Session(engine) as session:
+        acc = session.get(AccountModel, account.id)
+        assert acc.failure_streak == 3
+        assert acc.status == AccountStatus.COOLDOWN
+    assert any("熔断" in title for title, _, _ in notifier.sent)
+    assert any(item[2] == "critical" for item in notifier.sent)
+
+
+def test_cooldown_account_not_dispatched(engine):
+    """cooldown 账号不被派发（_account_ready 只放行 healthy）。"""
+    make_account(engine, status=AccountStatus.COOLDOWN)
+    clock = make_clock(datetime(2026, 8, 27, 14, 30, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine, None, send_account=send, clock=clock, sleep=asyncio.sleep,
+        loop_interval=0, window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert calls == []
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.PENDING
