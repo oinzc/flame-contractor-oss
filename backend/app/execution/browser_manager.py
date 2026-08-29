@@ -54,6 +54,8 @@ class LoginFlow:
     state: str = "waiting_scan"
     detail: str | None = None
     task: asyncio.Task | None = None
+    # M8-4 截图扫码登录：headless 登录页截图的落盘路径
+    qr_image: str | None = None
 
 
 @dataclass
@@ -87,6 +89,8 @@ class BrowserManager:
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
         send_cooldown: float = 3.0,
         network_checker: Callable[[], Awaitable[bool]] | None = None,
+        qr_login_timeout: float = 300.0,
+        qr_screenshot_interval: float = 6.0,
         confirm_timeout: float = 8.0,
         search_timeout: float = 12.0,
         sleep=asyncio.sleep,
@@ -106,6 +110,8 @@ class BrowserManager:
         self._search_timeout = search_timeout
         self._send_cooldown = send_cooldown
         self._network_checker = network_checker
+        self._qr_login_timeout = qr_login_timeout
+        self._qr_screenshot_interval = qr_screenshot_interval
         self._sleep = sleep
 
     def _make_chat(self, page) -> DouyinChat:
@@ -265,6 +271,93 @@ class BrowserManager:
             account.last_verified_at = _utcnow()
             session.add(account)
             session.commit()
+
+    # -------------------------------------------------------- M8-4 截图扫码登录
+
+    async def start_qr_login(self, account_id: str) -> dict[str, str | None]:
+        """headless 截图扫码登录：headless 渲染登录页（有头黑屏环境的替代路径），
+        定时把整页截图落盘，由前端轮询图片展示给用户扫描；登录判据与正式发送
+        链路完全一致（wait_logged_in）。"""
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="该账号已有登录流程进行中")
+        profile_path = ensure_profile_dir(self._settings, account_id)
+        flow = LoginFlow(account_id=account_id)
+        self._flows[account_id] = flow
+        flow.task = asyncio.create_task(self._qr_login_flow(flow, profile_path))
+        return self._login_view(flow)
+
+    def qr_login_status(self, account_id: str) -> dict[str, str | None]:
+        view = self.login_status_sync(account_id)
+        view["qr_image"] = self.qr_image_path(account_id)
+        return view
+
+    def login_status_sync(self, account_id: str) -> dict[str, str | None]:
+        flow = self._flows.get(account_id)
+        if flow is None:
+            return {"state": "idle", "detail": None}
+        return self._login_view(flow)
+
+    def qr_image_path(self, account_id: str) -> str | None:
+        flow = self._flows.get(account_id)
+        if flow is not None and flow.qr_image:
+            return flow.qr_image
+        existing = self._settings.artifacts_dir / account_id / "login" / "login-qr.png"
+        return str(existing) if existing.exists() else None
+
+    async def _qr_login_flow(
+        self, flow: LoginFlow, profile_path: Path
+    ) -> None:
+        context = None
+        try:
+            flow.state = "waiting_scan"
+            context, page = await self._open(profile_path, headless=True)
+            chat = DouyinChat(page, sleep=self._sleep)
+            await chat.open_chat_page()
+
+            async def take_qr_shot() -> None:
+                try:
+                    directory = self._settings.artifacts_dir / flow.account_id / "login"
+                    directory.mkdir(parents=True, exist_ok=True)
+                    target_path = directory / "login-qr.png"
+                    await page.screenshot(path=str(target_path), full_page=False)
+                    flow.qr_image = str(target_path)
+                except Exception:
+                    pass  # 截图失败不影响登录检测
+
+            # 先同步截一帧：保证「等待扫码」期间二维码必然已可展示
+            await take_qr_shot()
+
+            async def shoot() -> None:
+                while True:
+                    await take_qr_shot()
+                    await self._sleep(self._qr_screenshot_interval)
+
+            shooter = asyncio.create_task(shoot())
+            try:
+                logged_in = await chat.wait_logged_in(
+                    timeout=self._qr_login_timeout,
+                    poll_interval=self._login_poll_interval,
+                )
+            finally:
+                shooter.cancel()
+            if not logged_in:
+                flow.state = "expired"
+                flow.detail = "等待扫码超时，请重新发起"
+                return
+            flow.state = "succeeded"
+            self._mark_healthy(flow.account_id)
+        except asyncio.CancelledError:
+            flow.state = "idle"
+            raise
+        except Exception as exc:
+            flow.state = "failed"
+            flow.detail = type(exc).__name__
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
 
     def _mark_auth_expired(self, account_id: str) -> None:
         with Session(self._engine) as session:

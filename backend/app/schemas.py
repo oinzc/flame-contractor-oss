@@ -252,6 +252,8 @@ LoginState = Literal["idle", "waiting_scan", "succeeded", "failed", "expired"]
 class LoginStatusRead(APIBase):
     state: LoginState
     detail: str | None = None
+    # M8-4 截图扫码登录：二维码截图落盘路径（仅 QR 登录端点附带）
+    qr_image: str | None = None
 
 
 class DryRunTargetRead(APIBase):
