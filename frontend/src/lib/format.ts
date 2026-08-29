@@ -84,16 +84,22 @@ export const SCHEDULE_STATUS_TONES: Record<ScheduleStatus, Tone> = {
   cancelled: 'default',
 }
 
+/** 后端 SQLite 存 naive UTC（无时区后缀）；按 UTC 解析成本地 Date。 */
+export function parseBackendTime(value: string): Date {
+  if (/[Zz]|[+-]\d{2}:?\d{2}$/.test(value)) return new Date(value)
+  return new Date(`${value}Z`)
+}
+
 export function formatDateTime(value: string | null): string {
   if (!value) return '—'
-  const date = new Date(value)
+  const date = parseBackendTime(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 export function formatTimeHM(value: string | null): string {
   if (!value) return '—'
-  const date = new Date(value)
+  const date = parseBackendTime(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleTimeString('zh-CN', { hour12: false })
 }
