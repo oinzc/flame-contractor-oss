@@ -72,7 +72,11 @@ npm run dev
 
 - 账号登录失效（`auth_expired`）；
 - 调度发送中断 / 结果未确认（`unknown_requires_review`）；
-- 部分好友结果未确认、发送异常。
+- 部分好友结果未确认、发送异常；
+- 连续失败熔断（M6：连续 N 天失败自动暂停该账号调度）；
+- 网络持续不可用、发送窗口已结束计划被跳过（M6）。
+
+默认开启**成功汇总推送**：每天自动续火完成后推送「今日续焰完成 N/M」（`FLAME_NOTIFY_ON_SUCCESS=0` 关闭）。
 
 配置：在 `backend/.env` 填入你的 Bark 设备地址（只存本机，不入库、不上传）：
 
@@ -82,6 +86,17 @@ FLAME_BARK_URL=https://api.day.app/<你的device_key>
 ```
 
 未配置时通知自动跳过，调度照常运行。
+
+## 可靠性机制（M6）
+
+- **失败诊断截图**：发送失败/结果未确认/找不到好友时自动截图存 `artifacts/<账号>/shots/`，工件 JSON 记录页面 URL 与 selector bundle 版本摘要，人工复核不再靠猜；
+- **网络预检**：离线时不开浏览器、不消耗当日任务（每 60s 延迟重试，连续 5 轮不可用才终态失败并通知）；
+- **有界重试**：发送异常/部分失败在窗口内指数退避自动重试（默认 2 次），复用发送幂等，绝不重复发送；重试耗尽才转人工核；
+- **发送冷却**：好友之间默认间隔 3 秒；
+- **窗口过期策略**：`FLAME_WINDOW_EXPIRY_POLICY=skip`（默认）——窗口已结束的计划不再深夜补发，转 skipped 并通知；`dispatch` 恢复到点即发；
+- **连续失败熔断**：`FLAME_FAILURE_STREAK_LIMIT`（默认 3）——连续 N 次终态失败自动暂停该账号调度（cooldown）并 critical 推送；
+- **开机自启**：`scripts\autostart\install_autostart.bat` 一键把启动脚本装入当前用户「启动」文件夹，登录即拉起前后端（详见 `scripts/autostart/README.md`）；
+- **artifacts 保留期**：`FLAME_ARTIFACT_RETENTION_DAYS`（默认 30，0 永久）启动时自动清理过期诊断产物。
 
 ## Selector 热更新（M5）
 
