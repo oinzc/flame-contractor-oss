@@ -1,7 +1,7 @@
 from datetime import date
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models import (
     Account,
@@ -109,6 +109,178 @@ def test_template_validation(client):
 
     duplicate = client.post("/api/templates", json={"name": "每日一言", "content": "重复"})
     assert duplicate.status_code == 409
+
+
+def test_patch_template_text(client):
+    """文本模板编辑：改内容 bump version，只改名字不 bump；重名 409；清空内容 422。"""
+    template = client.post(
+        "/api/templates", json={"name": "每日一言", "content": "早上好"}
+    ).json()
+
+    renamed = client.patch(f"/api/templates/{template['id']}", json={"name": "早安问候"})
+    assert renamed.status_code == 200, renamed.text
+    body = renamed.json()
+    assert body["name"] == "早安问候"
+    assert body["content"] == "早上好"
+    assert body["version"] == 1  # 只改名字不影响发送内容
+
+    recented = client.patch(
+        f"/api/templates/{template['id']}", json={"content": "晚安，{{target_name}}"}
+    )
+    body = recented.json()
+    assert body["content"] == "晚安，{{target_name}}"
+    assert body["version"] == 2  # 内容变化 → 当日幂等键随之变化
+
+    other = client.post("/api/templates", json={"name": "晚安", "content": "晚安"}).json()
+    dup = client.patch(f"/api/templates/{template['id']}", json={"name": "晚安"})
+    assert dup.status_code == 409
+    # 改名到自己的现名不算冲突
+    self_name = client.patch(f"/api/templates/{other['id']}", json={"name": "晚安"})
+    assert self_name.status_code == 200
+
+    empty = client.patch(f"/api/templates/{other['id']}", json={"content": "   "})
+    assert empty.status_code == 422  # 合并校验：文本模板内容不能为空
+
+    missing = client.patch("/api/templates/not-a-real-id", json={"name": "X"})
+    assert missing.status_code == 404
+
+
+def test_patch_template_enabled(client):
+    template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()
+    assert template["enabled"] is True
+
+    off = client.patch(f"/api/templates/{template['id']}", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["enabled"] is False
+    assert off.json()["version"] == 1  # 启停不影响发送内容
+
+    on = client.patch(f"/api/templates/{template['id']}", json={"enabled": True})
+    assert on.json()["enabled"] is True
+
+
+def test_patch_template_pool_replaces_items(client, engine):
+    """池候选整体替换：content 相同的候选继承 last_used_at；候选变化 bump version。"""
+    from datetime import datetime as dt
+
+    from sqlmodel import Session
+
+    from app.models import TemplatePoolItem
+
+    template = client.post(
+        "/api/templates",
+        json={
+            "name": "晚安池",
+            "type": "pool",
+            "poolItems": [
+                {"content": "晚安", "weekdayMask": 0},
+                {"content": "好梦", "weekdayMask": 0},
+            ],
+        },
+    ).json()
+    assert len(template["poolItems"]) == 2
+
+    with Session(engine) as session:
+        item = session.exec(
+            select(TemplatePoolItem).where(TemplatePoolItem.content == "晚安")
+        ).one()
+        item.last_used_at = dt(2026, 8, 1, 12, 0, 0)
+        session.add(item)
+        session.commit()
+
+    updated = client.patch(
+        f"/api/templates/{template['id']}",
+        json={
+            "poolItems": [
+                {"content": "晚安", "weekdayMask": 62},
+                {"content": "做个好梦", "weekdayMask": 0},
+                {"content": "早点休息", "weekdayMask": 0},
+            ]
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert [i["content"] for i in body["poolItems"]] == ["晚安", "做个好梦", "早点休息"]
+    assert body["poolItems"][0]["weekdayMask"] == 62
+    assert body["version"] == 2
+
+    with Session(engine) as session:
+        kept = session.exec(
+            select(TemplatePoolItem).where(TemplatePoolItem.content == "晚安")
+        ).one()
+        fresh = session.exec(
+            select(TemplatePoolItem).where(TemplatePoolItem.content == "做个好梦")
+        ).one()
+        assert kept.last_used_at is not None  # 同名候选继承轮换时间
+        assert fresh.last_used_at is None
+
+    # 仅把候选改成同一份内容不 bump version
+    same = client.patch(
+        f"/api/templates/{template['id']}",
+        json={
+            "poolItems": [
+                {"content": "晚安", "weekdayMask": 62},
+                {"content": "做个好梦", "weekdayMask": 0},
+                {"content": "早点休息", "weekdayMask": 0},
+            ]
+        },
+    )
+    assert same.json()["version"] == 2
+
+    # 清空候选 → 合并校验拒绝
+    cleared = client.patch(f"/api/templates/{template['id']}", json={"poolItems": []})
+    assert cleared.status_code == 422
+
+
+def test_delete_template(client, engine):
+    """无引用可删（池候选一并删除）；被好友绑定或任务引用时 409。"""
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    from app.models import SendJob, TemplatePoolItem
+
+    pool = client.post(
+        "/api/templates",
+        json={"name": "池", "type": "pool", "poolItems": [{"content": "嗨", "weekdayMask": 0}]},
+    ).json()
+    removed = client.delete(f"/api/templates/{pool['id']}")
+    assert removed.status_code == 204
+    with Session(engine) as session:
+        leftover = session.exec(
+            select(TemplatePoolItem).where(TemplatePoolItem.template_id == pool["id"])
+        ).all()
+        assert leftover == []  # 池候选随模板一起删除
+    assert client.delete(f"/api/templates/{pool['id']}").status_code == 404
+
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()
+
+    bound = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A", "templateId": template["id"]},
+    ).json()
+    blocked_by_target = client.delete(f"/api/templates/{template['id']}")
+    assert blocked_by_target.status_code == 409
+    client.delete(f"/api/targets/{bound['id']}")
+
+    job_template = client.post("/api/templates", json={"name": "T2", "content": "在吗"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友B"},
+    ).json()
+    with Session(engine) as session:
+        session.add(
+            SendJob(
+                account_id=account["id"],
+                target_id=target["id"],
+                template_id=job_template["id"],
+                business_date=date_cls.today(),
+                message_slot_id="slot",
+            )
+        )
+        session.commit()
+    blocked_by_job = client.delete(f"/api/templates/{job_template['id']}")
+    assert blocked_by_job.status_code == 409
 
 
 def test_target_requires_existing_account_and_template(client):

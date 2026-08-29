@@ -125,18 +125,30 @@ class TemplateCreate(APIBase):
             raise ValueError("模板名称不能为空")
         return value
 
-    @model_validator(mode="after")
-    def _validate_payload(self) -> "TemplateCreate":
-        if self.type == TemplateType.TEXT:
-            if not self.content.strip():
-                raise ValueError("文本模板内容不能为空")
-        elif self.type == TemplateType.IMAGE:
-            if not self.image_path or not self.image_path.strip():
-                raise ValueError("图片模板必须指定图片路径")
-        elif self.type == TemplateType.STICKER:
-            if not self.sticker_name or not self.sticker_name.strip():
-                raise ValueError("表情模板必须指定表情名称(stickerName)")
-        return self
+
+class TemplatePatch(APIBase):
+    """局部更新模板。type 不可改——要换类型请删除重建，避免字段语义混乱。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    content: str | None = Field(default=None, max_length=1000)
+    image_path: str | None = Field(default=None, max_length=500)
+    sticker_name: str | None = Field(default=None, max_length=64)
+    sticker_label: str | None = Field(default=None, max_length=64)
+    sticker_category: str | None = Field(default=None, max_length=32)
+    sticker_fallback_index: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    # 非 None 时整体替换文案池候选（无增量编辑，列表即真相）
+    pool_items: list[PoolItemIn] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("模板名称不能为空")
+        return value
 
 
 class TemplateRead(APIBase):

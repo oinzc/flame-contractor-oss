@@ -31,43 +31,120 @@ function previewContent(content: string): string {
     .replaceAll('{{date}}', today.toLocaleDateString('zh-CN'))
 }
 
+const EMPTY_FORM = {
+  name: '',
+  type: 'text' as 'text' | 'image' | 'sticker' | 'pool',
+  content: '',
+  imagePath: '',
+  stickerName: '',
+  stickerCategory: '',
+  poolItems: [{ content: '', weekdayMask: 0 }] as PoolDraft[],
+}
+
 export default function TemplatesPage({ templates, onChanged }: Props) {
-  const [name, setName] = useState('')
-  const [type, setType] = useState<'text' | 'image' | 'sticker' | 'pool'>('text')
-  const [content, setContent] = useState('')
-  const [imagePath, setImagePath] = useState('')
-  const [stickerName, setStickerName] = useState('')
-  const [stickerCategory, setStickerCategory] = useState('')
-  const [poolItems, setPoolItems] = useState<PoolDraft[]>([{ content: '', weekdayMask: 0 }])
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [name, setName] = useState(EMPTY_FORM.name)
+  const [type, setType] = useState(EMPTY_FORM.type)
+  const [content, setContent] = useState(EMPTY_FORM.content)
+  const [imagePath, setImagePath] = useState(EMPTY_FORM.imagePath)
+  const [stickerName, setStickerName] = useState(EMPTY_FORM.stickerName)
+  const [stickerCategory, setStickerCategory] = useState(EMPTY_FORM.stickerCategory)
+  const [poolItems, setPoolItems] = useState<PoolDraft[]>(EMPTY_FORM.poolItems)
   const [error, setError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  function resetForm() {
+    setEditingId(null)
+    setName(EMPTY_FORM.name)
+    setType(EMPTY_FORM.type)
+    setContent(EMPTY_FORM.content)
+    setImagePath(EMPTY_FORM.imagePath)
+    setStickerName(EMPTY_FORM.stickerName)
+    setStickerCategory(EMPTY_FORM.stickerCategory)
+    setPoolItems(EMPTY_FORM.poolItems)
+  }
+
+  function startEdit(template: MessageTemplate) {
+    setEditingId(template.id)
+    setName(template.name)
+    setType(template.type)
+    setContent(template.type === 'text' ? template.content : '')
+    setImagePath(template.type === 'image' ? (template.imagePath ?? '') : '')
+    setStickerName(template.type === 'sticker' ? (template.stickerName ?? '') : '')
+    setStickerCategory(template.type === 'sticker' ? (template.stickerCategory ?? '') : '')
+    setPoolItems(
+      template.type === 'pool' && template.poolItems.length > 0
+        ? template.poolItems.map((item) => ({ content: item.content, weekdayMask: item.weekdayMask }))
+        : [{ content: '', weekdayMask: 0 }],
+    )
+    setError(null)
+  }
+
+  async function handleToggleEnabled(template: MessageTemplate) {
+    const verb = template.enabled ? '停用' : '启用'
+    setListError(null)
+    try {
+      await api.patchTemplate(template.id, { enabled: !template.enabled })
+      onChanged()
+    } catch (err) {
+      setListError(err instanceof ApiError ? err.message : `${verb}失败，请重试`)
+    }
+  }
+
+  async function handleDelete(template: MessageTemplate) {
+    if (!window.confirm(`确定删除模板「${template.name}」？被好友绑定或任务引用的模板无法删除。`)) {
+      return
+    }
+    setListError(null)
+    try {
+      await api.deleteTemplate(template.id)
+      if (editingId === template.id) {
+        resetForm()
+      }
+      onChanged()
+    } catch (err) {
+      setListError(err instanceof ApiError ? err.message : '删除失败，请重试')
+    }
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
     setSubmitting(true)
     try {
-      await api.createTemplate({
-        name: name.trim(),
-        type,
-        content: type === 'text' ? content.trim() : '',
-        poolItems:
-          type === 'pool'
-            ? poolItems
-                .filter((item) => item.content.trim())
-                .map((item) => ({ content: item.content.trim(), weekdayMask: item.weekdayMask }))
-            : undefined,
-        imagePath: type === 'image' ? imagePath.trim() : undefined,
-        stickerName: type === 'sticker' ? stickerName.trim() : undefined,
-        stickerCategory:
-          type === 'sticker' && stickerCategory.trim() ? stickerCategory.trim() : undefined,
-      })
-      setName('')
-      setContent('')
-      setImagePath('')
-      setStickerName('')
-      setStickerCategory('')
-      setPoolItems([{ content: '', weekdayMask: 0 }])
+      if (editingId) {
+        await api.patchTemplate(editingId, {
+          name: name.trim(),
+          content: type === 'text' ? content.trim() : '',
+          imagePath: type === 'image' ? imagePath.trim() : '',
+          stickerName: type === 'sticker' ? stickerName.trim() : '',
+          stickerCategory: type === 'sticker' && stickerCategory.trim() ? stickerCategory.trim() : '',
+          poolItems:
+            type === 'pool'
+              ? poolItems
+                  .filter((item) => item.content.trim())
+                  .map((item) => ({ content: item.content.trim(), weekdayMask: item.weekdayMask }))
+              : undefined,
+        })
+      } else {
+        await api.createTemplate({
+          name: name.trim(),
+          type,
+          content: type === 'text' ? content.trim() : '',
+          poolItems:
+            type === 'pool'
+              ? poolItems
+                  .filter((item) => item.content.trim())
+                  .map((item) => ({ content: item.content.trim(), weekdayMask: item.weekdayMask }))
+              : undefined,
+          imagePath: type === 'image' ? imagePath.trim() : undefined,
+          stickerName: type === 'sticker' ? stickerName.trim() : undefined,
+          stickerCategory:
+            type === 'sticker' && stickerCategory.trim() ? stickerCategory.trim() : undefined,
+        })
+      }
+      resetForm()
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败，请重试')
@@ -75,6 +152,10 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
       setSubmitting(false)
     }
   }
+
+  const editingTemplate = editingId
+    ? templates.find((template) => template.id === editingId)
+    : null
 
   return (
     <div className="main-col">
@@ -89,6 +170,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
         <div className="card-head">
           <h2>模板列表（{templates.length}）</h2>
         </div>
+        {listError && <div className="form-error" style={{ marginBottom: 8 }}>{listError}</div>}
         {templates.length === 0 ? (
           <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
             还没有模板，用下面的表单创建第一个。
@@ -100,12 +182,20 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 <th>名称</th>
                 <th>内容</th>
                 <th>版本</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {templates.map((template) => (
                 <tr key={template.id}>
-                  <td style={{ whiteSpace: 'nowrap' }}>{template.name}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {template.name}
+                    {!template.enabled && (
+                      <span className="muted" style={{ marginLeft: 6, fontSize: 11.5 }}>
+                        （已停用）
+                      </span>
+                    )}
+                  </td>
                   <td style={{ maxWidth: 0, width: '100%' }}>
                     <div
                       style={{
@@ -125,6 +215,31 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                     </div>
                   </td>
                   <td className="mono">v{template.version}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      onClick={() => startEdit(template)}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      style={{ marginLeft: 6 }}
+                      onClick={() => handleToggleEnabled(template)}
+                    >
+                      {template.enabled ? '停用' : '启用'}
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      style={{ marginLeft: 6 }}
+                      onClick={() => handleDelete(template)}
+                    >
+                      删除
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -134,7 +249,12 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
 
       <section className="card">
         <div className="card-head">
-          <h2>新建模板</h2>
+          <h2>{editingId ? `编辑模板：${editingTemplate?.name ?? ''}` : '新建模板'}</h2>
+          {editingId && (
+            <button className="btn ghost small" type="button" onClick={resetForm}>
+              取消编辑
+            </button>
+          )}
         </div>
         <form className="form-grid" onSubmit={handleSubmit}>
           <div className="field-row">
@@ -154,6 +274,8 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
               <select
                 id="template-type"
                 value={type}
+                disabled={Boolean(editingId)}
+                title={editingId ? '类型不可修改，如需更换类型请删除后重建' : undefined}
                 onChange={(event) => setType(event.target.value as 'text' | 'image')}
               >
                 <option value="text">文本</option>
@@ -308,7 +430,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
           {error && <div className="form-error">{error}</div>}
           <div className="form-actions">
             <button className="btn primary small" type="submit" disabled={submitting}>
-              {submitting ? '保存中…' : '保存模板'}
+              {submitting ? '保存中…' : editingId ? '保存修改' : '保存模板'}
             </button>
           </div>
         </form>

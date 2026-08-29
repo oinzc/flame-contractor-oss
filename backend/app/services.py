@@ -31,6 +31,7 @@ from .schemas import (
     TargetPatch,
     TargetRead,
     TemplateCreate,
+    TemplatePatch,
     TemplateRead,
 )
 
@@ -139,6 +140,31 @@ def _validate_pool_items(items: list[PoolItemIn]) -> None:
             raise HTTPException(status_code=422, detail="weekday_mask 取值 0-127")
 
 
+def _validate_template_fields(
+    template_type: TemplateType,
+    *,
+    content: str,
+    image_path: str | None,
+    sticker_name: str | None,
+    pool_items: list[PoolItemIn] | None,
+) -> None:
+    """按模板类型校验内容字段。create 与 patch 共用，规则只此一份。"""
+    if template_type == TemplateType.TEXT:
+        if not content or not content.strip():
+            raise HTTPException(status_code=422, detail="文本模板内容不能为空")
+        _validate_template_content(content)
+    elif template_type == TemplateType.IMAGE:
+        if not image_path or not image_path.strip():
+            raise HTTPException(status_code=422, detail="图片模板必须指定图片路径")
+    elif template_type == TemplateType.STICKER:
+        if not sticker_name or not sticker_name.strip():
+            raise HTTPException(status_code=422, detail="表情模板必须指定表情名称(stickerName)")
+    elif template_type == TemplateType.POOL:
+        if not pool_items:
+            raise HTTPException(status_code=422, detail="文案池模板需要至少一条候选文案")
+        _validate_pool_items(pool_items)
+
+
 def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
     existing = session.exec(
         select(MessageTemplate).where(MessageTemplate.name == payload.name)
@@ -146,13 +172,13 @@ def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
     if existing:
         raise HTTPException(status_code=409, detail="模板名称已存在")
 
-    # 仅文本模板校验受控变量；图片模板无文本内容
-    if payload.type == TemplateType.TEXT:
-        _validate_template_content(payload.content)
-    if payload.type == TemplateType.POOL:
-        if not payload.pool_items:
-            raise HTTPException(status_code=422, detail="文案池模板需要至少一条候选文案")
-        _validate_pool_items(payload.pool_items)
+    _validate_template_fields(
+        payload.type,
+        content=payload.content,
+        image_path=payload.image_path,
+        sticker_name=payload.sticker_name,
+        pool_items=payload.pool_items,
+    )
 
     template = MessageTemplate.model_validate(payload)
     session.add(template)
@@ -181,6 +207,146 @@ def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
         ).all()
         read.pool_items = [PoolItemRead.model_validate(item) for item in items]
     return read
+
+
+def _replace_pool_items(
+    session: Session, template: MessageTemplate, items: list[PoolItemIn]
+) -> None:
+    """整体替换文案池候选。content 相同的候选继承 last_used_at，避免轮换节奏被打乱。"""
+    old_items = session.exec(
+        select(TemplatePoolItem).where(TemplatePoolItem.template_id == template.id)
+    ).all()
+    last_used_by_content = {item.content: item.last_used_at for item in old_items}
+    for item in old_items:
+        session.delete(item)
+    session.flush()
+    for item in items:
+        session.add(
+            TemplatePoolItem(
+                template_id=template.id,
+                content=item.content.strip(),
+                weekday_mask=item.weekday_mask,
+                enabled=item.enabled,
+                last_used_at=last_used_by_content.get(item.content.strip()),
+            )
+        )
+
+
+# 发送内容相关字段：任一变化都提升版本号，使当日幂等键变化、新文案可重新发送
+_TEMPLATE_CONTENT_FIELDS = (
+    "content",
+    "image_path",
+    "sticker_name",
+    "sticker_label",
+    "sticker_category",
+    "sticker_fallback_index",
+)
+
+
+def patch_template(session: Session, template_id: str, payload: TemplatePatch) -> TemplateRead:
+    template = session.get(MessageTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+
+    fields_set = payload.model_fields_set
+
+    if "name" in fields_set:
+        dup = session.exec(
+            select(MessageTemplate).where(MessageTemplate.name == payload.name)
+        ).first()
+        if dup and dup.id != template_id:
+            raise HTTPException(status_code=409, detail="模板名称已存在")
+
+    # 合并 patch 与库中现值，按模板类型整体校验（防止 patch 后模板进入无效状态）
+    merged_content = payload.content if "content" in fields_set else template.content
+    merged_image_path = payload.image_path if "image_path" in fields_set else template.image_path
+    merged_sticker_name = (
+        payload.sticker_name if "sticker_name" in fields_set else template.sticker_name
+    )
+    new_pool = payload.pool_items if "pool_items" in fields_set else None
+    merged_pool = new_pool
+    if merged_pool is None and template.type == TemplateType.POOL:
+        merged_pool = [
+            PoolItemIn(content=item.content, weekday_mask=item.weekday_mask, enabled=item.enabled)
+            for item in session.exec(
+                select(TemplatePoolItem)
+                .where(TemplatePoolItem.template_id == template.id)
+                .order_by(TemplatePoolItem.created_at)
+            ).all()
+        ]
+
+    _validate_template_fields(
+        template.type,
+        content=merged_content,
+        image_path=merged_image_path,
+        sticker_name=merged_sticker_name,
+        pool_items=merged_pool,
+    )
+
+    # 发送内容是否实际变化：变了才 bump version，使当日幂等键变化、新文案可重新发送
+    content_changed = any(
+        field in fields_set and getattr(payload, field) != getattr(template, field)
+        for field in _TEMPLATE_CONTENT_FIELDS
+    )
+    if template.type == TemplateType.POOL and new_pool is not None:
+        old_items = session.exec(
+            select(TemplatePoolItem).where(TemplatePoolItem.template_id == template.id)
+        ).all()
+        old_signature = sorted((i.content, i.weekday_mask, i.enabled) for i in old_items)
+        new_signature = sorted(
+            (i.content, i.weekday_mask, i.enabled) for i in new_pool
+        )
+        if old_signature != new_signature:
+            content_changed = True
+
+    if new_pool is not None:
+        _replace_pool_items(session, template, new_pool)
+    for field in fields_set:
+        if field == "pool_items":
+            continue
+        setattr(template, field, getattr(payload, field))
+    if content_changed:
+        template.version += 1
+    template.updated_at = utc_now()
+
+    session.add(template)
+    session.commit()
+    session.refresh(template)
+
+    read = TemplateRead.model_validate(template)
+    if template.type == TemplateType.POOL:
+        items = session.exec(
+            select(TemplatePoolItem)
+            .where(TemplatePoolItem.template_id == template.id)
+            .order_by(TemplatePoolItem.created_at)
+        ).all()
+        read.pool_items = [PoolItemRead.model_validate(item) for item in items]
+    return read
+
+
+def delete_template(session: Session, template_id: str) -> None:
+    template = session.get(MessageTemplate, template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+
+    target_refs = session.exec(
+        select(func.count(ContractTarget.id)).where(ContractTarget.template_id == template_id)
+    ).one()
+    job_refs = session.exec(
+        select(func.count(SendJob.id)).where(SendJob.template_id == template_id)
+    ).one()
+    if target_refs or job_refs:
+        raise HTTPException(
+            status_code=409,
+            detail=f"模板仍被 {target_refs} 个好友绑定、{job_refs} 条发送任务引用，不能删除；可改为停用",
+        )
+
+    for item in session.exec(
+        select(TemplatePoolItem).where(TemplatePoolItem.template_id == template_id)
+    ).all():
+        session.delete(item)
+    session.delete(template)
+    session.commit()
 
 
 # ---------------------------------------------------------------- targets
