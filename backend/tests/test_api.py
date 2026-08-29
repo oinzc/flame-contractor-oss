@@ -161,6 +161,25 @@ def test_delete_account(client, engine, settings):
     assert client.delete(f"/api/accounts/{account['id']}").status_code == 404
 
 
+def test_delete_account_cascades_schedules(client, engine):
+    """SendSchedule 是调度器每日派生数据，不拦截删除，随账号级联清除。"""
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    from app.models import SendSchedule
+
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    with Session(engine) as session:
+        session.add(SendSchedule(account_id=account["id"], business_date=date_cls.today()))
+        session.commit()
+
+    removed = client.delete(f"/api/accounts/{account['id']}")
+    assert removed.status_code == 204, removed.text
+    with Session(engine) as session:
+        assert session.exec(select(SendSchedule)).all() == []
+
+
 def test_template_validation(client):
     ok = client.post(
         "/api/templates",

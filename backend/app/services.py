@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, func, select
+from sqlmodel import Session, delete, func, select
 
 from .core.config import Settings
 from .execution.message_renderer import render_message
@@ -116,7 +116,11 @@ def patch_account(session: Session, account_id: str, payload: AccountPatch) -> A
 
 
 def delete_account(session: Session, account_id: str, settings: Settings) -> None:
-    """删除账号。被好友/任务/调度引用时拒绝；无引用物理删除并清理浏览器档案。"""
+    """删除账号。被好友/任务引用时拒绝；无引用物理删除并清理浏览器档案。
+
+    SendSchedule 是调度器每日自动生成的派生数据（非用户数据），随账号一并清除，
+    否则账号一经调度便永远无法删除。SendJob 是发送历史（审计数据），保留拦截。
+    """
     account = session.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -129,18 +133,16 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
     job_refs = session.exec(
         select(func.count(SendJob.id)).where(SendJob.account_id == account_id)
     ).one()
-    schedule_refs = session.exec(
-        select(func.count(SendSchedule.id)).where(SendSchedule.account_id == account_id)
-    ).one()
-    if target_refs or job_refs or schedule_refs:
+    if target_refs or job_refs:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"账号仍有 {target_refs} 个好友、{job_refs} 条发送任务、{schedule_refs} 条调度记录，"
-                "不能删除；可先停用账号"
+                f"账号仍有 {target_refs} 个好友、{job_refs} 条发送任务，不能删除；可先停用账号"
             ),
         )
 
+    session.execute(delete(SendSchedule).where(SendSchedule.account_id == account_id))
+    session.flush()
     session.delete(account)
     session.commit()
     remove_profile_dir(settings, account_id)
