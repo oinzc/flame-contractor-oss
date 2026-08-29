@@ -76,6 +76,8 @@ class Scheduler:
         network_max_deferrals: int = NETWORK_MAX_DEFERRALS,
         network_deferral_backoff: float = NETWORK_DEFERRAL_BACKOFF,
         window_expiry_policy: str = WINDOW_EXPIRY_POLICY_DEFAULT,
+        notify_on_success: bool = True,
+        failure_streak_limit: int = 3,
         rng: random.Random | None = None,
         sleep=asyncio.sleep,
         clock: Callable[[], datetime] | None = None,
@@ -92,6 +94,8 @@ class Scheduler:
         self._network_max_deferrals = network_max_deferrals
         self._network_deferral_backoff = network_deferral_backoff
         self._window_expiry_policy = window_expiry_policy
+        self._notify_on_success = notify_on_success
+        self._failure_streak_limit = failure_streak_limit
         self._rng = rng or random.Random()
         self._sleep = sleep
         self._clock = clock or utc_now
@@ -407,6 +411,8 @@ class Scheduler:
         if overall == "ok":
             self._finalize(schedule_id, ScheduleStatus.SUCCEEDED, None)
             self._clear_retry_state(schedule_id)
+            self._reset_failure_streak(account_id)
+            await self._notify_success(account_id, result)
             return
         if overall == "network_unavailable":
             await self._defer_network(schedule_id, account_id)
@@ -414,6 +420,58 @@ class Scheduler:
         await self._handle_failure(
             schedule_id, account_id, overall=overall or "error", detail=overall
         )
+
+    # ------------------------------------------------------------ M6-3 熔断/成功推送
+
+    async def _notify_success(self, account_id: str, result: dict) -> None:
+        """成功汇总推送：默认开启，让无人值守时「今天发完了」也有回音。"""
+        if not self._notify_on_success:
+            return
+        results = result.get("results") or []
+        total = len(results)
+        ok = sum(
+            1
+            for item in results
+            if item.get("status") in ("succeeded", "duplicate_succeeded")
+        )
+        await self._notify(
+            "今日续焰完成",
+            f"账号「{self._account_name(account_id)}」自动续火完成 {ok}/{total}。",
+            "active",
+        )
+
+    def _reset_failure_streak(self, account_id: str) -> None:
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is not None and account.failure_streak:
+                account.failure_streak = 0
+                session.add(account)
+                session.commit()
+
+    async def _register_failure(self, account_id: str) -> None:
+        """终态失败记账：累计连续失败；达到阈值转 cooldown 熔断并通知一次。"""
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                return
+            account.failure_streak = (account.failure_streak or 0) + 1
+            streak = account.failure_streak
+            crossed = (
+                self._failure_streak_limit > 0 and streak == self._failure_streak_limit
+            )
+            if crossed:
+                account.status = AccountStatus.COOLDOWN
+            account.updated_at = utc_now()
+            session.add(account)
+            session.commit()
+        if crossed:
+            await self._notify(
+                "连续失败已熔断",
+                f"账号「{self._account_name(account_id)}」已连续 "
+                f"{streak} 天自动发送失败，已暂停其自动调度（cooldown）；"
+                "请检查登录/页面结构后人工恢复。",
+                "critical",
+            )
 
     async def _handle_failure(
         self, schedule_id: str, account_id: str, *, overall: str, detail: str | None
@@ -426,6 +484,7 @@ class Scheduler:
         if overall == "auth_expired":
             self._finalize(schedule_id, ScheduleStatus.FAILED, overall)
             self._clear_retry_state(schedule_id)
+            await self._register_failure(account_id)
             await self._notify(
                 "账号登录失效",
                 f"账号「{self._account_name(account_id)}」登录已失效，请重新扫码登录以继续自动续火。",
@@ -450,6 +509,7 @@ class Scheduler:
                 ScheduleStatus.UNKNOWN_REQUIRES_REVIEW,
                 "部分好友结果未确认（已重试仍未全部确认）",
             )
+            await self._register_failure(account_id)
             await self._notify(
                 "部分好友结果未确认",
                 f"账号「{name}」有好友发送结果未确认（已含重试），请到任务记录人工核对。",
@@ -457,6 +517,7 @@ class Scheduler:
             )
         else:
             self._finalize(schedule_id, ScheduleStatus.FAILED, detail or overall)
+            await self._register_failure(account_id)
             await self._notify(
                 "账号发送出错",
                 f"账号「{name}」发送过程中出现错误（已重试仍未成功），需人工处理。",
@@ -471,6 +532,7 @@ class Scheduler:
             self._gave_up.add(schedule_id)
             self._clear_retry_state(schedule_id)
             self._finalize(schedule_id, ScheduleStatus.FAILED, "网络持续不可用")
+            await self._register_failure(account_id)
             await self._notify(
                 "网络持续不可用",
                 f"账号「{self._account_name(account_id)}」因网络不可用连续 "
