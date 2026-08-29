@@ -33,6 +33,11 @@ erDiagram
     string name UK
     string type
     text content
+    string image_path
+    string sticker_name
+    string sticker_label
+    string sticker_category
+    integer sticker_fallback_index
     integer version
     boolean enabled
     datetime created_at
@@ -118,9 +123,10 @@ erDiagram
 ### message_template
 
 - `name` 全局唯一；
-- `type` 骨架期固定为 `text`；
+- `type` 取值：`text` / `image` / `sticker`（M5 扩展）；`image` 需 `image_path`；
+  `sticker` 需 `sticker_name`（`sticker_label` / `sticker_category` / `sticker_fallback_index` 可选）；
 - `version >= 1`；
-- 内容只允许白名单变量，应用层验证。
+- 文本内容只允许白名单变量，应用层验证；无任何凭据字段。
 
 ### send_job
 
