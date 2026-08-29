@@ -1,243 +1,359 @@
-import type { ContractTarget, DashboardSummary, SchedulerStatus } from '../types'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
+import type { ContractTarget, DashboardSummary, SchedulerStatus, StatsSummary } from '../types'
 import {
   ATTENTION_ACCOUNT_HINTS,
   ATTENTION_ACCOUNT_STATUSES,
-  JOB_STATUS_LABELS,
-  JOB_STATUS_TONES,
   SCHEDULE_STATUS_LABELS,
-  SCHEDULE_STATUS_TONES,
-  formatDateTime,
   formatTimeHM,
+  parseBackendTime,
 } from '../lib/format'
-import StatusBadge from './StatusBadge'
 
 interface Props {
   summary: DashboardSummary
   targets: ContractTarget[]
   schedulerStatus: SchedulerStatus | null
+  now: Date
   onToggleScheduler: () => void
   onNavigate: (page: 'accounts' | 'targets' | 'jobs') => void
+}
+
+function hhmmToFraction(value: string): number {
+  const [hour, minute] = value.split(':').map(Number)
+  return (hour + minute / 60) / 24
+}
+
+function isoToFraction(value: string | null): number | null {
+  if (!value) return null
+  const date = parseBackendTime(value)
+  if (Number.isNaN(date.getTime())) return null
+  return (date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600) / 24
 }
 
 export default function DashboardPage({
   summary,
   targets,
   schedulerStatus,
+  now,
   onToggleScheduler,
   onNavigate,
 }: Props) {
+  const [stats, setStats] = useState<StatsSummary | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .statsSummary()
+      .then((payload) => {
+        if (!cancelled) setStats(payload)
+      })
+      .catch(() => {
+        /* 统计失败不打扰驾驶舱 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [summary])
+
   const enabledTargets = targets.filter((target) => target.enabled)
-  const progress = enabledTargets.length > 0 ? summary.todaySucceeded / enabledTargets.length : 0
-  const percent = Math.round(progress * 100)
+  const succeededToday = summary.todaySucceeded
+  const totalToday = Math.max(enabledTargets.length, 1)
+  const ledCount = Math.min(enabledTargets.length, 46)
+  const ledLit = Math.round((succeededToday / totalToday) * ledCount)
+  const nowFraction =
+    (now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600) / 24
   const attentionAccounts = summary.accounts.filter((account) =>
     ATTENTION_ACCOUNT_STATUSES.includes(account.status),
   )
+  const rankedTargets = [...targets].sort((a, b) => b.streakDays - a.streakDays)
+  const maxStreak = Math.max(1, ...targets.map((target) => target.streakDays))
+
+  const scheduleBands = summary.accounts.map((account) => ({
+    id: account.id,
+    start: hhmmToFraction(account.sendWindowStart),
+    end: hhmmToFraction(account.sendWindowEnd),
+  }))
+
+  const schedulePoints = (schedulerStatus?.todaySchedules ?? []).map((schedule) => ({
+    id: schedule.id,
+    fraction: isoToFraction(schedule.scheduledAt),
+    status: schedule.status,
+    name:
+      summary.accounts.find((account) => account.id === schedule.accountId)?.displayName ??
+      schedule.accountId.slice(0, 6),
+  }))
 
   return (
-    <>
-      <div className="main-col">
-        <div className="page-head">
-          <div>
-            <h1>总览</h1>
-            <p className="sub">账号、好友与今日任务的最新状态。</p>
+    <div className="bento board" style={{ margin: 18 }}>
+      {/* MOD·01 今日之焰 */}
+      <section className="mod mod-flame" aria-label="今日之焰">
+        <div className="mod-tag">
+          <span>MOD·01 今日之焰</span>
+          <span>TODAY</span>
+        </div>
+        <div className="flame-core">
+          <span className="flame-mark" aria-hidden="true">
+            🔥
+          </span>
+          <div className="flame-number">
+            {succeededToday}
+            <span className="of">/ {enabledTargets.length}</span>
+          </div>
+          <div className="flame-caption">
+            今日已续焰 · {summary.healthyAccountCount} 账号在编
+            {schedulerStatus?.paused ? ' · 调度已暂停' : ''}
+          </div>
+          <div className="led-strip" aria-hidden="true">
+            {Array.from({ length: ledCount }).map((_, index) => (
+              <span
+                key={index}
+                className={`led-cell${index < ledLit ? ' lit' : ''}`}
+                style={index < ledLit ? { animationDelay: `${index * 14}ms` } : undefined}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* MOD·02 24h 调度标尺 */}
+      <section className="mod mod-ruler" aria-label="24h 调度标尺">
+        <div className="mod-tag">
+          <span>MOD·02 调度标尺</span>
+          <span>24H</span>
+        </div>
+        <div className="ruler-wrap">
+          <div className="ruler">
+            {scheduleBands.map((band) => (
+              <div
+                key={band.id}
+                className="ruler-band"
+                style={{ left: `${band.start * 100}%`, width: `${(band.end - band.start) * 100}%` }}
+              />
+            ))}
+            {schedulePoints.map((point) =>
+              point.fraction === null ? null : (
+                <span
+                  key={point.id}
+                  className={`ruler-point ${
+                    point.status === 'succeeded'
+                      ? 'sent'
+                      : point.status === 'failed' || point.status === 'unknown_requires_review'
+                        ? 'failed'
+                        : point.status === 'skipped'
+                          ? 'skipped'
+                          : 'pending'
+                  }`}
+                  style={{ left: `${point.fraction * 100}%` }}
+                  title={`${point.name} · ${point.status}`}
+                />
+              ),
+            )}
+            <span className="ruler-now" style={{ left: `${nowFraction * 100}%` }} />
+          </div>
+          <div className="ruler-axis">
+            <span>00:00</span>
+            <span>06:00</span>
+            <span>12:00</span>
+            <span>18:00</span>
+            <span>24:00</span>
           </div>
         </div>
 
-        <div className="stat-group">
-          <div className="stat">
-            <div className="l">账号总数</div>
-            <div className="v">{summary.accountCount}</div>
-          </div>
-          <div className="stat">
-            <div className="l">正常账号</div>
-            <div className="v">{summary.healthyAccountCount}</div>
-          </div>
-          <div className="stat">
-            <div className="l">启用好友</div>
-            <div className="v">{summary.activeContractCount}</div>
-          </div>
-          <div className="stat">
-            <div className="l">今日已发送</div>
-            <div className="v hot">{summary.todaySucceeded}</div>
-          </div>
-        </div>
-
-        <section className="card">
-          <div className="card-head">
-            <h2>好友发送状态</h2>
-            <button className="link-btn" type="button" onClick={() => onNavigate('targets')}>
-              管理好友 →
-            </button>
-          </div>
-          {targets.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-              还没有好友。到「好友」页添加后，这里会显示每位好友的状态。
-            </p>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>好友</th>
-                  <th>火花天数</th>
-                  <th>上次确认发送</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {targets.map((target) => (
-                  <tr key={target.id}>
-                    <td>{target.nicknameSnapshot}</td>
-                    <td className="mono">{target.streakDays} 天</td>
-                    <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
-                    <td>
-                      <StatusBadge label={target.enabled ? '启用' : '暂停'} tone={target.enabled ? 'cyan' : 'default'} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-
-        <section className="card">
-          <div className="card-head">
-            <h2>最近任务</h2>
-            <button className="link-btn" type="button" onClick={() => onNavigate('jobs')}>
-              全部记录 →
-            </button>
-          </div>
-          {summary.recentJobs.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-              暂无任务记录。调度器接入后，这里会显示每次发送的状态与时间。
-            </p>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>任务号</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.recentJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td className="mono">{formatDateTime(job.updatedAt)}</td>
-                    <td className="mono">{job.messageSlotId}</td>
-                    <td>
-                      <StatusBadge
-                        label={JOB_STATUS_LABELS[job.status]}
-                        tone={JOB_STATUS_TONES[job.status]}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
-      </div>
-
-      <aside className="rail">
-        <section className="card">
-          <h2 style={{ margin: '0 0 10px', fontSize: 13.5, fontWeight: 600 }}>今日进度</h2>
-          <div className="progress-meta">
-            <span>
-              已发送 <b>{summary.todaySucceeded}</b> / {enabledTargets.length}
-            </span>
-            <span>{percent}%</span>
-          </div>
-          <div className="progress-bar">
-            <span style={{ width: `${percent}%` }} />
-          </div>
-          <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
-            节点对应启用中的好友，进度来自已确认发送的任务。
-          </p>
-        </section>
-
-        <section className="card">
-          <div className="card-head">
-            <h2 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>自动调度</h2>
-            <button
-              className={`btn small ${schedulerStatus?.paused ? '' : 'primary'}`}
-              type="button"
-              onClick={onToggleScheduler}
-              disabled={schedulerStatus === null}
-            >
-              {schedulerStatus?.paused ? '恢复自动调度' : '暂停自动调度'}
-            </button>
-          </div>
+        <div className="mini-rows">
           {schedulerStatus === null ? (
-            <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-              无法读取调度状态。
-            </p>
-          ) : (
-            <>
-              <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
-                {schedulerStatus.paused
-                  ? '已暂停：不会自动发送，手动发送仍可正常使用。'
-                  : '已开启：到点自动向启用好友发送。'}
-              </p>
-              {schedulerStatus.todaySchedules.length === 0 ? (
-                <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-                  今日暂无自动调度计划。
-                </p>
-              ) : (
-                <div style={{ display: 'grid', gap: 6 }}>
-                  {schedulerStatus.todaySchedules.map((schedule) => (
-                    <div className="rail-item" key={schedule.id}>
-                      <span className="t">
-                        {summary.accounts.find((a) => a.id === schedule.accountId)?.displayName ??
-                          schedule.accountId}
-                      </span>
-                      <span className="s">
-                        {formatTimeHM(schedule.scheduledAt)}
-                        <StatusBadge
-                          label={SCHEDULE_STATUS_LABELS[schedule.status]}
-                          tone={SCHEDULE_STATUS_TONES[schedule.status]}
-                        />
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {schedulerStatus.runningAccounts.length > 0 && (
-                <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
-                  正在发送中：{schedulerStatus.runningAccounts.join('、')}
-                </p>
-              )}
-            </>
-          )}
-        </section>
-
-        <section className="card">
-          <h2 style={{ margin: '0 0 10px', fontSize: 13.5, fontWeight: 600 }}>
-            待处理（{summary.needsAttention}）
-          </h2>
-          {attentionAccounts.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-              没有需要处理的事项。
-            </p>
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              {attentionAccounts.map((account) => (
-                <div className="rail-item" key={account.id}>
-                  <span className="t">{account.displayName}</span>
-                  <span className="s">{ATTENTION_ACCOUNT_HINTS[account.status]}</span>
-                </div>
-              ))}
+            <div className="mini-row">
+              <span className="name">无法读取调度状态</span>
             </div>
+          ) : schedulerStatus.todaySchedules.length === 0 ? (
+            <div className="mini-row">
+              <span className="name">今日暂无自动调度计划</span>
+              <span className="state idle">—</span>
+            </div>
+          ) : (
+            schedulerStatus.todaySchedules.map((schedule) => {
+              const name =
+                summary.accounts.find((account) => account.id === schedule.accountId)
+                  ?.displayName ?? schedule.accountId.slice(0, 6)
+              const stateClass =
+                schedule.status === 'succeeded'
+                  ? 'ok'
+                  : schedule.status === 'pending' || schedule.status === 'sending'
+                    ? 'warn'
+                    : schedule.status === 'skipped'
+                      ? 'idle'
+                      : 'bad'
+              return (
+                <div className="mini-row" key={schedule.id}>
+                  <span
+                    className={`lamp ${stateClass === 'ok' ? '' : stateClass === 'warn' ? '' : ''}`}
+                    style={{
+                      background:
+                        stateClass === 'ok'
+                          ? 'var(--flame)'
+                          : stateClass === 'warn'
+                            ? 'var(--amber)'
+                            : stateClass === 'bad'
+                              ? 'var(--red)'
+                              : 'var(--text-3)',
+                    }}
+                  />
+                  <span className="name">{name}</span>
+                  <span className="time">{formatTimeHM(schedule.scheduledAt)}</span>
+                  <span className={`state ${stateClass}`}>
+                    {SCHEDULE_STATUS_LABELS[schedule.status]}
+                  </span>
+                </div>
+              )
+            })
           )}
-        </section>
+        </div>
 
-        <section className="card">
-          <h2 style={{ margin: '0 0 10px', fontSize: 13.5, fontWeight: 600 }}>本机边界</h2>
-          <ul className="muted" style={{ fontSize: 12, margin: 0, paddingLeft: 16 }}>
-            <li>登录凭据只存在本机浏览器 Profile，不入库、不上传。</li>
-            <li>验证码与安全验证只允许本人处理，不自动绕过。</li>
-          </ul>
-        </section>
-      </aside>
-    </>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button
+            className={`btn small ${schedulerStatus?.paused ? 'primary' : ''}`}
+            type="button"
+            onClick={onToggleScheduler}
+            disabled={schedulerStatus === null}
+          >
+            {schedulerStatus?.paused ? '恢复自动调度' : '暂停自动调度'}
+          </button>
+          {schedulerStatus && schedulerStatus.runningAccounts.length > 0 && (
+            <span className="flame-caption" style={{ alignSelf: 'center' }}>
+              发送中：{schedulerStatus.runningAccounts.join('、')}
+            </span>
+          )}
+        </div>
+      </section>
+
+      {/* MOD·05 统计 */}
+      <section className="mod mod-stats" aria-label="统计与导出">
+        <div className="mod-tag">
+          <span>MOD·05 统计</span>
+          <span>30D</span>
+        </div>
+        <div className="stat-blocks">
+          <div className="stat-block">
+            <span className="l">成功率</span>
+            <span className="v hot">
+              {stats?.successRate === null || stats?.successRate === undefined
+                ? '—'
+                : `${Math.round(stats.successRate * 100)}%`}
+            </span>
+          </div>
+          <div className="stat-block">
+            <span className="l">连燃</span>
+            <span className="v">{stats?.currentSuccessStreak ?? '—'}</span>
+          </div>
+          <div className="stat-block">
+            <span className="l">最长</span>
+            <span className="v">{stats?.bestSuccessStreak ?? '—'}</span>
+          </div>
+          <div className="stat-block">
+            <span className="l">任务</span>
+            <span className="v">{stats?.totalJobs ?? '—'}</span>
+          </div>
+        </div>
+        <div className="side-actions">
+          <a className="btn small" href="/api/stats/export.csv" style={{ justifyContent: 'center' }}>
+            导出任务 CSV
+          </a>
+          <button
+            className="btn small"
+            type="button"
+            onClick={() => void api.downloadBackup()}
+          >
+            备份全部数据
+          </button>
+        </div>
+        {attentionAccounts.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {attentionAccounts.map((account) => (
+              <div className="mini-row" key={account.id}>
+                <span className="lamp" style={{ background: 'var(--red)' }} />
+                <span className="name">{account.displayName}</span>
+                <span className="state bad">
+                  {ATTENTION_ACCOUNT_HINTS[account.status]?.slice(0, 12) ?? '需要处理'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* MOD·03 好友火花榜 */}
+      <section className="mod mod-streak" aria-label="好友火花榜">
+        <div className="mod-tag">
+          <span>MOD·03 好友火花榜</span>
+          <span onClick={() => onNavigate('targets')} style={{ cursor: 'pointer' }}>
+            管理 →
+          </span>
+        </div>
+        {rankedTargets.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+            还没有契约好友。到「好友」页添加后，这里会按火花天数排行。
+          </p>
+        ) : (
+          <div className="streak-rows">
+            {rankedTargets.map((target) => (
+              <div className="streak-row" key={target.id}>
+                <span className="who">
+                  {target.nicknameSnapshot}
+                  {!target.enabled && <span className="off">已暂停</span>}
+                </span>
+                <span className="streak-bar-track">
+                  <span
+                    className="streak-bar"
+                    style={{ width: `${(target.streakDays / maxStreak) * 100}%` }}
+                  />
+                </span>
+                <span className="days">{target.streakDays}天</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* MOD·04 任务流水 */}
+      <section className="mod mod-stream" aria-label="任务流水">
+        <div className="mod-tag">
+          <span>MOD·04 任务流水</span>
+          <span onClick={() => onNavigate('jobs')} style={{ cursor: 'pointer' }}>
+            全部 →
+          </span>
+        </div>
+        {summary.recentJobs.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+            暂无任务记录。
+          </p>
+        ) : (
+          <div className="stream">
+            {summary.recentJobs.map((job) => {
+              const ok = job.status === 'succeeded'
+              const bad =
+                job.status === 'failed_retryable' ||
+                job.status === 'failed_terminal' ||
+                job.status === 'unknown_requires_review'
+              return (
+                <div className="stream-row" key={job.id}>
+                  <span className="ts">{formatTimeHM(job.updatedAt)}</span>
+                  <span className="what">{job.messageSlotId}</span>
+                  <span className={`st ${ok ? 'ok' : bad ? (job.status === 'unknown_requires_review' ? 'warn' : 'bad') : 'idle'}`}>
+                    {job.status === 'succeeded'
+                      ? 'OK'
+                      : job.status === 'unknown_requires_review'
+                        ? 'REVIEW'
+                        : job.status === 'failed_retryable'
+                          ? 'RETRY'
+                          : job.status === 'failed_terminal'
+                            ? 'FAIL'
+                            : job.status.toUpperCase()}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+    </div>
   )
 }

@@ -86,10 +86,18 @@ export interface ContractTarget {
   updatedAt: string
 }
 
+export interface PoolItem {
+  id: string
+  content: string
+  weekdayMask: number
+  enabled: boolean
+  lastUsedAt: string | null
+}
+
 export interface MessageTemplate {
   id: string
   name: string
-  type: 'text' | 'image' | 'sticker'
+  type: 'text' | 'image' | 'sticker' | 'pool'
   content: string
   imagePath: string | null
   stickerName: string | null
@@ -98,8 +106,33 @@ export interface MessageTemplate {
   stickerFallbackIndex: number | null
   version: number
   enabled: boolean
+  poolItems: PoolItem[]
   createdAt: string
   updatedAt: string
+}
+
+export interface PoolItemInput {
+  content: string
+  weekdayMask?: number
+  enabled?: boolean
+}
+
+export interface StatsDailyRow {
+  date: string
+  total: number
+  succeeded: number
+  failed: number
+  unknown: number
+}
+
+export interface StatsSummary {
+  windowDays: number
+  daily: StatsDailyRow[]
+  currentSuccessStreak: number
+  bestSuccessStreak: number
+  totalJobs: number
+  succeededJobs: number
+  successRate: number | null
 }
 
 export interface SendJob {
@@ -179,12 +212,13 @@ export interface TargetCreateInput {
 
 export interface TemplateCreateInput {
   name: string
-  type: 'text' | 'image' | 'sticker'
+  type: 'text' | 'image' | 'sticker' | 'pool'
   content: string
   imagePath?: string
   stickerName?: string
   stickerLabel?: string
   stickerCategory?: string
+  poolItems?: PoolItemInput[]
 }
 
 export interface SendPreviewItem {
@@ -207,11 +241,13 @@ export interface SendTargetResult {
   failureClass: string | null
   detail: string | null
   message: string | null
+  screenshot: string | null
+  pageUrl: string | null
 }
 
 export interface SendRead {
   accountId: string
-  overall: 'ok' | 'partial' | 'auth_expired' | 'error'
+  overall: 'ok' | 'partial' | 'auth_expired' | 'error' | 'network_unavailable'
   detail: string | null
   results: SendTargetResult[]
   artifactPath: string | null

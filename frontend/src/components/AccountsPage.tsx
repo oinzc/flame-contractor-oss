@@ -20,6 +20,8 @@ interface Props {
 export default function AccountsPage({ accounts, onChanged, onCreateAccount }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [loginStates, setLoginStates] = useState<Record<string, LoginStatus>>({})
+  const [qrStates, setQrStates] = useState<Record<string, LoginStatus>>({})
+  const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const [sendAccount, setSendAccount] = useState<Account | null>(null)
@@ -92,6 +94,56 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
     }
   }
 
+  function setQrState(accountId: string, status: LoginStatus) {
+    setQrStates((previous) => ({ ...previous, [accountId]: status }))
+  }
+
+  async function pollQrLogin(accountId: string) {
+    try {
+      const status = await api.qrLoginStatus(accountId)
+      setQrState(accountId, status)
+      if (status.state === 'succeeded' || status.state === 'failed' || status.state === 'expired') {
+        if (status.state === 'succeeded') {
+          onChanged()
+        }
+        return
+      }
+      // 截图端点 no-store，用 tick 破坏缓存让 <img> 拉到最新帧
+      setQrTicks((previous) => ({ ...previous, [accountId]: Date.now() }))
+    } catch (err) {
+      setError(accountId, err instanceof ApiError ? err.message : '截图扫码状态查询失败')
+      return
+    }
+    timersRef.current[`qr-${accountId}`] = window.setTimeout(() => {
+      void pollQrLogin(accountId)
+    }, 2500)
+  }
+
+  async function handleStartQrLogin(account: Account) {
+    clearError(account.id)
+    try {
+      const status = await api.startQrLogin(account.id)
+      setQrState(account.id, status)
+      void pollQrLogin(account.id)
+    } catch (err) {
+      setError(account.id, err instanceof ApiError ? err.message : '发起截图扫码失败')
+    }
+  }
+
+  async function handleCancelQrLogin(account: Account) {
+    const timer = timersRef.current[`qr-${account.id}`]
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      delete timersRef.current[`qr-${account.id}`]
+    }
+    try {
+      const status = await api.cancelLogin(account.id)
+      setQrState(account.id, status)
+    } catch (err) {
+      setError(account.id, err instanceof ApiError ? err.message : '取消失败')
+    }
+  }
+
   async function handleDryRun(account: Account) {
     clearError(account.id)
     setBusyId(account.id)
@@ -144,6 +196,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
         <div className="account-grid">
           {accounts.map((account) => {
             const login = loginStates[account.id]
+            const qr = qrStates[account.id]
             const dry = dryResults[account.id]
             const error = actionErrors[account.id]
             const needsLogin =
@@ -195,6 +248,34 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                 {login && (login.state === 'failed' || login.state === 'expired') && (
                   <div className="flow-hint crimson">
                     {login.state === 'expired' ? '等待扫码超时，请重新发起。' : '登录流程失败，请重试。'}
+                  </div>
+                )}
+
+                {qr?.state === 'waiting_scan' && (
+                  <div className="qr-panel">
+                    <img
+                      src={`${api.qrImageUrl(account.id)}?t=${qrTicks[account.id] ?? 0}`}
+                      alt="抖音登录二维码（截图实时刷新）"
+                    />
+                    <div className="qr-hint">
+                      截图扫码模式：打开抖音 App → 左上角「≡」→ 扫一扫 → 对准上方二维码。
+                      二维码自动刷新，如手机端提示过期请稍候片刻再扫。
+                    </div>
+                    <button
+                      className="btn small"
+                      type="button"
+                      onClick={() => handleCancelQrLogin(account)}
+                    >
+                      取消截图扫码
+                    </button>
+                  </div>
+                )}
+                {qr?.state === 'succeeded' && (
+                  <div className="flow-hint ember">截图扫码登录成功，账号已变为正常。</div>
+                )}
+                {qr && (qr.state === 'failed' || qr.state === 'expired') && (
+                  <div className="flow-hint crimson">
+                    {qr.state === 'expired' ? '等待扫码超时，请重新发起。' : '截图扫码流程失败，请重试。'}
                   </div>
                 )}
 
@@ -253,6 +334,15 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                       onClick={() => handleCancelLogin(account)}
                     >
                       取消
+                    </button>
+                  )}
+                  {needsLogin && qr?.state !== 'waiting_scan' && (
+                    <button
+                      className="btn small"
+                      type="button"
+                      onClick={() => handleStartQrLogin(account)}
+                    >
+                      截图扫码
                     </button>
                   )}
                   {account.status === 'healthy' && (

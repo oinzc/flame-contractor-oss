@@ -7,6 +7,13 @@ interface Props {
   onChanged: () => void
 }
 
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
+
+interface PoolDraft {
+  content: string
+  weekdayMask: number
+}
+
 const VARIABLE_DOC = [
   { token: '{{target_name}}', meaning: '好友昵称' },
   { token: '{{streak_days}}', meaning: '火花天数' },
@@ -26,11 +33,12 @@ function previewContent(content: string): string {
 
 export default function TemplatesPage({ templates, onChanged }: Props) {
   const [name, setName] = useState('')
-  const [type, setType] = useState<'text' | 'image' | 'sticker'>('text')
+  const [type, setType] = useState<'text' | 'image' | 'sticker' | 'pool'>('text')
   const [content, setContent] = useState('')
   const [imagePath, setImagePath] = useState('')
   const [stickerName, setStickerName] = useState('')
   const [stickerCategory, setStickerCategory] = useState('')
+  const [poolItems, setPoolItems] = useState<PoolDraft[]>([{ content: '', weekdayMask: 0 }])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -43,6 +51,12 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
         name: name.trim(),
         type,
         content: type === 'text' ? content.trim() : '',
+        poolItems:
+          type === 'pool'
+            ? poolItems
+                .filter((item) => item.content.trim())
+                .map((item) => ({ content: item.content.trim(), weekdayMask: item.weekdayMask }))
+            : undefined,
         imagePath: type === 'image' ? imagePath.trim() : undefined,
         stickerName: type === 'sticker' ? stickerName.trim() : undefined,
         stickerCategory:
@@ -53,6 +67,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
       setImagePath('')
       setStickerName('')
       setStickerCategory('')
+      setPoolItems([{ content: '', weekdayMask: 0 }])
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败，请重试')
@@ -104,6 +119,8 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                         ? `🖼 图片模板：${template.imagePath ?? '—'}`
                         : template.type === 'sticker'
                         ? `😀 表情模板：${template.stickerName ?? '—'}`
+                        : template.type === 'pool'
+                        ? `🗂 文案池：${(template.poolItems ?? []).length} 条候选`
                         : template.content}
                     </div>
                   </td>
@@ -142,6 +159,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 <option value="text">文本</option>
                 <option value="image">图片</option>
                 <option value="sticker">表情</option>
+                <option value="pool">文案池</option>
               </select>
             </div>
           </div>
@@ -189,7 +207,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 发送时把这张本地图片作为消息投递给好友。路径必须本机可读，且为图片文件。
               </p>
             </div>
-          ) : (
+          ) : type === 'sticker' ? (
             <>
               <div className="field">
                 <label htmlFor="template-sticker-name">表情名称</label>
@@ -217,6 +235,73 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
                   若该表情在面板的某个分类页里，填分类可先切换到对应分类再匹配；不填则直接在当前面板查找。
                 </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="muted" style={{ fontSize: 11.5, margin: 0 }}>
+                文案池：每天按「最少最近使用」从候选中轮换一条发送；可为每条限定生效星期（全不选=每天可用）。
+              </p>
+              <div className="pool-editor">
+                {poolItems.map((item, index) => (
+                  <div className="pool-item-row" key={index}>
+                    <input
+                      type="text"
+                      value={item.content}
+                      maxLength={500}
+                      placeholder={`候选 ${index + 1}，可用 {{target_name}} {{streak_days}} 等安全变量`}
+                      onChange={(event) =>
+                        setPoolItems((previous) =>
+                          previous.map((draft, i) =>
+                            i === index ? { ...draft, content: event.target.value } : draft,
+                          ),
+                        )
+                      }
+                    />
+                    <div className="pool-days">
+                      {WEEKDAY_LABELS.map((label, bit) => {
+                        const on = (item.weekdayMask & (1 << bit)) !== 0
+                        return (
+                          <button
+                            key={label}
+                            type="button"
+                            className={`pool-day${on ? ' on' : ''}`}
+                            onClick={() =>
+                              setPoolItems((previous) =>
+                                previous.map((draft, i) =>
+                                  i === index
+                                    ? { ...draft, weekdayMask: draft.weekdayMask ^ (1 << bit) }
+                                    : draft,
+                                ),
+                              )
+                            }
+                          >
+                            {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <button
+                      className="pool-remove"
+                      type="button"
+                      title="删除该候选"
+                      onClick={() =>
+                        setPoolItems((previous) => previous.filter((_, i) => i !== index))
+                      }
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  className="btn small"
+                  type="button"
+                  onClick={() =>
+                    setPoolItems((previous) => [...previous, { content: '', weekdayMask: 0 }])
+                  }
+                >
+                  + 添加候选
+                </button>
               </div>
             </>
           )}

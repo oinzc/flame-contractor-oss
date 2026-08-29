@@ -95,4 +95,23 @@ export const api = {
     request<import('./types').SchedulerStatus>('/api/scheduler/resume', {
       method: 'POST',
     }),
+  statsSummary: () => request<import('./types').StatsSummary>('/api/stats/summary'),
+  startQrLogin: (id: string) =>
+    request<import('./types').LoginStatus>(`/api/accounts/${id}/login/qr`, {
+      method: 'POST',
+    }),
+  qrLoginStatus: (id: string) =>
+    request<import('./types').LoginStatus>(`/api/accounts/${id}/login/qr`),
+  qrImageUrl: (id: string) => `/api/accounts/${id}/login/qr/image`,
+  downloadBackup: async () => {
+    const response = await fetch('/api/backup')
+    if (!response.ok) throw new ApiError(response.status, '备份导出失败')
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `flame-backup-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  },
 }
