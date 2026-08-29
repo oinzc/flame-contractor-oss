@@ -107,6 +107,8 @@ def test_tick_dispatches_only_when_due(engine):
         sleep=asyncio.sleep,
         rng=random.Random(1),
         loop_interval=0,
+        # 该测试验证「到期即派发」语义，显式关闭窗口过期跳过策略
+        window_expiry_policy="dispatch",
     )
     # 生成计划（scheduled_at 在窗口内随机 = 12:00-14:00 UTC）
     sched.generate_due_schedules()
@@ -146,7 +148,7 @@ def test_partial_result_becomes_unknown(engine):
     async def send(account_id: str) -> dict:
         return {"overall": "partial"}
 
-    sched = Scheduler(engine, settings=None, send_account=send, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched = Scheduler(engine, settings=None, send_account=send, clock=clock, sleep=asyncio.sleep, loop_interval=0, retry_max_count=0, window_expiry_policy="dispatch")
     sched.generate_due_schedules()
     asyncio.run(sched.tick())
     rows = schedule_rows(engine)
@@ -288,6 +290,7 @@ def test_scheduler_end_to_end_sends_via_run_send(settings):
             sleep=asyncio.sleep,
             rng=random.Random(3),
             loop_interval=0,
+            window_expiry_policy="dispatch",
         )
         sched.generate_due_schedules()
 
@@ -334,6 +337,8 @@ def test_partial_result_triggers_notification(engine):
         clock=clock,
         sleep=asyncio.sleep,
         loop_interval=0,
+        retry_max_count=0,  # 重试耗尽后才转终态并通知
+        window_expiry_policy="dispatch",
     )
     sched.generate_due_schedules()
     asyncio.run(sched.tick())
@@ -361,6 +366,7 @@ def test_auth_expired_triggers_notification(engine):
         clock=clock,
         sleep=asyncio.sleep,
         loop_interval=0,
+        window_expiry_policy="dispatch",
     )
     sched.generate_due_schedules()
     asyncio.run(sched.tick())

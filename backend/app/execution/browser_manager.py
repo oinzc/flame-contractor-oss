@@ -84,6 +84,8 @@ class BrowserManager:
         send_timeout: float = SEND_TIMEOUT_SECONDS,
         send_poll_interval: float = SEND_POLL_INTERVAL,
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
+        send_cooldown: float = 3.0,
+        network_checker: Callable[[], Awaitable[bool]] | None = None,
         confirm_timeout: float = 8.0,
         search_timeout: float = 12.0,
         sleep=asyncio.sleep,
@@ -101,6 +103,8 @@ class BrowserManager:
         self._send_stabilize_polls = send_stabilize_polls
         self._confirm_timeout = confirm_timeout
         self._search_timeout = search_timeout
+        self._send_cooldown = send_cooldown
+        self._network_checker = network_checker
         self._sleep = sleep
 
     def _make_chat(self, page) -> DouyinChat:
@@ -141,6 +145,24 @@ class BrowserManager:
     def _page_url(chat: DouyinChat) -> str | None:
         url = getattr(getattr(chat, "page", None), "url", None)
         return url if isinstance(url, str) else None
+
+    async def _default_network_ok(self) -> bool:
+        """连通性预检：能否与抖音建立 TCP 连接（3 秒超时）。
+
+        只探测可达性，不做任何页面/指纹层面的操作。
+        """
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("www.douyin.com", 443), timeout=3.0
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     # ------------------------------------------------------------ browser
 
@@ -411,6 +433,17 @@ class BrowserManager:
         if not targets:
             raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
 
+        # M6-2 网络预检：离线时不开浏览器、不消耗任何当日任务（幂等键未触碰）
+        checker = self._network_checker or self._default_network_ok
+        if not await checker():
+            return {
+                "account_id": account_id,
+                "overall": "network_unavailable",
+                "detail": "网络不可用，本轮未开始",
+                "results": [],
+                "artifact_path": None,
+            }
+
         profile_path = ensure_profile_dir(self._settings, account_id)
         results: list[dict] = []
         overall = "ok"
@@ -435,7 +468,10 @@ class BrowserManager:
                 }
             else:
                 business_date = datetime.now(ZoneInfo(account.timezone)).date()
-                for target in targets:
+                for index, target in enumerate(targets):
+                    # M6-2 发送冷却：好友之间留出间隔，降低频率风险（首轮不等待）
+                    if index > 0 and self._send_cooldown > 0:
+                        await self._sleep(self._send_cooldown)
                     result = await self._send_one(chat, account, target, business_date)
                     results.append(result)
                     if result["status"] not in ("succeeded", "duplicate_succeeded", "skipped"):
