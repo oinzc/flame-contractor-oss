@@ -31,6 +31,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw new ApiError(response.status, await readDetail(response))
   }
+  // 204 No Content 无响应体，json() 会抛解析错误——删除接口依赖此分支
+  if (response.status === 204) {
+    return undefined as T
+  }
   return (await response.json()) as T
 }
 
