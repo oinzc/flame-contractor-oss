@@ -34,6 +34,31 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
     }
   }, [])
 
+  // 拉取各账号的截图扫码状态：让 API/他处发起的进行中流程在页面上可见
+  useEffect(() => {
+    let cancelled = false
+    for (const account of accounts) {
+      api
+        .qrLoginStatus(account.id)
+        .then((status) => {
+          if (cancelled) return
+          if (status.state !== 'idle') {
+            setQrStates((previous) => ({ ...previous, [account.id]: status }))
+          }
+          if (status.state === 'waiting_scan') {
+            // 接管轮询：持续刷新二维码截图并跟踪登录结果
+            void pollQrLogin(account.id)
+          }
+        })
+        .catch(() => {
+          /* 状态读取失败不打扰页面 */
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [accounts])
+
   function setLoginState(accountId: string, status: LoginStatus) {
     setLoginStates((previous) => ({ ...previous, [accountId]: status }))
   }
@@ -324,7 +349,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     <button
                       className="btn primary small"
                       type="button"
-                      disabled={login?.state === 'waiting_scan'}
+                      disabled={login?.state === 'waiting_scan' || qr?.state === 'waiting_scan'}
                       onClick={() => handleStartLogin(account)}
                     >
                       扫码登录
@@ -339,13 +364,13 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                       取消
                     </button>
                   )}
-                  {needsLogin && qr?.state !== 'waiting_scan' && (
+                  {qr?.state !== 'waiting_scan' && (
                     <button
                       className="btn small"
                       type="button"
                       onClick={() => handleStartQrLogin(account)}
                     >
-                      截图扫码
+                      {needsLogin ? '截图扫码' : '重新扫码登录'}
                     </button>
                   )}
                   {account.status === 'healthy' && (

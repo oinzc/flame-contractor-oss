@@ -81,3 +81,53 @@ def test_qr_login_timeout_marks_expired(settings):
         # 缩短超时：直接改 manager 参数（测试专用构造已暴露）
         client.post(f"/api/accounts/{account['id']}/login/qr")
         assert client.post(f"/api/accounts/{account['id']}/login/qr/cancel").json()["state"] == "idle"
+
+
+class _DualEvalPage(FakePage):
+    """区分两类 evaluate：二维码查询脚本 vs localStorage 昵称脚本。"""
+
+    def __init__(self, storage_json: str, qr_data: str | None):
+        super().__init__(logged_in=True)
+        self._storage_json = storage_json
+        self._qr_data = qr_data
+
+    async def evaluate(self, script, *args, **kwargs):
+        if "querySelectorAll" in script:
+            return self._qr_data
+        return self._storage_json
+
+
+def test_read_qr_data_url_extracts_qr_only():
+    """二维码本体提取：只认 data:image/png 前缀。"""
+    import asyncio
+
+    from app.execution.douyin_chat import read_qr_data_url
+
+    page = _DualEvalPage(storage_json="{}", qr_data="data:image/png;base64,AAAA")
+    assert asyncio.run(read_qr_data_url(page)) == "data:image/png;base64,AAAA"
+
+    page = _DualEvalPage(storage_json="{}", qr_data="https://example.com/qr.png")
+    assert asyncio.run(read_qr_data_url(page)) is None
+
+    page = _DualEvalPage(storage_json="{}", qr_data=None)
+    assert asyncio.run(read_qr_data_url(page)) is None
+
+
+def test_qr_shot_writes_decoded_qr_bytes(settings):
+    """take_qr_shot 优先写二维码本体：image 端点返回解码后的 PNG 字节。"""
+    app = make_app(
+        settings,
+        [_DualEvalPage('{"nickname": "测试号"}', "data:image/png;base64,AAAA")],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        deadline = time.monotonic() + 5
+        got = None
+        while time.monotonic() < deadline:
+            got = client.get(f"/api/accounts/{account['id']}/login/qr/image")
+            if got.status_code == 200:
+                break
+            time.sleep(0.05)
+        assert got is not None and got.status_code == 200
+        assert got.content == b"\x00\x00\x00"  # base64 AAAA 解码结果

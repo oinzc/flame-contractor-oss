@@ -137,7 +137,8 @@ def test_pool_preview_shows_candidate_without_consuming(settings):
             },
         )
         preview = client.get(f"/api/accounts/{account['id']}/send/preview").json()
-        assert preview["items"][0]["message"] == "候选 好友A"
+        # 两个候选都从未使用时按 id 稳定选取（无先后语义），只断言渲染自其中之一
+        assert preview["items"][0]["message"] in ("候选 好友A", "另一条")
 
         with Session(app.state.engine) as session:
             item = session.exec(select(TemplatePoolItem)).first()

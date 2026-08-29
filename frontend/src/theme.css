@@ -700,7 +700,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 
 /* 截图扫码面板 */
 .qr-panel { display: grid; gap: 8px; justify-items: center; border: 1px solid var(--flame-deep); background: #17120e; padding: 12px; }
-.qr-panel img { width: 240px; height: auto; border: 1px solid var(--seam); background: #fff; }
+.qr-panel img { width: 260px; height: auto; image-rendering: pixelated; border: 1px solid var(--seam); background: #fff; }
 .qr-panel .qr-hint { font-size: 11px; color: var(--amber); text-align: center; }
 
 /* 空态 */
