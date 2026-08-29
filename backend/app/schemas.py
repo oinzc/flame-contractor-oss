@@ -305,3 +305,30 @@ class SendRead(APIBase):
     results: list[SendTargetResultRead]
     artifact_path: str | None = None
 
+
+
+# ---------------------------------------------------------------- backup (M8-3)
+
+
+class BackupData(APIBase):
+    """全量数据块：各行 model_dump(mode="json") 的原始字典。"""
+
+    accounts: list[dict] = []
+    templates: list[dict] = []
+    pool_items: list[dict] = []
+    targets: list[dict] = []
+    schedules: list[dict] = []
+    jobs: list[dict] = []
+    attempts: list[dict] = []
+
+
+class BackupRead(APIBase):
+    app: str
+    schema_version: int
+    exported_at: datetime
+    data: BackupData
+
+
+class BackupImportResult(APIBase):
+    inserted: dict[str, int]
+    updated: dict[str, int]
