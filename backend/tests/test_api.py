@@ -183,6 +183,26 @@ def test_patch_target_streak(client):
     assert negative.status_code == 422
 
 
+def test_patch_target_enabled(client):
+    """启停好友：暂停后 enabled=False，可再启用；与火花校准互不影响。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
+    ).json()
+    assert target["enabled"] is True
+
+    paused = client.patch(f"/api/targets/{target['id']}", json={"enabled": False})
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["enabled"] is False
+
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    assert listing[0]["enabled"] is False
+
+    resumed = client.patch(f"/api/targets/{target['id']}", json={"enabled": True})
+    assert resumed.json()["enabled"] is True
+
+
 def test_delete_target_with_jobs_conflicts(client, engine):
     from datetime import date as date_cls
 
