@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     artifacts_dir: Path = PROJECT_ROOT / "artifacts"
     # Bark 通知推送地址（可选）：形如 https://api.day.app/<device_key>，空则不推送
     bark_url: str | None = None
+    # artifacts 诊断产物保留天数（失败截图/工件 JSON），0 表示永不过期
+    artifact_retention_days: int = 30
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",
