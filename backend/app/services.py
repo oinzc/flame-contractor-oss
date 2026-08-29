@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
 from .execution.message_renderer import render_message
+from .execution.pool import pick_pool_item
 from .models import (
     Account,
     AccountStatus,
@@ -14,6 +15,7 @@ from .models import (
     JobStatus,
     MessageTemplate,
     SendJob,
+    TemplatePoolItem,
     TemplateType,
     utc_now,
 )
@@ -23,6 +25,8 @@ from .schemas import (
     AccountRead,
     DashboardSummary,
     JobRead,
+    PoolItemIn,
+    PoolItemRead,
     TargetCreate,
     TargetPatch,
     TargetRead,
@@ -105,7 +109,34 @@ def patch_account(session: Session, account_id: str, payload: AccountPatch) -> A
 
 def list_templates(session: Session) -> list[TemplateRead]:
     templates = session.exec(select(MessageTemplate).order_by(MessageTemplate.created_at)).all()
-    return [TemplateRead.model_validate(template) for template in templates]
+    pool_items_by_template: dict[str, list[TemplatePoolItem]] = {}
+    template_ids = [template.id for template in templates]
+    if template_ids:
+        items = session.exec(
+            select(TemplatePoolItem)
+            .where(TemplatePoolItem.template_id.in_(template_ids))
+            .order_by(TemplatePoolItem.created_at)
+        ).all()
+        for item in items:
+            pool_items_by_template.setdefault(item.template_id, []).append(item)
+    reads: list[TemplateRead] = []
+    for template in templates:
+        read = TemplateRead.model_validate(template)
+        if template.type == TemplateType.POOL:
+            read.pool_items = [
+                PoolItemRead.model_validate(item)
+                for item in pool_items_by_template.get(template.id, [])
+            ]
+        reads.append(read)
+    return reads
+
+
+def _validate_pool_items(items: list[PoolItemIn]) -> None:
+    for item in items:
+        if not item.content.strip():
+            raise HTTPException(status_code=422, detail="文案池候选不能为空")
+        if not 0 <= item.weekday_mask <= 127:
+            raise HTTPException(status_code=422, detail="weekday_mask 取值 0-127")
 
 
 def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
@@ -118,16 +149,38 @@ def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
     # 仅文本模板校验受控变量；图片模板无文本内容
     if payload.type == TemplateType.TEXT:
         _validate_template_content(payload.content)
+    if payload.type == TemplateType.POOL:
+        if not payload.pool_items:
+            raise HTTPException(status_code=422, detail="文案池模板需要至少一条候选文案")
+        _validate_pool_items(payload.pool_items)
 
     template = MessageTemplate.model_validate(payload)
     session.add(template)
+    session.flush()  # 先取 template.id 再挂文案池候选
+    for item in payload.pool_items or []:
+        session.add(
+            TemplatePoolItem(
+                template_id=template.id,
+                content=item.content.strip(),
+                weekday_mask=item.weekday_mask,
+                enabled=item.enabled,
+            )
+        )
     try:
         session.commit()
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=409, detail="模板名称已存在") from None
     session.refresh(template)
-    return TemplateRead.model_validate(template)
+    read = TemplateRead.model_validate(template)
+    if payload.type == TemplateType.POOL:
+        items = session.exec(
+            select(TemplatePoolItem)
+            .where(TemplatePoolItem.template_id == template.id)
+            .order_by(TemplatePoolItem.created_at)
+        ).all()
+        read.pool_items = [PoolItemRead.model_validate(item) for item in items]
+    return read
 
 
 # ---------------------------------------------------------------- targets
@@ -217,6 +270,19 @@ def send_preview(session: Session, account_id: str) -> dict:
                 message = f"[图片] {template.image_path or ''}"
             elif template.type == TemplateType.STICKER:
                 message = f"[表情] {template.sticker_name or ''}"
+            elif template.type == TemplateType.POOL:
+                # 预览只展示今天会发的候选，不消耗轮换顺序（consume=False）
+                weekday_index = datetime.now(ZoneInfo(account.timezone)).weekday()
+                pool_item = pick_pool_item(session, template.id, weekday_index)
+                if pool_item is None:
+                    message = "[文案池] 今日无可用候选"
+                else:
+                    message = render_message(
+                        pool_item.content,
+                        target_name=target.nickname_snapshot,
+                        streak_days=target.streak_days,
+                        timezone=account.timezone,
+                    )
             else:
                 message = render_message(
                     template.content,

@@ -25,6 +25,7 @@ from ..models import (
 )
 from .douyin_chat import DomChangedError, DouyinChat, Sticker
 from .message_renderer import render_message
+from .pool import pick_pool_item
 from .profile_store import ensure_profile_dir
 from .selectors import bundle_digest
 from .send_confirmer import SendConfirmer
@@ -522,6 +523,13 @@ class BrowserManager:
             sticker_fallback_index = template.sticker_fallback_index if template_ok else None
             nickname = current.nickname_snapshot
             streak_days = current.streak_days
+            pool_item = None
+            pool_content = None
+            if template_ok and template.type == TemplateType.POOL:
+                # M8-1 文案池：按账号本地星期选候选并记 LRU（发送即消耗轮换顺序）
+                weekday_index = datetime.now(ZoneInfo(account.timezone)).weekday()
+                pool_item = pick_pool_item(session, template.id, weekday_index, consume=True)
+                pool_content = pool_item.content if pool_item is not None else None
 
         if not template_ok:
             return {"target": nickname, "status": "skipped",
@@ -532,11 +540,21 @@ class BrowserManager:
         if template_type == TemplateType.STICKER and not sticker_name:
             return {"target": nickname, "status": "skipped",
                     "detail": "表情模板缺少表情名称", "failure_class": None, "message": None}
+        if template_type == TemplateType.POOL and pool_item is None:
+            return {"target": nickname, "status": "skipped",
+                    "detail": "文案池今日无可用候选", "failure_class": None, "message": None}
 
         message = None
         if template_type == TemplateType.TEXT:
             message = render_message(
                 template_content,
+                target_name=nickname,
+                streak_days=streak_days,
+                timezone=account.timezone,
+            )
+        elif template_type == TemplateType.POOL and pool_content is not None:
+            message = render_message(
+                pool_content,
                 target_name=nickname,
                 streak_days=streak_days,
                 timezone=account.timezone,
