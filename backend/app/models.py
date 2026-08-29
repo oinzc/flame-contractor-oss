@@ -28,6 +28,7 @@ class TemplateType(str, Enum):
     TEXT = "text"
     IMAGE = "image"
     STICKER = "sticker"
+    POOL = "pool"  # 文案池：多条候选按星期过滤 + 最少最近使用轮换
 
 
 class JobStatus(str, Enum):
@@ -108,6 +109,23 @@ class MessageTemplate(SQLModel, table=True):
     sticker_fallback_index: int | None = Field(default=None, ge=0)
     version: int = Field(default=1, ge=1)
     enabled: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class TemplatePoolItem(SQLModel, table=True):
+    """M8-1 文案池候选：属某一池模板，发送时按星期过滤 + 最少最近使用轮换选一条。"""
+
+    __tablename__ = "template_pool_item"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    template_id: str = Field(foreign_key="message_template.id", index=True, ondelete="CASCADE")
+    content: str = Field(min_length=1, max_length=500)
+    # 生效星期位掩码：0=每天不限；bit0=周一 … bit6=周日（与 Python weekday() 对齐）
+    weekday_mask: int = Field(default=0, ge=0, le=127)
+    enabled: bool = Field(default=True)
+    # 最少最近使用（LRU）轮换依据：上次被实际发送使用的时间
+    last_used_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

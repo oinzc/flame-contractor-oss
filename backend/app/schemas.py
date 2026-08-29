@@ -88,6 +88,22 @@ class AccountRead(APIBase):
 
 # ---------------------------------------------------------------- template
 
+class PoolItemIn(APIBase):
+    """M8-1 文案池候选入参。weekday_mask: 0=每天；bit0=周一 … bit6=周日。"""
+
+    content: str = Field(min_length=1, max_length=500)
+    weekday_mask: int = Field(default=0, ge=0, le=127)
+    enabled: bool = True
+
+
+class PoolItemRead(APIBase):
+    id: str
+    content: str
+    weekday_mask: int
+    enabled: bool
+    last_used_at: datetime | None = None
+
+
 class TemplateCreate(APIBase):
     name: str = Field(min_length=1, max_length=60)
     type: TemplateType = Field(default=TemplateType.TEXT)
@@ -97,6 +113,7 @@ class TemplateCreate(APIBase):
     sticker_label: str | None = Field(default=None, max_length=64)
     sticker_category: str | None = Field(default=None, max_length=32)
     sticker_fallback_index: int | None = Field(default=None, ge=0)
+    pool_items: list[PoolItemIn] | None = None
 
     @field_validator("name")
     @classmethod
@@ -132,6 +149,7 @@ class TemplateRead(APIBase):
     sticker_fallback_index: int | None
     version: int
     enabled: bool
+    pool_items: list[PoolItemRead] = []
     created_at: datetime
     updated_at: datetime
 
