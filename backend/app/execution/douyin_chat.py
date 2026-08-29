@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 
@@ -726,3 +727,28 @@ class DouyinChat:
                 return True
             await self._sleep(0.5)
         return False
+
+
+async def read_self_nickname(page) -> str | None:
+    """登录后读取当前抖音身份昵称（M8 后续增强）。
+
+    数据源为 localStorage 的 user_info（登录态写入，比 DOM class 稳定、
+    不受页面改版影响）；只提取 nickname 字段，其余信息一律不读取。
+    未登录 / 键不存在 / 结构变化 / 解析失败一律返回 None（纯展示用途，
+    绝不影响登录判定与发送链路）。
+    """
+    try:
+        raw = await page.evaluate(
+            "() => { try { return localStorage.getItem('user_info'); }"
+            " catch { return null; } }"
+        )
+        if not raw:
+            return None
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            nickname = data.get("nickname")
+            if isinstance(nickname, str) and nickname.strip():
+                return nickname.strip()
+    except Exception:  # noqa: BLE001 - 展示性信息，任何失败都静默降级
+        return None
+    return None

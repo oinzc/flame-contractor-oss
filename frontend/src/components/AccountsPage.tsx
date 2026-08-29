@@ -243,7 +243,10 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                   </div>
                 )}
                 {login && login.state === 'succeeded' && (
-                  <div className="flow-hint ember">登录成功，账号已变为正常。</div>
+                  <div className="flow-hint ember">
+                    登录成功，账号已变为正常。
+                    {login.selfNickname ? ` 当前抖音身份：${login.selfNickname}` : ''}
+                  </div>
                 )}
                 {login && (login.state === 'failed' || login.state === 'expired') && (
                   <div className="flow-hint crimson">
