@@ -6,8 +6,10 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, func, select
 
+from .core.config import Settings
 from .execution.message_renderer import render_message
 from .execution.pool import pick_pool_item
+from .execution.profile_store import remove_profile_dir
 from .models import (
     Account,
     AccountStatus,
@@ -15,6 +17,7 @@ from .models import (
     JobStatus,
     MessageTemplate,
     SendJob,
+    SendSchedule,
     TemplatePoolItem,
     TemplateType,
     utc_now,
@@ -95,6 +98,13 @@ def patch_account(session: Session, account_id: str, payload: AccountPatch) -> A
         raise HTTPException(status_code=404, detail="账号不存在")
 
     data = payload.model_dump(exclude_unset=True)
+    if "display_name" in data:
+        existing = session.exec(
+            select(Account).where(Account.display_name == data["display_name"])
+        ).first()
+        if existing and existing.id != account_id:
+            raise HTTPException(status_code=409, detail="账号显示名称已存在")
+
     for field, value in data.items():
         setattr(account, field, value)
     account.updated_at = utc_now()
@@ -103,6 +113,37 @@ def patch_account(session: Session, account_id: str, payload: AccountPatch) -> A
     session.commit()
     session.refresh(account)
     return AccountRead.model_validate(account)
+
+
+def delete_account(session: Session, account_id: str, settings: Settings) -> None:
+    """删除账号。被好友/任务/调度引用时拒绝；无引用物理删除并清理浏览器档案。"""
+    account = session.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if account.status == AccountStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="账号正在执行任务，请稍后再删除")
+
+    target_refs = session.exec(
+        select(func.count(ContractTarget.id)).where(ContractTarget.account_id == account_id)
+    ).one()
+    job_refs = session.exec(
+        select(func.count(SendJob.id)).where(SendJob.account_id == account_id)
+    ).one()
+    schedule_refs = session.exec(
+        select(func.count(SendSchedule.id)).where(SendSchedule.account_id == account_id)
+    ).one()
+    if target_refs or job_refs or schedule_refs:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"账号仍有 {target_refs} 个好友、{job_refs} 条发送任务、{schedule_refs} 条调度记录，"
+                "不能删除；可先停用账号"
+            ),
+        )
+
+    session.delete(account)
+    session.commit()
+    remove_profile_dir(settings, account_id)
 
 
 # ---------------------------------------------------------------- templates

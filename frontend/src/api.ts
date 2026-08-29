@@ -43,11 +43,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchAccount: (id: string, patch: { enabled?: boolean }) =>
+  patchAccount: (id: string, patch: { enabled?: boolean; displayName?: string }) =>
     request<import('./types').Account>(`/api/accounts/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+  deleteAccount: (id: string) =>
+    request<void>(`/api/accounts/${id}`, { method: 'DELETE' }),
   targets: () => request<import('./types').ContractTarget[]>('/api/targets'),
   createTarget: (input: import('./types').TargetCreateInput) =>
     request<import('./types').ContractTarget>('/api/targets', {

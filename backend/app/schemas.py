@@ -58,10 +58,21 @@ class AccountCreate(APIBase):
 
 
 class AccountPatch(APIBase):
+    display_name: str | None = Field(default=None, min_length=1, max_length=60)
     enabled: bool | None = None
     status: Literal[AccountStatus.PENDING_LOGIN, AccountStatus.PAUSED] | None = None
     send_window_start: str | None = Field(default=None, pattern=TIME_RE.pattern)
     send_window_end: str | None = Field(default=None, pattern=TIME_RE.pattern)
+
+    @field_validator("display_name")
+    @classmethod
+    def _strip_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("显示名称不能为空")
+        return value
 
     @model_validator(mode="after")
     def _validate_window(self) -> "AccountPatch":

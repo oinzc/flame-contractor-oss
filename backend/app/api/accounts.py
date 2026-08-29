@@ -1,9 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from ..core.database import SessionDep
-from ..core.config import get_settings
 from ..schemas import AccountCreate, AccountPatch, AccountRead
-from ..services import create_account, list_accounts, patch_account
+from ..services import create_account, delete_account, list_accounts, patch_account
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -23,3 +22,9 @@ def update_account(
     account_id: str, payload: AccountPatch, session: SessionDep
 ) -> AccountRead:
     return patch_account(session, account_id, payload)
+
+
+@router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_account(account_id: str, request: Request, session: SessionDep) -> Response:
+    delete_account(session, account_id, request.app.state.settings)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

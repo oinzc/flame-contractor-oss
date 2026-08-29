@@ -1,4 +1,5 @@
 import re
+import shutil
 from pathlib import Path
 
 from ..core.config import Settings
@@ -17,3 +18,8 @@ def ensure_profile_dir(settings: Settings, account_id: str) -> Path:
     path = profile_dir(settings, account_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def remove_profile_dir(settings: Settings, account_id: str) -> None:
+    """删除账号的浏览器档案目录（登录态随之失效）；目录不存在时静默忽略。"""
+    shutil.rmtree(profile_dir(settings, account_id), ignore_errors=True)

@@ -86,6 +86,81 @@ def test_patch_account_allows_pause_only(client):
     assert missing.status_code == 404
 
 
+def test_patch_account_rename(client):
+    """账号改名：成功改名；与其他账号重名 409；改回自身现名不算冲突。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    other = client.post("/api/accounts", json={"displayName": "小号"}).json()
+
+    renamed = client.patch(f"/api/accounts/{account['id']}", json={"displayName": "大号"})
+    assert renamed.status_code == 200, renamed.text
+    body = renamed.json()
+    assert body["displayName"] == "大号"
+    assert body["enabled"] is True  # 其他字段不变
+
+    dup = client.patch(f"/api/accounts/{account['id']}", json={"displayName": "小号"})
+    assert dup.status_code == 409
+
+    self_name = client.patch(f"/api/accounts/{account['id']}", json={"displayName": "大号"})
+    assert self_name.status_code == 200
+
+    blank = client.patch(f"/api/accounts/{other['id']}", json={"displayName": "   "})
+    assert blank.status_code == 422
+
+
+def test_delete_account(client, engine, settings):
+    """无引用删除成功并清理浏览器档案；有好友/任务引用时 409。"""
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    from app.execution.profile_store import ensure_profile_dir
+    from app.models import SendJob
+
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    profile = ensure_profile_dir(settings, account["id"])
+
+    template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()
+    bound = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A", "templateId": template["id"]},
+    ).json()
+    blocked = client.delete(f"/api/accounts/{account['id']}")
+    assert blocked.status_code == 409
+    client.delete(f"/api/targets/{bound['id']}")
+
+    # 同账号当日发送任务也会阻止删除
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友B"},
+    ).json()
+    with Session(engine) as session:
+        session.add(
+            SendJob(
+                account_id=account["id"],
+                target_id=target["id"],
+                template_id=template["id"],
+                business_date=date_cls.today(),
+                message_slot_id="slot",
+            )
+        )
+        session.commit()
+    blocked_by_job = client.delete(f"/api/accounts/{account['id']}")
+    assert blocked_by_job.status_code == 409
+    # 任务是好友的引用，先删任务才能删好友
+    with Session(engine) as session:
+        job = session.exec(select(SendJob)).one()
+        session.delete(job)
+        session.commit()
+    client.delete(f"/api/targets/{target['id']}")
+
+    removed = client.delete(f"/api/accounts/{account['id']}")
+    assert removed.status_code == 204, removed.text
+    listing = client.get("/api/accounts").json()
+    assert [a["displayName"] for a in listing] == []
+    assert not profile.exists()  # 浏览器档案目录已清理
+    assert client.delete(f"/api/accounts/{account['id']}").status_code == 404
+
+
 def test_template_validation(client):
     ok = client.post(
         "/api/templates",

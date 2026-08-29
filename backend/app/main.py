@@ -28,6 +28,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.engine = engine
         app.state.browser_manager = browser_manager
+        app.state.settings = settings
         run_migrations(settings.database_url)
         # 启动时清理过期诊断产物（保守策略：仅删文件，失败不阻断启动）
         try:
