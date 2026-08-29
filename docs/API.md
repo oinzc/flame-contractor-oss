@@ -381,3 +381,31 @@ password, cookie, token, storageState, profilePath
 ### 安全边界
 
 本组端点**只读**当前 bundle / **触发重载**；不接收任何凭据或脚本。选择器 JSON 中只允许字符串与字符串数组字段，避免注入任意对象。改版后必须真机复核。
+
+---
+
+## M6–M8 新增端点（2026-08-30）
+
+### 统计（/api/stats）
+- `GET /api/stats/summary?days=30`：按日聚合（total/succeeded/failed/unknown）、
+  当前与最长连续成功天数、总成功率；`days` 上限 365。
+- `GET /api/stats/export.csv`：任务记录 CSV 附件（Content-Disposition attachment）。
+
+### 备份（/api/backup）
+- `GET /api/backup`：全量导出 JSON（`schema_version=1`；accounts/templates(+pool_items)/
+  targets/schedules/jobs/attempts；不含凭据）。
+- `POST /api/backup/import`：按 id upsert 导入（空库=完整恢复，已有库=无损合并）；
+  schema_version 不支持时 422。
+
+### 截图扫码登录（/api/accounts/{id}/login/qr*）
+- `POST /api/accounts/{id}/login/qr`：发起 headless 截图扫码（202）。
+- `GET /api/accounts/{id}/login/qr`：状态 + `qr_image` 截图路径。
+- `GET /api/accounts/{id}/login/qr/image`：二维码 PNG（`Cache-Control: no-store`，
+  前端轮询刷新；未生成时 404）。
+- `POST /api/accounts/{id}/login/qr/cancel`：取消（与有头登录共用互斥）。
+
+### 模板文案池
+- `POST /api/templates`：`type=pool` 时必填 `poolItems: [{content, weekdayMask?, enabled?}]`
+  （缺候选 422）；`weekdayMask` 位掩码 0=每天，bit0=周一 … bit6=周日。
+- `GET /api/templates`：池模板响应附带 `poolItems`。
+- 选取规则：星期过滤后按 `last_used_at` 最早优先（LRU）；发送消耗轮换顺序，预览不消耗。
