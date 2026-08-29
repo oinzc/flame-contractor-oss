@@ -255,8 +255,8 @@ class BrowserManager:
                 return
 
             flow.state = "succeeded"
-            self._mark_healthy(flow.account_id)
             flow.self_nickname = await read_self_nickname(page)
+            self._mark_healthy(flow.account_id, flow.self_nickname)
         except asyncio.CancelledError:
             flow.state = "idle"
             raise
@@ -270,13 +270,15 @@ class BrowserManager:
                 except Exception:
                     pass
 
-    def _mark_healthy(self, account_id: str) -> None:
+    def _mark_healthy(self, account_id: str, douyin_nickname: str | None = None) -> None:
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             if account is None:
                 raise RuntimeError("账号不存在")
             account.status = AccountStatus.HEALTHY
             account.last_verified_at = _utcnow()
+            if douyin_nickname:
+                account.douyin_nickname = douyin_nickname
             session.add(account)
             session.commit()
 
@@ -362,8 +364,8 @@ class BrowserManager:
                 flow.detail = "等待扫码超时，请重新发起"
                 return
             flow.state = "succeeded"
-            self._mark_healthy(flow.account_id)
             flow.self_nickname = await read_self_nickname(page)
+            self._mark_healthy(flow.account_id, flow.self_nickname)
         except asyncio.CancelledError:
             flow.state = "idle"
             raise

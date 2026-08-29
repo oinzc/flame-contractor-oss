@@ -257,6 +257,10 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     <span className="v">{account.timezone}</span>
                   </div>
                   <div className="kv-row">
+                    <span className="k">抖音身份</span>
+                    <span className="v">{account.douyinNickname ?? '未识别（重新扫码登录后自动获取）'}</span>
+                  </div>
+                  <div className="kv-row">
                     <span className="k">上次验证</span>
                     <span className="v">{formatDateTime(account.lastVerifiedAt)}</span>
                   </div>

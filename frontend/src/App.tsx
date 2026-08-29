@@ -136,7 +136,12 @@ export default function App() {
               onClick={() => setPage('accounts')}
             >
               <span className={lampClass(account.status)} aria-hidden="true" />
-              <span className="tile-name">{account.displayName}</span>
+              <span className="tile-name">
+                {account.displayName}
+                {account.douyinNickname && (
+                  <span className="tile-douyin">{account.douyinNickname}</span>
+                )}
+              </span>
               <span className="tile-window">
                 {account.sendWindowStart.slice(0, 2)}时
               </span>

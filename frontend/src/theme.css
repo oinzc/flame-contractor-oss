@@ -164,6 +164,16 @@ body {
   flex: 1;
 }
 
+.tile-name .tile-douyin {
+  display: block;
+  font-size: 9.5px;
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-tile .tile-window {
   font-family: var(--mono);
   font-size: 9.5px;
