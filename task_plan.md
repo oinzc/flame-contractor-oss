@@ -7,7 +7,7 @@ M5 已全部完成并完成换机迁移（2026-08-29）。下一步按三期推�
 M6-1 失败截图 + 工件增强开工。M7-1 设计方向需用户拍板后才能进入 M7-2。
 
 ## Current Phase
-M6（可靠性闭环）执行中
+M6 完成（提交 a14e8c0/45769f4/5d8ce19 + M6-4）；M7-1 设计方向待用户拍板
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -20,10 +20,10 @@ M6（可靠性闭环）执行中
 - [x] **M5 原生表情发送**（HEAD `5ff9e77` + `0249a38`）：send_sticker 参考 unmev，真机核对选择器 + 修复待渲染/确认 Bug，E2E 通过。「比心」真实发到 oinzc 小号。
 
 ## M6 可靠性闭环（后端为主，前端不动）
-- [ ] **M6-1 失败截图 + 工件增强**：发送失败/unknown 时自动截图存 `artifacts/<账号>/`；工件 JSON 增加 page_url、selector 探测结果、bundle/执行器版本；artifacts 保留期清理（`FLAME_ARTIFACT_RETENTION_DAYS`，默认 30）。
-- [ ] **M6-2 网络预检 + 有界重试 + 发送冷却 + 窗口外补发策略**：run_send 前置连通性预检（离线不消耗本轮、留待下个 tick）；failed_retryable 在窗口内有限次退避重试（默认 2 次、间隔 10min）；好友间发送冷却（默认 3s）；窗口已结束的到期计划转 `skipped` 而非深夜补发（`FLAME_WINDOW_EXPIRY_POLICY`）。
-- [ ] **M6-3 连续失败熔断 + 成功汇总推送**：`Account.failure_streak` 列（迁移）；连续 N 天失败（默认 3）转 `cooldown` + Bark 汇总通知，成功清零；run_send 完成后可选成功推送（`FLAME_NOTIFY_ON_SUCCESS`，默认开）。
-- [ ] **M6-4 开机自启**：`scripts/install_autostart.bat`（schtasks 登录时拉起前后端）+ README 说明。
+- [x] **M6-1 失败截图 + 工件增强**：发送失败/unknown 时自动截图存 `artifacts/<账号>/`；工件 JSON 增加 page_url、selector 探测结果、bundle/执行器版本；artifacts 保留期清理（`FLAME_ARTIFACT_RETENTION_DAYS`，默认 30）。
+- [x] **M6-2 网络预检 + 有界重试 + 发送冷却 + 窗口外补发策略**：run_send 前置连通性预检（离线不消耗本轮、留待下个 tick）；failed_retryable 在窗口内有限次退避重试（默认 2 次、间隔 10min）；好友间发送冷却（默认 3s）；窗口已结束的到期计划转 `skipped` 而非深夜补发（`FLAME_WINDOW_EXPIRY_POLICY`）。
+- [x] **M6-3 连续失败熔断 + 成功汇总推送**：`Account.failure_streak` 列（迁移）；连续 N 天失败（默认 3）转 `cooldown` + Bark 汇总通知，成功清零；run_send 完成后可选成功推送（`FLAME_NOTIFY_ON_SUCCESS`，默认开）。
+- [x] **M6-4 开机自启**：`scripts/install_autostart.bat`（schtasks 登录时拉起前后端）+ README 说明。
 
 ## M7 前端重设计
 - [ ] **M7-1 设计方向提案【用户拍板】**：加载 emil-design-eng / frontend-design / animation 系技能，产出 2–3 个完整方向（含预览页）供选择。
