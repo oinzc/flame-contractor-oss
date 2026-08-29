@@ -181,6 +181,8 @@ export type LoginState = 'idle' | 'waiting_scan' | 'succeeded' | 'failed' | 'exp
 export interface LoginStatus {
   state: LoginState
   detail: string | null
+  /** 登录成功后读到的当前抖音身份昵称（控制台标签与抖音身份的对照） */
+  selfNickname?: string | null
 }
 
 export type DryRunTargetStatus = 'found' | 'not_found' | 'ambiguous'

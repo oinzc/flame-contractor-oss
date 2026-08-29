@@ -121,6 +121,8 @@ class FakePage:
         self.sticker_clicked = None
         self.url = "https://www.douyin.com/chat"
         self.screenshots: list[str] = []
+        # evaluate 桩：设置后 page.evaluate 返回该值（读自身昵称测试用）
+        self.evaluate_result = None
 
     async def screenshot(self, path=None, full_page=False, **kwargs):
         """记录截图调用并落一个占位文件（诊断截图路径断言用）。"""
@@ -221,7 +223,10 @@ class FakePage:
         if key == "Enter" and self.editor_text.strip() and self.clear_on_enter:
             self.editor_text = ""
 
-    async def evaluate(self, _expression: str, target=None) -> None:
+    async def evaluate(self, _expression: str, target=None, *args, **kwargs):
+        # 读取自身昵称等「取值型」evaluate：测试显式设置 evaluate_result 时优先返回
+        if self.evaluate_result is not None:
+            return self.evaluate_result
         # 真实实现传入 CONVERSATION_LIST 的元素句柄；这里不区分句柄/选择器，
         # 只要发生滚动就视为已预热并揭示懒加载标题。
         self.scrolls.append("evaluate")
@@ -229,6 +234,7 @@ class FakePage:
         for title in self.titles_revealed_by_scroll:
             if title not in self.conversation_titles:
                 self.conversation_titles.append(title)
+        return None
 
     async def evaluate_js(self, _script: str) -> dict:
         return {}

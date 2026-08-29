@@ -23,7 +23,7 @@ from ..models import (
     SendJob,
     TemplateType,
 )
-from .douyin_chat import DomChangedError, DouyinChat, Sticker
+from .douyin_chat import DomChangedError, DouyinChat, Sticker, read_self_nickname
 from .message_renderer import render_message
 from .pool import pick_pool_item
 from .profile_store import ensure_profile_dir
@@ -56,6 +56,8 @@ class LoginFlow:
     task: asyncio.Task | None = None
     # M8-4 截图扫码登录：headless 登录页截图的落盘路径
     qr_image: str | None = None
+    # 登录成功后读到的当前抖音身份昵称（localStorage user_info，仅展示）
+    self_nickname: str | None = None
 
 
 @dataclass
@@ -228,7 +230,11 @@ class BrowserManager:
 
     @staticmethod
     def _login_view(flow: LoginFlow) -> dict[str, str | None]:
-        return {"state": flow.state, "detail": flow.detail}
+        return {
+            "state": flow.state,
+            "detail": flow.detail,
+            "self_nickname": flow.self_nickname,
+        }
 
     async def _login_flow(self, flow: LoginFlow, profile_path: Path) -> None:
         context = None
@@ -249,6 +255,7 @@ class BrowserManager:
 
             flow.state = "succeeded"
             self._mark_healthy(flow.account_id)
+            flow.self_nickname = await read_self_nickname(page)
         except asyncio.CancelledError:
             flow.state = "idle"
             raise
@@ -346,6 +353,7 @@ class BrowserManager:
                 return
             flow.state = "succeeded"
             self._mark_healthy(flow.account_id)
+            flow.self_nickname = await read_self_nickname(page)
         except asyncio.CancelledError:
             flow.state = "idle"
             raise
