@@ -71,6 +71,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  patchTemplate: (
+    id: string,
+    patch: {
+      name?: string
+      content?: string
+      imagePath?: string
+      stickerName?: string
+      stickerCategory?: string
+      enabled?: boolean
+      poolItems?: { content: string; weekdayMask: number }[]
+    },
+  ) =>
+    request<import('./types').MessageTemplate>(`/api/templates/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTemplate: (id: string) =>
+    request<void>(`/api/templates/${id}`, { method: 'DELETE' }),
   startLogin: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login`, {
       method: 'POST',
