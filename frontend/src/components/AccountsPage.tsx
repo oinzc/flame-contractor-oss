@@ -195,6 +195,36 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
     }
   }
 
+  async function handleRename(account: Account) {
+    const input = window.prompt('修改账号显示名称：', account.displayName)
+    if (input === null || input.trim() === '' || input.trim() === account.displayName) {
+      return
+    }
+    clearError(account.id)
+    try {
+      await api.patchAccount(account.id, { displayName: input.trim() })
+      onChanged()
+    } catch (err) {
+      setError(account.id, err instanceof ApiError ? err.message : '改名失败')
+    }
+  }
+
+  async function handleDeleteAccount(account: Account) {
+    const confirmed = window.confirm(
+      `确定删除账号「${account.displayName}」？\n有好友或发送记录的账号无法删除，登录数据会一并清理。`,
+    )
+    if (!confirmed) {
+      return
+    }
+    clearError(account.id)
+    try {
+      await api.deleteAccount(account.id)
+      onChanged()
+    } catch (err) {
+      setError(account.id, err instanceof ApiError ? err.message : '删除失败')
+    }
+  }
+
   return (
     <div className="main-col">
       <div className="page-head">
@@ -403,6 +433,22 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     onClick={() => handleToggle(account)}
                   >
                     {account.enabled ? '暂停' : '恢复'}
+                  </button>
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    disabled={busyId === account.id}
+                    onClick={() => handleRename(account)}
+                  >
+                    改名
+                  </button>
+                  <button
+                    className="btn ghost small"
+                    type="button"
+                    disabled={busyId === account.id}
+                    onClick={() => handleDeleteAccount(account)}
+                  >
+                    删除
                   </button>
                 </div>
               </article>
