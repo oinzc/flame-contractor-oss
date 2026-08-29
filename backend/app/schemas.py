@@ -175,9 +175,10 @@ class TargetCreate(APIBase):
 
 
 class TargetPatch(APIBase):
-    """局部更新契约对象。当前仅开放火花天数手动校准（参考 ScriptCat）。"""
+    """局部更新契约对象。开放火花天数手动校准与启停（暂停发送）。"""
 
     streak_days: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
 
 
 class TargetRead(APIBase):

@@ -54,7 +54,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchTarget: (id: string, patch: { streakDays?: number }) =>
+  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean }) =>
     request<import('./types').ContractTarget>(`/api/targets/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

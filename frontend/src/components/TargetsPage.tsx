@@ -62,6 +62,17 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     }
   }
 
+  async function handleToggleEnabled(target: ContractTarget) {
+    const verb = target.enabled ? '暂停' : '启用'
+    setActionError(null)
+    try {
+      await api.patchTarget(target.id, { enabled: !target.enabled })
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : `${verb}失败，请重试`)
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -139,7 +150,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                 <tbody>
                   {selectedTargets.map((target) => (
                     <tr key={target.id}>
-                      <td>{target.nicknameSnapshot}</td>
+                      <td>
+                        {target.nicknameSnapshot}
+                        {!target.enabled && (
+                          <span className="muted" style={{ marginLeft: 6, fontSize: 11.5 }}>
+                            （已暂停）
+                          </span>
+                        )}
+                      </td>
                       <td className="mono">{target.platformUserId ?? '—'}</td>
                       <td>{templateName(target.templateId)}</td>
                       <td className="mono">
@@ -158,6 +176,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                         <button
                           className="btn ghost small"
                           type="button"
+                          onClick={() => handleToggleEnabled(target)}
+                        >
+                          {target.enabled ? '暂停' : '启用'}
+                        </button>
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          style={{ marginLeft: 6 }}
                           onClick={() => handleDelete(target)}
                         >
                           删除
