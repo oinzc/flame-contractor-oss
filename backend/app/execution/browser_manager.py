@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -23,7 +24,7 @@ from ..models import (
     SendJob,
     TemplateType,
 )
-from .douyin_chat import DomChangedError, DouyinChat, Sticker, read_self_nickname
+from .douyin_chat import DomChangedError, DouyinChat, Sticker, read_qr_data_url, read_self_nickname
 from .message_renderer import render_message
 from .pool import pick_pool_item
 from .profile_store import ensure_profile_dir
@@ -326,6 +327,15 @@ class BrowserManager:
                     directory = self._settings.artifacts_dir / flow.account_id / "login"
                     directory.mkdir(parents=True, exist_ok=True)
                     target_path = directory / "login-qr.png"
+                    # 优先：直接取二维码本体的 data URL（像素级清晰，可扫性最佳）
+                    data_url = await read_qr_data_url(page)
+                    if data_url:
+                        header, _, payload = data_url.partition(",")
+                        if "image/png" in header and payload:
+                            target_path.write_bytes(base64.b64decode(payload))
+                            flow.qr_image = str(target_path)
+                            return
+                    # 兜底：整页截图（二维码较小但保底可见）
                     await page.screenshot(path=str(target_path), full_page=False)
                     flow.qr_image = str(target_path)
                 except Exception:

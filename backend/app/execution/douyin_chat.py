@@ -752,3 +752,31 @@ async def read_self_nickname(page) -> str | None:
     except Exception:  # noqa: BLE001 - 展示性信息，任何失败都静默降级
         return None
     return None
+
+
+async def read_qr_data_url(page) -> str | None:
+    """登录弹窗中的二维码图片 data URL（M8-4 截图扫码的数据源）。
+
+    二维码在页面里是 img[src^="data:image/png;base64,..."]（约 178px 见方）。
+    用「data:image 前缀 + 边长 120-260」的结构启发式定位，不依赖被混淆的
+    class 名；找不到或结构变化返回 None（调用方退回整页截图兜底）。
+    """
+    try:
+        result = await page.evaluate(
+            """() => {
+              for (const img of document.querySelectorAll('img')) {
+                const src = img.src || '';
+                if (!src.startsWith('data:image')) continue;
+                const r = img.getBoundingClientRect();
+                if (r.width >= 120 && r.width <= 260 && r.height >= 120 && r.height <= 260) {
+                  return src;
+                }
+              }
+              return null;
+            }"""
+        )
+        if isinstance(result, str) and result.startswith("data:image/png;base64,"):
+            return result
+    except Exception:  # noqa: BLE001 - 展示性数据，任何失败都静默降级
+        return None
+    return None
