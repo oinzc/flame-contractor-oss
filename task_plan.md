@@ -1,13 +1,13 @@
-# Task Plan: Flame Contractor — M4 + M5 全部完成
+# Task Plan: Flame Contractor — M6 可靠性闭环 → M7 前端重设计 → M8 体验功能
 
 ## Goal
-M4（自动每日发送）+ Bark 通知 + 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送均已实机验证完成。通知渠道经评估**只保留 Bark**（不扩钉钉/邮件）。**M5 里程碑达成**；完整自动调度真机 E2E 也已通过。
+M5 已全部完成并完成换机迁移（2026-08-29）。下一步按三期推进：**M6 补齐无人值守可靠性闭环**（诊断/重试/熔断/自启），**M7 前端重设计**（信息架构+视觉，使用 emilkowalski 技能与本地设计技能），**M8 体验功能**（文案池/统计/备份/截图扫码，长在新设计上）。
 
 ## Next Step
-M5 已全部完成。后续仅当转多用户/远程时，再加鉴权与加密（当前仅监听 127.0.0.1，勿暴露公网）。
+M6-1 失败截图 + 工件增强开工。M7-1 设计方向需用户拍板后才能进入 M7-2。
 
 ## Current Phase
-Phase 完成（M5 达成）
+M6（可靠性闭环）执行中
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -18,6 +18,37 @@ Phase 完成（M5 达成）
 - [x] **M5 图片发送 + 火花校准**（HEAD `18d9115`）：图片模板/发送链路/确认 + 火花天数手动校准。
 - [x] **M5 selector bundle 热更新**（HEAD `d687f88`）：选择器外置 JSON bundle + mtime 惰性重载 + `GET/POST /api/selectors`，改版不重启进程。
 - [x] **M5 原生表情发送**（HEAD `5ff9e77` + `0249a38`）：send_sticker 参考 unmev，真机核对选择器 + 修复待渲染/确认 Bug，E2E 通过。「比心」真实发到 oinzc 小号。
+
+## M6 可靠性闭环（后端为主，前端不动）
+- [ ] **M6-1 失败截图 + 工件增强**：发送失败/unknown 时自动截图存 `artifacts/<账号>/`；工件 JSON 增加 page_url、selector 探测结果、bundle/执行器版本；artifacts 保留期清理（`FLAME_ARTIFACT_RETENTION_DAYS`，默认 30）。
+- [ ] **M6-2 网络预检 + 有界重试 + 发送冷却 + 窗口外补发策略**：run_send 前置连通性预检（离线不消耗本轮、留待下个 tick）；failed_retryable 在窗口内有限次退避重试（默认 2 次、间隔 10min）；好友间发送冷却（默认 3s）；窗口已结束的到期计划转 `skipped` 而非深夜补发（`FLAME_WINDOW_EXPIRY_POLICY`）。
+- [ ] **M6-3 连续失败熔断 + 成功汇总推送**：`Account.failure_streak` 列（迁移）；连续 N 天失败（默认 3）转 `cooldown` + Bark 汇总通知，成功清零；run_send 完成后可选成功推送（`FLAME_NOTIFY_ON_SUCCESS`，默认开）。
+- [ ] **M6-4 开机自启**：`scripts/install_autostart.bat`（schtasks 登录时拉起前后端）+ README 说明。
+
+## M7 前端重设计
+- [ ] **M7-1 设计方向提案【用户拍板】**：加载 emil-design-eng / frontend-design / animation 系技能，产出 2–3 个完整方向（含预览页）供选择。
+- [ ] **M7-2 实施重设计**：信息架构重排 + 视觉升级 + 任务详情（含截图查看）；pytest/build 通过后提交。
+
+## M8 体验功能（长在新设计上）
+- [ ] **M8-1 文案池 / 按星期文案**：`random_pool` 模板类型（多条候选轮换/随机）；模板页编辑。
+- [ ] **M8-2 统计页 + 导出**：成功率历史、连续天数、按日聚合；CSV 导出。
+- [ ] **M8-3 导入/导出备份**：契约+模板+运行记录 JSON 导出/导入。
+- [ ] **M8-4 截图扫码登录**：headless 渲染登录页 + 实时二维码网页（2026-08-29 实测路径），账号卡片按钮。
+- [ ] **M8-5 全量回归 + 文档**：pytest/build/启动验证；PROJECT_STATUS/README 更新。
+
+## 不做清单（含原因，防止反复纠结）
+| 项 | 结论 |
+|---|---|
+| Docker 部署 | 单机自用，M6-4 开机自启已覆盖；转远程时再议 |
+| Playwright Trace | 截图覆盖八成诊断价值；不够再议 |
+| 多 worker 进程隔离 | 当前 1 账号，进程内串行够用；账号多了再做 |
+| platform_user_id 稳定匹配 | 触发条件再做：好友重名/频繁改名时 |
+| selector bundle 版本管理 | JSON 在 git 内，回滚=改回去 |
+| Profile 加密 | 与 PRD 边界一致（本机单用户），文档化风险即可 |
+| 磁盘治理 | 已并入 M6-1 保留期清理 |
+| 验证码/风控页检测 | 无真实样本无法写 selector；等 M6-1 截图留证后再做（联动） |
+| 通知渠道扩展（钉钉/邮件） | 2026-08-28 已评估：仅 Bark |
+
 
 ## M4 已完成（验收要点）
 - 新增 `SendSchedule`（账号级每日调度，`(account, business_date)` 唯一）+ Alembic 迁移 `15a5feca9ee1`。
