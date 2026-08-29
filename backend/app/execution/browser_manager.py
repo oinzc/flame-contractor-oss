@@ -37,6 +37,10 @@ SEND_STABILIZE_POLLS = 3
 
 BrowserFactory = Callable[[Path, bool], Awaitable[tuple[object, object]]]
 
+# Windows 有头窗口会被 Chromium 的原生遮挡计算误判为被遮挡而停止绘制（整页黑屏，
+# headless 不受影响）；关闭该特性规避。headless 携带无害，故统一传入。
+CHROMIUM_LAUNCH_ARGS = ["--disable-features=CalculateNativeWinOcclusion"]
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -118,6 +122,7 @@ class BrowserManager:
         context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_path),
             headless=headless,
+            args=CHROMIUM_LAUNCH_ARGS,
         )
         page = context.pages[0] if context.pages else await context.new_page()
         return context, page
