@@ -1,6 +1,6 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | M5 收尾验证已完成
+> 最近更新：2026-08-28 | 由 DeepSeek Harness Agent 更新 | 功能提交基线 `ed1010e`
 
 ## 当前状态
 **M4（自动调度）+ 异常推送（Bark）+ 图片发送 + 火花天数手动校准 + selector bundle 热更新 + 原生表情发送，M5 全部达成**。当前能力：自动每日续火、异常推送、图片/表情发送、火花天数手动校准、页面改版不重启适配选择器。
