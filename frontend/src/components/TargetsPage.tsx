@@ -31,8 +31,10 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
-  const [scanTitles, setScanTitles] = useState<string[] | null>(null)
+  const [scanEntries, setScanEntries] = useState<{ title: string; preview: string }[] | null>(null)
   const [selectedTitles, setSelectedTitles] = useState<Set<string>>(new Set())
+  const [scanQuery, setScanQuery] = useState('')
+  const [showGroups, setShowGroups] = useState(false)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -46,6 +48,17 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
   const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
+
+  const scanGroupCount =
+    scanEntries?.filter((entry) => looksLikeGroup(entry.title, entry.preview)).length ?? 0
+  const scanExistCount =
+    scanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
+  const scanFiltered = (scanEntries ?? []).filter((entry) => {
+    if (!showGroups && looksLikeGroup(entry.title, entry.preview)) return false
+    const q = scanQuery.trim().toLowerCase()
+    if (q && !entry.title.toLowerCase().includes(q)) return false
+    return true
+  })
 
   async function handleDelete(target: ContractTarget) {
     if (!window.confirm(`确定删除好友「${target.nicknameSnapshot}」？`)) {
@@ -87,17 +100,28 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     }
   }
 
+  // 群聊识别（真机侦察结论）：标题带「已满/人数」括号；最后一条消息带「成员名：」前缀
+  // （成员名可能被截断成冒号开头）；或为「xx加入了群聊」系统消息
+  function looksLikeGroup(title: string, preview: string): boolean {
+    return (
+      /（已满）|\(\d+\)|（\d+人?）/.test(title) ||
+      /加入了群聊/.test(preview) ||
+      /^[^：]{0,20}：\S/.test(preview)
+    )
+  }
+
   async function handleScan() {
     setScanLoading(true)
     setScanError(null)
-    setScanTitles(null)
+    setScanEntries(null)
     setSelectedTitles(new Set())
+    setScanQuery('')
     try {
       const result = await api.scanChats(selectedAccountId)
       if (result.overall !== 'ok') {
         setScanError(result.detail ?? '扫描失败，请重试')
       } else {
-        setScanTitles(result.titles)
+        setScanEntries(result.entries)
       }
     } catch (err) {
       setScanError(err instanceof ApiError ? err.message : '扫描失败，请重试')
@@ -116,7 +140,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
         nicknames: [...selectedTitles],
       })
       setBatchResult(result)
-      setScanTitles(null)
+      setScanEntries(null)
       setSelectedTitles(new Set())
       onChanged()
     } catch (err) {
@@ -341,73 +365,76 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                     )}
                   </div>
                   {scanError && <div className="form-error" style={{ marginTop: 8 }}>{scanError}</div>}
-                  {scanTitles !== null && (
-                    <div
-                      style={{
-                        marginTop: 10,
-                        maxHeight: 260,
-                        overflowY: 'auto',
-                        border: '1px solid var(--border, #333)',
-                        borderRadius: 8,
-                        padding: 10,
-                      }}
-                    >
-                      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={() =>
-                            setSelectedTitles(new Set(scanTitles.filter((t) => !existingNicknames.has(t))))
-                          }
-                        >
-                          全选可导入
-                        </button>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={() => setSelectedTitles(new Set())}
-                        >
-                          清空
-                        </button>
-                        <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
-                          共扫描到 {scanTitles.length} 个会话，其中已存在 {scanTitles.filter((t) => existingNicknames.has(t)).length} 个
-                        </span>
+                  {scanEntries !== null && (
+                    <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                      <div className="pick-toolbar">
+                        <input
+                          className="pick-search"
+                          type="text"
+                          value={scanQuery}
+                          onChange={(event) => setScanQuery(event.target.value)}
+                          placeholder="搜索会话名…"
+                        />
+                        <label className="pick-switch">
+                          <input
+                            type="checkbox"
+                            checked={showGroups}
+                            onChange={(event) => setShowGroups(event.target.checked)}
+                          />
+                          显示疑似群聊（{scanGroupCount}）
+                        </label>
                       </div>
-                      {scanTitles.map((title) => {
-                        const exists = existingNicknames.has(title)
-                        const checked = selectedTitles.has(title)
-                        return (
-                          <label
-                            key={title}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '3px 2px',
-                              fontSize: 13,
-                              cursor: exists ? 'default' : 'pointer',
-                              opacity: exists ? 0.55 : 1,
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              disabled={exists}
-                              checked={exists || checked}
-                              onChange={() =>
-                                setSelectedTitles((previous) => {
-                                  const next = new Set(previous)
-                                  if (next.has(title)) next.delete(title)
-                                  else next.add(title)
-                                  return next
-                                })
-                              }
-                            />
-                            {title}
-                            {exists && <span className="muted">（已在列表）</span>}
-                          </label>
-                        )
-                      })}
-                      <div className="form-actions" style={{ marginTop: 10 }}>
+                      <div className="pick-list">
+                        {scanFiltered.length === 0 ? (
+                          <div className="muted" style={{ padding: '14px 12px', fontSize: 12 }}>
+                            {scanQuery.trim()
+                              ? '没有匹配的会话，换个关键词试试。'
+                              : '没有可显示的会话。'}
+                          </div>
+                        ) : (
+                          scanFiltered.map((entry) => {
+                            const exists = existingNicknames.has(entry.title)
+                            const group = looksLikeGroup(entry.title, entry.preview)
+                            const checked = selectedTitles.has(entry.title)
+                            return (
+                              <label
+                                key={entry.title}
+                                className={[
+                                  'pick-row',
+                                  checked && !exists ? 'selected' : '',
+                                  exists ? 'occupied' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                                title={entry.preview || undefined}
+                              >
+                                <input
+                                  type="checkbox"
+                                  disabled={exists}
+                                  checked={exists || checked}
+                                  onChange={() =>
+                                    setSelectedTitles((previous) => {
+                                      const next = new Set(previous)
+                                      if (next.has(entry.title)) next.delete(entry.title)
+                                      else next.add(entry.title)
+                                      return next
+                                    })
+                                  }
+                                />
+                                <span className="pick-name">{entry.title}</span>
+                                <span className="pick-meta">
+                                  {group && <span className="badge gold">疑似群聊</span>}
+                                  {exists && <span className="badge">已在列表</span>}
+                                </span>
+                              </label>
+                            )
+                          })
+                        )}
+                      </div>
+                      <div className="pick-foot">
+                        <span className="pick-stat">
+                          扫描 {scanEntries.length} · 群聊 {scanGroupCount}（已隐藏）· 已在列表 {scanExistCount}
+                        </span>
                         <button
                           className="btn primary small"
                           type="button"

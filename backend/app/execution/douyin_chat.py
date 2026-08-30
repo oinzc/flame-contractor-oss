@@ -323,28 +323,38 @@ class DouyinChat:
                         return titles
         return titles
 
-    async def scan_all_titles(self) -> list[str]:
+    async def scan_all_chats(self) -> list[dict]:
         """全量扫描会话列表：边滚动边收集去重，连续多轮无新增即判定到底。
 
         只读操作——不点击任何会话、不发送任何消息；供好友批量导入挑选候选。
+        返回结构化条目：title=会话名（首行），preview=最后一条消息（供群聊识别）。
         """
-        titles: list[str] = []
+        entries: list[dict] = []
         seen: set[str] = set()
         scroll_element = await self.page.query_selector(_s.CONVERSATION_LIST)
         if scroll_element is None:
-            return titles
+            return entries
         idle = 0
         for _ in range(SCAN_MAX_ROUNDS):
-            batch = await self.visible_titles(limit=10**9)
-            new = [title for title in batch if title not in seen]
-            titles.extend(new)
-            seen.update(new)
-            idle = idle + 1 if not new else 0
+            count_before = len(entries)
+            for item in await self.page.query_selector_all(_s.CONVERSATION_ITEM):
+                title_element = await item.query_selector(_s.CONVERSATION_TITLE)
+                if title_element is None:
+                    continue
+                title = ((await title_element.inner_text()) or "").strip()
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                lines = [line.strip() for line in ((await item.inner_text()) or "").splitlines() if line.strip()]
+                # 行结构：[名字, 时间, 最后消息…]；长消息可能多行，取名字之后合并
+                preview = " ".join(lines[2:]) if len(lines) > 2 else ""
+                entries.append({"title": title, "preview": preview})
+            idle = idle + 1 if len(entries) == count_before else 0
             if idle >= SCAN_IDLE_ROUNDS:
                 break
             await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
             await self._sleep(0.8)
-        return titles
+        return entries
 
     async def _type_text(self, text: str) -> None:
         """输入文本：真实页面走 IME 安全的 insert_text；测试协议方法兜底。"""

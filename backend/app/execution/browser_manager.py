@@ -421,16 +421,16 @@ class BrowserManager:
                 return {
                     "overall": "auth_expired",
                     "detail": "登录已失效，请重新扫码",
-                    "titles": [],
+                    "entries": [],
                 }
             try:
-                titles = await chat.scan_all_titles()
+                entries = await chat.scan_all_chats()
             except Exception as exc:
-                return {"overall": "error", "detail": type(exc).__name__, "titles": []}
+                return {"overall": "error", "detail": type(exc).__name__, "entries": []}
             self._touch_verified(account_id)
-            return {"overall": "ok", "detail": None, "titles": titles}
+            return {"overall": "ok", "detail": None, "entries": entries}
         except Exception as exc:
-            return {"overall": "error", "detail": type(exc).__name__, "titles": []}
+            return {"overall": "error", "detail": type(exc).__name__, "entries": []}
         finally:
             if context is not None:
                 try:
