@@ -409,3 +409,37 @@ password, cookie, token, storageState, profilePath
   （缺候选 422）；`weekdayMask` 位掩码 0=每天，bit0=周一 … bit6=周日。
 - `GET /api/templates`：池模板响应附带 `poolItems`。
 - 选取规则：星期过滤后按 `last_used_at` 最早优先（LRU）；发送消耗轮换顺序，预览不消耗。
+
+## CRUD 补齐与好友导入（2026-08-30 深夜）
+
+### 好友（/api/targets）
+- `PATCH /api/targets/{id}`：开放 `enabled`（暂停/启用，删除被任务引用时的兜底）与
+  `templateId`（换绑模板，`null`=解绑，模板不存在 404）。
+- `POST /api/targets/batch`：批量导入。`items: [{nickname, streakDays?}]`（≤200 条），
+  逐条独立提交：重名进 `duplicates`、单条失败进 `failed` 不中断整批；
+  `streakDays` 为扫描读到的官方火花天数，导入时回填为初始值。
+
+### 模板（/api/templates）
+- `PATCH /api/templates/{id}`：局部更新（name/content/imagePath/sticker*/enabled/
+  poolItems 整体替换）；`type` 不可改；仅发送内容变化才 version+1（参与当日幂等键）。
+- `DELETE /api/templates/{id}`：被好友绑定或任务引用时 409；无引用物理删除（池候选随删）。
+
+### 账号（/api/accounts）
+- `PATCH /api/accounts/{id}`：开放 `displayName`（查重、去空白）。
+- `DELETE /api/accounts/{id}`：被好友/任务引用 409、运行中 409；无引用物理删除并清理
+  浏览器 Profile；SendSchedule 为派生数据随账号级联清除（不拦截）。
+
+### unknown 任务人工处理（/api/jobs）
+- `POST /api/jobs/{id}/confirm-sent`：仅 `unknown_requires_review` 可用（否则 409）；
+  对齐自动成功路径（SUCCEEDED + confirmedAt + 火花 +1 + lastSuccessAt）。
+- `POST /api/jobs/{id}/release`：回到 SCHEDULED，由「立即发送」重新执行。
+- 两个动作均写 SendAttempt（stage=`manual_confirm_sent`/`manual_release`）审计留痕。
+
+### 会话扫描与好友导入（/api/accounts/{id}/scan-chats）
+- `POST /api/accounts/{id}/scan-chats`：headless 全量滚动会话列表（只读），返回
+  `entries: [{title, preview, streakDays?, streakKind?, streakLabel?}]`。
+  - `streakDays`：抖音官方火花天数（名字旁徽标，数字形态）；
+  - `streakLabel`：特殊态文字徽标（「重燃中 1/3」「N 天后消失」）；
+  - `streakKind`：`normal`/`couple`/`family`（取自火花图标路径）；
+  - 判定续火对象 = 有火花天数 || 有文字徽标 || 最后消息提及「火花」（断火提醒形态）。
+  - 登录失效返回 `overall=auth_expired` 并标记账号。
