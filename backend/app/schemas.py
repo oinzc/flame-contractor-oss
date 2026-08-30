@@ -327,12 +327,19 @@ class DryRunRead(APIBase):
     artifact_path: str | None = None
 
 
+class ScanChatItem(APIBase):
+    """扫描到的单个会话：title=会话名，preview=最后一条消息（供群聊识别）。"""
+
+    title: str
+    preview: str = ""
+
+
 class ScanChatsRead(APIBase):
-    """会话列表全量扫描结果（只读）。overall=ok 时 titles 为去重后的全部会话标题。"""
+    """会话列表全量扫描结果（只读）。overall=ok 时 entries 为去重后的全部会话。"""
 
     overall: Literal["ok", "auth_expired", "error"]
     detail: str | None = None
-    titles: list[str] = []
+    entries: list[ScanChatItem] = []
 
 
 # ---------------------------------------------------------------- send

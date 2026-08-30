@@ -25,7 +25,9 @@ def test_scan_chats_collects_all_titles(settings):
         assert result.status_code == 200, result.text
         payload = result.json()
         assert payload["overall"] == "ok"
-        assert payload["titles"] == ["好友A", "好友B", "好友C"]
+        # FakeItem 的 inner_text 只有名字单行：title 收齐，preview 为空
+        assert [item["title"] for item in payload["entries"]] == ["好友A", "好友B", "好友C"]
+        assert all(item["preview"] == "" for item in payload["entries"])
 
         updated = client.get("/api/accounts").json()[0]
         assert updated["lastVerifiedAt"] is not None
@@ -41,7 +43,7 @@ def test_scan_chats_requires_login(settings):
         assert result.status_code == 200, result.text
         payload = result.json()
         assert payload["overall"] == "auth_expired"
-        assert payload["titles"] == []
+        assert payload["entries"] == []
 
         updated = client.get("/api/accounts").json()[0]
         assert updated["status"] == "auth_expired"

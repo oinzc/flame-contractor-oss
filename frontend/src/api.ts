@@ -73,10 +73,11 @@ export const api = {
       body: JSON.stringify(input),
     }),
   scanChats: (accountId: string) =>
-    request<{ overall: 'ok' | 'auth_expired' | 'error'; detail: string | null; titles: string[] }>(
-      `/api/accounts/${accountId}/scan-chats`,
-      { method: 'POST' },
-    ),
+    request<{
+      overall: 'ok' | 'auth_expired' | 'error'
+      detail: string | null
+      entries: { title: string; preview: string }[]
+    }>(`/api/accounts/${accountId}/scan-chats`, { method: 'POST' }),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
   sendNow: (id: string) =>
