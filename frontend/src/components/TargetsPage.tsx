@@ -32,7 +32,13 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanEntries, setScanEntries] = useState<
-    { title: string; preview: string; streakDays: number | null; streakKind: string | null }[]
+    {
+      title: string
+      preview: string
+      streakDays: number | null
+      streakKind: string | null
+      streakLabel: string | null
+    }[]
   | null>(null)
   const [selectedTitles, setSelectedTitles] = useState<
     Map<string, number | undefined>
@@ -53,14 +59,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
 
-  // 抖音官方火花天数就是续火对象的判定信号：默认只显示带火花的会话
+  // 抖音官方火花天数就是续火对象的判定信号；火花将熄的（消息提示）也算
   const scanStreakCount =
-    scanEntries?.filter((entry) => entry.streakDays != null).length ?? 0
+    scanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
   const scanNoStreakCount = (scanEntries?.length ?? 0) - scanStreakCount
   const scanExistCount =
     scanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
   const scanFiltered = (scanEntries ?? []).filter((entry) => {
-    if (!showNoStreak && entry.streakDays == null) return false
+    if (!showNoStreak && !isStreakTarget(entry)) return false
     const q = scanQuery.trim().toLowerCase()
     if (q && !entry.title.toLowerCase().includes(q)) return false
     return true
@@ -114,6 +120,23 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
       /加入了群聊/.test(preview) ||
       /^[^：]{0,20}：\S/.test(preview)
     )
+  }
+
+  // 火花将熄/重燃中的会话：火花徽标是文字标签（「重燃中 1/3」「5 天后消失」）；
+  // 已断火的只剩系统消息文案（「N 天后火花将消失」）。三者都视为续火对象
+  function hasSparkHint(entry: {
+    streakLabel?: string | null
+    preview: string
+  }): boolean {
+    return Boolean(entry.streakLabel) || /火花/.test(entry.preview)
+  }
+
+  function isStreakTarget(entry: {
+    streakDays: number | null
+    streakLabel?: string | null
+    preview: string
+  }): boolean {
+    return entry.streakDays != null || hasSparkHint(entry)
   }
 
   async function handleScan() {
@@ -442,6 +465,12 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                                 <span className="pick-meta">
                                   {entry.streakDays != null && (
                                     <span className={`badge ${kindTone}`}>🔥 {entry.streakDays}</span>
+                                  )}
+                                  {entry.streakDays == null && entry.streakLabel && (
+                                    <span className="badge gold">{entry.streakLabel}</span>
+                                  )}
+                                  {entry.streakDays == null && !entry.streakLabel && hasSparkHint(entry) && (
+                                    <span className="badge gold">🔥?</span>
                                   )}
                                   {group && <span className="badge">群</span>}
                                   {exists && <span className="badge">已在列表</span>}

@@ -338,13 +338,14 @@ class DryRunRead(APIBase):
 
 
 class ScanChatItem(APIBase):
-    """扫描到的单个会话。streak_days 为抖音官方火花天数（None=无火花标记，
-    即非续火对象）；streak_kind: normal/couple/family。"""
+    """扫描到的单个会话。streak_days 为抖音官方火花天数；streak_label 为特殊态
+    文字标记（如「重燃中 1/3」「5 天后消失」）；两者都为空且消息未提及火花 = 无火花。"""
 
     title: str
     preview: str = ""
     streak_days: int | None = None
     streak_kind: str | None = None
+    streak_label: str | None = None
 
 
 class ScanChatsRead(APIBase):
