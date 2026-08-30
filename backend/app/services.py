@@ -13,9 +13,11 @@ from .execution.profile_store import remove_profile_dir
 from .models import (
     Account,
     AccountStatus,
+    AttemptStatus,
     ContractTarget,
     JobStatus,
     MessageTemplate,
+    SendAttempt,
     SendJob,
     SendSchedule,
     TemplatePoolItem,
@@ -452,6 +454,84 @@ def patch_target(session: Session, target_id: str, payload: TargetPatch) -> Targ
     session.commit()
     session.refresh(target)
     return TargetRead.model_validate(target)
+
+
+# ---------------------------------------------------------------- manual job review
+
+
+def _record_manual_action(session: Session, job_id: str, stage: str) -> None:
+    """人工接管动作留痕：作为一条特殊 stage 的尝试记录追加，任务详情里审计可见。"""
+    last_no = session.exec(
+        select(func.max(SendAttempt.attempt_no)).where(SendAttempt.job_id == job_id)
+    ).one()
+    now = utc_now()
+    session.add(
+        SendAttempt(
+            job_id=job_id,
+            attempt_no=(last_no or 0) + 1,
+            stage=stage,
+            status=AttemptStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+        )
+    )
+
+
+def _get_unknown_job(session: Session, job_id: str) -> SendJob:
+    job = session.get(SendJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if job.status != JobStatus.UNKNOWN_REQUIRES_REVIEW:
+        raise HTTPException(
+            status_code=409, detail="只有「待人工复核」的任务可以人工处理"
+        )
+    return job
+
+
+def confirm_job_sent(session: Session, job_id: str) -> JobRead:
+    """人工确认 unknown 任务的消息已实际发出：对齐自动成功路径，补齐统计与火花。"""
+    job = _get_unknown_job(session, job_id)
+
+    now = utc_now()
+    job.status = JobStatus.SUCCEEDED
+    job.failure_class = None
+    job.confirmed_at = now
+    job.updated_at = now
+    session.add(job)
+
+    target = session.get(ContractTarget, job.target_id)
+    if target is not None:
+        target.last_sent_at = now
+        target.last_confirmed_at = now
+        target.streak_days += 1
+        target.updated_at = now
+        session.add(target)
+    account = session.get(Account, job.account_id)
+    if account is not None:
+        account.last_success_at = now
+        session.add(account)
+
+    _record_manual_action(session, job_id, "manual_confirm_sent")
+    session.commit()
+    session.refresh(job)
+    return JobRead.model_validate(job)
+
+
+def release_job(session: Session, job_id: str) -> JobRead:
+    """人工确认消息未发出，放行重试：任务回到 SCHEDULED，由「立即发送」重新执行。"""
+    job = _get_unknown_job(session, job_id)
+
+    now = utc_now()
+    job.status = JobStatus.SCHEDULED
+    job.failure_class = None
+    job.confirmed_at = None
+    job.updated_at = now
+    session.add(job)
+
+    _record_manual_action(session, job_id, "manual_release")
+    session.commit()
+    session.refresh(job)
+    return JobRead.model_validate(job)
 
 
 # ---------------------------------------------------------------- send preview

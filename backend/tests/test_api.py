@@ -8,6 +8,7 @@ from app.models import (
     ContractTarget,
     JobStatus,
     MessageTemplate,
+    SendAttempt,
     SendJob,
 )
 
@@ -583,3 +584,73 @@ def test_send_job_daily_slot_is_unique(engine):
             session.rollback()
             raised = True
         assert raised
+
+
+def test_manual_job_review(client, engine):
+    """unknown 任务人工闭环：确认已发对齐成功路径；放行回到 SCHEDULED；非 unknown 409。"""
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    template = client.post("/api/templates", json={"name": "T", "content": "续火"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A", "templateId": template["id"]},
+    ).json()
+    streak_before = target["streakDays"]
+
+    def make_unknown_job(slot: str) -> str:
+        with Session(engine) as session:
+            job = SendJob(
+                account_id=account["id"],
+                target_id=target["id"],
+                template_id=template["id"],
+                business_date=date_cls.today(),
+                message_slot_id=slot,
+                status=JobStatus.UNKNOWN_REQUIRES_REVIEW,
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return job.id
+
+    job_id = make_unknown_job("slot-manual")
+    confirmed = client.post(f"/api/jobs/{job_id}/confirm-sent")
+    assert confirmed.status_code == 200, confirmed.text
+    body = confirmed.json()
+    assert body["status"] == "succeeded"
+    assert body["confirmedAt"] is not None
+
+    with Session(engine) as session:
+        t = session.get(ContractTarget, target["id"])
+        assert t.streak_days == streak_before + 1  # 人工确认与自动成功一样给火花 +1
+        a = session.get(Account, account["id"])
+        assert a.last_success_at is not None
+        attempts = session.exec(
+            select(SendAttempt).where(SendAttempt.job_id == job_id)
+        ).all()
+        assert [x.stage for x in attempts] == ["manual_confirm_sent"]  # 动作留痕可审计
+
+    # 已处理过的任务不能再次人工操作
+    conflict = client.post(f"/api/jobs/{job_id}/confirm-sent")
+    assert conflict.status_code == 409
+    conflict_release = client.post(f"/api/jobs/{job_id}/release")
+    assert conflict_release.status_code == 409
+
+    job_id2 = make_unknown_job("slot-manual-2")
+    released = client.post(f"/api/jobs/{job_id2}/release")
+    assert released.status_code == 200, released.text
+    assert released.json()["status"] == "scheduled"
+    assert released.json()["confirmedAt"] is None
+
+    with Session(engine) as session:
+        t2 = session.get(ContractTarget, target["id"])
+        assert t2.streak_days == streak_before + 1  # 放行不动火花，等真正重发成功再说
+        attempts2 = session.exec(
+            select(SendAttempt).where(SendAttempt.job_id == job_id2)
+        ).all()
+        assert [x.stage for x in attempts2] == ["manual_release"]
+
+    missing = client.post("/api/jobs/not-a-real-id/release")
+    assert missing.status_code == 404

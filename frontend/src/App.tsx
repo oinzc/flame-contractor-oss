@@ -228,7 +228,9 @@ export default function App() {
               {page === 'templates' && (
                 <TemplatesPage templates={templates} onChanged={() => void refresh()} />
               )}
-              {page === 'jobs' && <JobsPage summary={summary} />}
+              {page === 'jobs' && (
+                <JobsPage summary={summary} onChanged={() => void refresh()} />
+              )}
             </main>
           )
         )}

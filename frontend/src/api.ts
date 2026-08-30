@@ -95,6 +95,10 @@ export const api = {
     }),
   deleteTemplate: (id: string) =>
     request<void>(`/api/templates/${id}`, { method: 'DELETE' }),
+  confirmJobSent: (id: string) =>
+    request<import('./types').SendJob>(`/api/jobs/${id}/confirm-sent`, { method: 'POST' }),
+  releaseJob: (id: string) =>
+    request<import('./types').SendJob>(`/api/jobs/${id}/release`, { method: 'POST' }),
   startLogin: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login`, {
       method: 'POST',
