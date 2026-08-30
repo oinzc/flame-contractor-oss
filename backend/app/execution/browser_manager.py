@@ -397,6 +397,47 @@ class BrowserManager:
 
     # ------------------------------------------------------------ dry run
 
+    async def scan_chats(self, account_id: str) -> dict:
+        """全量扫描账号会话列表（只读，不点击会话、不发送消息），供好友批量导入挑选。"""
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能扫描会话")
+
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+
+        profile_path = ensure_profile_dir(self._settings, account_id)
+        context = None
+        try:
+            context, page = await self._open(profile_path, headless=True)
+            chat = self._make_chat(page)
+            await chat.open_chat_page()
+            if not await chat.wait_logged_in(
+                timeout=self._login_check_timeout,
+                poll_interval=self._login_poll_interval,
+            ):
+                self._mark_auth_expired(account_id)
+                return {
+                    "overall": "auth_expired",
+                    "detail": "登录已失效，请重新扫码",
+                    "titles": [],
+                }
+            try:
+                titles = await chat.scan_all_titles()
+            except Exception as exc:
+                return {"overall": "error", "detail": type(exc).__name__, "titles": []}
+            self._touch_verified(account_id)
+            return {"overall": "ok", "detail": None, "titles": titles}
+        except Exception as exc:
+            return {"overall": "error", "detail": type(exc).__name__, "titles": []}
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
     async def run_dry_run(self, account_id: str) -> dict:
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能执行 Dry Run")

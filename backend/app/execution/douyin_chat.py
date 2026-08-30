@@ -14,6 +14,9 @@ MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
 SEARCH_RESULTS_TIMEOUT = 12.0
 OPEN_CONFIRM_TIMEOUT = 8.0
+# 全量扫描会话列表：滚动轮数上限 + 连续无新增即判定到底
+SCAN_MAX_ROUNDS = 80
+SCAN_IDLE_ROUNDS = 3
 
 
 def _item_selectors() -> tuple:
@@ -318,6 +321,29 @@ class DouyinChat:
                     titles.append(title)
                     if len(titles) >= limit:
                         return titles
+        return titles
+
+    async def scan_all_titles(self) -> list[str]:
+        """全量扫描会话列表：边滚动边收集去重，连续多轮无新增即判定到底。
+
+        只读操作——不点击任何会话、不发送任何消息；供好友批量导入挑选候选。
+        """
+        titles: list[str] = []
+        seen: set[str] = set()
+        scroll_element = await self.page.query_selector(_s.CONVERSATION_LIST)
+        if scroll_element is None:
+            return titles
+        idle = 0
+        for _ in range(SCAN_MAX_ROUNDS):
+            batch = await self.visible_titles(limit=10**9)
+            new = [title for title in batch if title not in seen]
+            titles.extend(new)
+            seen.update(new)
+            idle = idle + 1 if not new else 0
+            if idle >= SCAN_IDLE_ROUNDS:
+                break
+            await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
+            await self._sleep(0.8)
         return titles
 
     async def _type_text(self, text: str) -> None:

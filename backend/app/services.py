@@ -481,12 +481,15 @@ def delete_target(session: Session, target_id: str) -> None:
 
 
 def patch_target(session: Session, target_id: str, payload: TargetPatch) -> TargetRead:
-    """局部更新契约对象。当前仅支持火花天数手动校准（参考 ScriptCat）。"""
+    """局部更新契约对象：火花天数校准、启停、换绑模板（templateId=null 解绑）。"""
     target = session.get(ContractTarget, target_id)
     if target is None:
         raise HTTPException(status_code=404, detail="好友不存在")
 
     data = payload.model_dump(exclude_unset=True)
+    if data.get("template_id") is not None and session.get(MessageTemplate, data["template_id"]) is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+
     for field, value in data.items():
         setattr(target, field, value)
     target.updated_at = utc_now()

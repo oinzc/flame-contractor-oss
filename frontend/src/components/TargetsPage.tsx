@@ -29,6 +29,10 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     failed: string[]
   } | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
+  const [scanLoading, setScanLoading] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [scanTitles, setScanTitles] = useState<string[] | null>(null)
+  const [selectedTitles, setSelectedTitles] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -40,11 +44,8 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const pausedCount = accountTargets.filter((target) => !target.enabled).length
   // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
-
-  function templateName(id: string | null): string {
-    if (!id) return '未绑定'
-    return templates.find((template) => template.id === id)?.name ?? id.slice(0, 8)
-  }
+  const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
+  const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
 
   async function handleDelete(target: ContractTarget) {
     if (!window.confirm(`确定删除好友「${target.nicknameSnapshot}」？`)) {
@@ -84,6 +85,55 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : `${verb}失败，请重试`)
     }
+  }
+
+  async function handleScan() {
+    setScanLoading(true)
+    setScanError(null)
+    setScanTitles(null)
+    setSelectedTitles(new Set())
+    try {
+      const result = await api.scanChats(selectedAccountId)
+      if (result.overall !== 'ok') {
+        setScanError(result.detail ?? '扫描失败，请重试')
+      } else {
+        setScanTitles(result.titles)
+      }
+    } catch (err) {
+      setScanError(err instanceof ApiError ? err.message : '扫描失败，请重试')
+    } finally {
+      setScanLoading(false)
+    }
+  }
+
+  async function handleImportSelected() {
+    if (selectedTitles.size === 0) return
+    setBatchSubmitting(true)
+    setActionError(null)
+    try {
+      const result = await api.createTargetsBatch({
+        accountId: selectedAccountId,
+        nicknames: [...selectedTitles],
+      })
+      setBatchResult(result)
+      setScanTitles(null)
+      setSelectedTitles(new Set())
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '导入失败，请重试')
+    } finally {
+      setBatchSubmitting(false)
+    }
+  }
+
+  function handleRebindTemplate(target: ContractTarget, templateId: string) {
+    setActionError(null)
+    api
+      .patchTarget(target.id, { templateId: templateId || null })
+      .then(onChanged)
+      .catch((err) =>
+        setActionError(err instanceof ApiError ? err.message : '换绑失败，请重试'),
+      )
   }
 
   async function handleBatchSubmit(event: React.FormEvent) {
@@ -206,7 +256,20 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                         )}
                       </td>
                       <td className="mono">{target.platformUserId ?? '—'}</td>
-                      <td>{templateName(target.templateId)}</td>
+                      <td>
+                        <select
+                          value={target.templateId ?? ''}
+                          onChange={(event) => handleRebindTemplate(target, event.target.value)}
+                          style={{ maxWidth: 140, fontSize: 12.5 }}
+                        >
+                          <option value="">不绑定</option>
+                          {templates.map((template) => (
+                            <option key={template.id} value={template.id}>
+                              {template.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
                       <td className="mono">
                         {target.streakDays} 天
                         <button
@@ -257,7 +320,110 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
             {showBatch && (
               <form className="form-grid" onSubmit={handleBatchSubmit}>
                 <div className="field">
-                  <label htmlFor="target-batch-text">昵称列表（每行一个，与抖音显示完全一致）</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button
+                      className="btn small"
+                      type="button"
+                      disabled={scanLoading || selectedAccount?.status !== 'healthy'}
+                      title={
+                        selectedAccount?.status !== 'healthy'
+                          ? '账号需先扫码登录才能扫描会话列表'
+                          : '打开浏览器滚动加载整个会话列表（只读，约需 1–2 分钟）'
+                      }
+                      onClick={() => void handleScan()}
+                    >
+                      {scanLoading ? '扫描中…（约 1–2 分钟）' : '🔍 从抖音会话列表扫描'}
+                    </button>
+                    {selectedAccount?.status !== 'healthy' && (
+                      <span className="muted" style={{ fontSize: 11.5 }}>
+                        账号需先扫码登录才能扫描
+                      </span>
+                    )}
+                  </div>
+                  {scanError && <div className="form-error" style={{ marginTop: 8 }}>{scanError}</div>}
+                  {scanTitles !== null && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        maxHeight: 260,
+                        overflowY: 'auto',
+                        border: '1px solid var(--border, #333)',
+                        borderRadius: 8,
+                        padding: 10,
+                      }}
+                    >
+                      <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() =>
+                            setSelectedTitles(new Set(scanTitles.filter((t) => !existingNicknames.has(t))))
+                          }
+                        >
+                          全选可导入
+                        </button>
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() => setSelectedTitles(new Set())}
+                        >
+                          清空
+                        </button>
+                        <span className="muted" style={{ fontSize: 11.5, alignSelf: 'center' }}>
+                          共扫描到 {scanTitles.length} 个会话，其中已存在 {scanTitles.filter((t) => existingNicknames.has(t)).length} 个
+                        </span>
+                      </div>
+                      {scanTitles.map((title) => {
+                        const exists = existingNicknames.has(title)
+                        const checked = selectedTitles.has(title)
+                        return (
+                          <label
+                            key={title}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: '3px 2px',
+                              fontSize: 13,
+                              cursor: exists ? 'default' : 'pointer',
+                              opacity: exists ? 0.55 : 1,
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={exists}
+                              checked={exists || checked}
+                              onChange={() =>
+                                setSelectedTitles((previous) => {
+                                  const next = new Set(previous)
+                                  if (next.has(title)) next.delete(title)
+                                  else next.add(title)
+                                  return next
+                                })
+                              }
+                            />
+                            {title}
+                            {exists && <span className="muted">（已在列表）</span>}
+                          </label>
+                        )
+                      })}
+                      <div className="form-actions" style={{ marginTop: 10 }}>
+                        <button
+                          className="btn primary small"
+                          type="button"
+                          disabled={batchSubmitting || selectedTitles.size === 0}
+                          onClick={() => void handleImportSelected()}
+                        >
+                          {batchSubmitting
+                            ? '导入中…'
+                            : `导入所选（${selectedTitles.size}）`}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="field">
+                  <label htmlFor="target-batch-text">或粘贴昵称列表（每行一个，与抖音显示完全一致）</label>
                   <textarea
                     id="target-batch-text"
                     value={batchText}
