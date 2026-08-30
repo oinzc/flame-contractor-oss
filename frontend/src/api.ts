@@ -60,7 +60,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean }) =>
+  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean; templateId?: string | null }) =>
     request<import('./types').ContractTarget>(`/api/targets/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -72,6 +72,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  scanChats: (accountId: string) =>
+    request<{ overall: 'ok' | 'auth_expired' | 'error'; detail: string | null; titles: string[] }>(
+      `/api/accounts/${accountId}/scan-chats`,
+      { method: 'POST' },
+    ),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
   sendNow: (id: string) =>

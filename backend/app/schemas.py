@@ -198,10 +198,11 @@ class TargetCreate(APIBase):
 
 
 class TargetPatch(APIBase):
-    """局部更新契约对象。开放火花天数手动校准与启停（暂停发送）。"""
+    """局部更新契约对象。开放火花天数校准、启停与换绑模板（None=解绑）。"""
 
     streak_days: int | None = Field(default=None, ge=0)
     enabled: bool | None = None
+    template_id: str | None = None
 
 
 class TargetBatchCreate(APIBase):
@@ -324,6 +325,14 @@ class DryRunRead(APIBase):
     visible_titles: list[str] = []
     diagnostics: dict | None = None
     artifact_path: str | None = None
+
+
+class ScanChatsRead(APIBase):
+    """会话列表全量扫描结果（只读）。overall=ok 时 titles 为去重后的全部会话标题。"""
+
+    overall: Literal["ok", "auth_expired", "error"]
+    detail: str | None = None
+    titles: list[str] = []
 
 
 # ---------------------------------------------------------------- send

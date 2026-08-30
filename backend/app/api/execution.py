@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from ..core.database import SessionDep
 from ..models import Account
-from ..schemas import DryRunRead, LoginStatusRead, SendPreviewRead, SendRead
+from ..schemas import DryRunRead, LoginStatusRead, ScanChatsRead, SendPreviewRead, SendRead
 from ..services import send_preview
 
 router = APIRouter(prefix="/accounts/{account_id}", tags=["execution"])
@@ -42,6 +42,14 @@ async def dry_run(account_id: str, request: Request, session: SessionDep) -> dic
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
     return await manager.run_dry_run(account_id)
+
+
+@router.post("/scan-chats", response_model=ScanChatsRead)
+async def scan_chats(account_id: str, request: Request, session: SessionDep) -> dict:
+    """全量扫描该账号的抖音会话列表（只读），供好友批量导入勾选。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.scan_chats(account_id)
 
 
 @router.get("/send/preview", response_model=SendPreviewRead)
