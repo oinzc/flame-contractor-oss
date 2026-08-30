@@ -204,6 +204,31 @@ class TargetPatch(APIBase):
     enabled: bool | None = None
 
 
+class TargetBatchCreate(APIBase):
+    """批量添加好友：昵称逐行解析为独立好友，重复项跳过而非整批失败。"""
+
+    account_id: str
+    template_id: str | None = None
+    nicknames: list[str] = Field(max_length=200)
+
+    @field_validator("nicknames")
+    @classmethod
+    def _strip_nicknames(cls, value: list[str]) -> list[str]:
+        stripped = [item.strip() for item in value if item and item.strip()]
+        if not stripped:
+            raise ValueError("昵称列表不能为空")
+        for item in stripped:
+            if len(item) > 80:
+                raise ValueError("单条昵称不能超过 80 字")
+        return stripped
+
+
+class TargetBatchRead(APIBase):
+    created: list[str] = []
+    duplicates: list[str] = []
+    failed: list[str] = []
+
+
 class TargetRead(APIBase):
     id: str
     account_id: str

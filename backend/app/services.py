@@ -33,6 +33,8 @@ from .schemas import (
     PoolItemIn,
     PoolItemRead,
     TargetCreate,
+    TargetBatchCreate,
+    TargetBatchRead,
     TargetPatch,
     TargetRead,
     TemplateCreate,
@@ -421,6 +423,45 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
         raise HTTPException(status_code=409, detail="该账号下已存在同名契约对象") from None
     session.refresh(target)
     return TargetRead.model_validate(target)
+
+
+def create_targets_batch(session: Session, payload: TargetBatchCreate) -> TargetBatchRead:
+    """批量添加好友。逐条独立提交：重复项跳过记录，其余失败也不中断整批。"""
+    if session.get(Account, payload.account_id) is None:
+        raise HTTPException(status_code=404, detail="账号不存在")
+    if payload.template_id and session.get(MessageTemplate, payload.template_id) is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+
+    created: list[str] = []
+    duplicates: list[str] = []
+    failed: list[str] = []
+    for nickname in payload.nicknames:
+        existing = session.exec(
+            select(ContractTarget).where(
+                ContractTarget.account_id == payload.account_id,
+                ContractTarget.nickname_snapshot == nickname,
+            )
+        ).first()
+        if existing is not None:
+            duplicates.append(nickname)
+            continue
+        try:
+            session.add(
+                ContractTarget(
+                    account_id=payload.account_id,
+                    nickname_snapshot=nickname,
+                    template_id=payload.template_id,
+                )
+            )
+            session.commit()
+            created.append(nickname)
+        except IntegrityError:
+            session.rollback()
+            duplicates.append(nickname)
+        except Exception as exc:  # 单条失败不拖垮整批
+            session.rollback()
+            failed.append(f"{nickname}：{exc.__class__.__name__}")
+    return TargetBatchRead(created=created, duplicates=duplicates, failed=failed)
 
 
 def delete_target(session: Session, target_id: str) -> None:

@@ -654,3 +654,36 @@ def test_manual_job_review(client, engine):
 
     missing = client.post("/api/jobs/not-a-real-id/release")
     assert missing.status_code == 404
+
+
+def test_batch_create_targets(client):
+    """批量添加好友：新增加入 created，重名进 duplicates，整批不因单条失败中断。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "已有好友"},
+    )
+
+    result = client.post(
+        "/api/targets/batch",
+        json={
+            "accountId": account["id"],
+            "nicknames": ["新好友A", "已有好友", "新好友B", "  ", "新好友A"],
+        },
+    )
+    assert result.status_code == 201, result.text
+    body = result.json()
+    assert body["created"] == ["新好友A", "新好友B"]  # 空白行被剔除；同批重复也按重复算
+    assert body["duplicates"] == ["已有好友", "新好友A"]
+    assert body["failed"] == []
+
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    assert len(listing) == 3
+
+    missing_account = client.post(
+        "/api/targets/batch", json={"accountId": "ghost", "nicknames": ["x"]}
+    )
+    assert missing_account.status_code == 404
+
+    empty = client.post("/api/targets/batch", json={"accountId": account["id"], "nicknames": ["  "]})
+    assert empty.status_code == 422
