@@ -21,7 +21,6 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [showBatch, setShowBatch] = useState(false)
-  const [batchText, setBatchText] = useState('')
   const [batchTemplateId, setBatchTemplateId] = useState('')
   const [batchResult, setBatchResult] = useState<{
     created: string[]
@@ -192,26 +191,6 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
       )
   }
 
-  async function handleBatchSubmit(event: React.FormEvent) {
-    event.preventDefault()
-    setBatchSubmitting(true)
-    setActionError(null)
-    try {
-      const result = await api.createTargetsBatch({
-        accountId: selectedAccountId,
-        templateId: batchTemplateId || undefined,
-        items: batchText.split('\n').map((line) => ({ nickname: line })),
-      })
-      setBatchResult(result)
-      setBatchText('')
-      onChanged()
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : '批量添加失败，请重试')
-    } finally {
-      setBatchSubmitting(false)
-    }
-  }
-
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
     setError(null)
@@ -374,158 +353,31 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
               </button>
             </div>
             {showBatch && (
-              <form className="form-grid" onSubmit={handleBatchSubmit}>
-                <div className="field">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <button
-                      className="btn small"
-                      type="button"
-                      disabled={scanLoading || selectedAccount?.status !== 'healthy'}
-                      title={
-                        selectedAccount?.status !== 'healthy'
-                          ? '账号需先扫码登录才能扫描会话列表'
-                          : '打开浏览器滚动加载整个会话列表（只读，约需 1–2 分钟）'
-                      }
-                      onClick={() => void handleScan()}
-                    >
-                      {scanLoading ? '扫描中…（约 1–2 分钟）' : '🔍 从抖音会话列表扫描'}
-                    </button>
-                    {selectedAccount?.status !== 'healthy' && (
-                      <span className="muted" style={{ fontSize: 11.5 }}>
-                        账号需先扫码登录才能扫描
-                      </span>
-                    )}
-                  </div>
-                  {scanError && <div className="form-error" style={{ marginTop: 8 }}>{scanError}</div>}
-                  {scanEntries !== null && (
-                    <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-                      <div className="pick-toolbar">
-                        <input
-                          className="pick-search"
-                          type="text"
-                          value={scanQuery}
-                          onChange={(event) => setScanQuery(event.target.value)}
-                          placeholder="搜索会话名…"
-                        />
-                        <label className="pick-switch">
-                          <input
-                            type="checkbox"
-                            checked={showNoStreak}
-                            onChange={(event) => setShowNoStreak(event.target.checked)}
-                          />
-                          显示无火花会话（{scanNoStreakCount}）
-                        </label>
-                      </div>
-                      <div className="pick-list">
-                        {scanFiltered.length === 0 ? (
-                          <div className="muted" style={{ padding: '14px 12px', fontSize: 12 }}>
-                            {scanQuery.trim()
-                              ? '没有匹配的会话，换个关键词试试。'
-                              : showNoStreak
-                              ? '没有可显示的会话。'
-                              : '没有带火花的会话——勾选右上角开关可查看全部会话。'}
-                          </div>
-                        ) : (
-                          scanFiltered.map((entry) => {
-                            const exists = existingNicknames.has(entry.title)
-                            const checked = selectedTitles.has(entry.title)
-                            const group = looksLikeGroup(entry.title, entry.preview)
-                            const kindTone =
-                              entry.streakKind === 'couple'
-                                ? 'gold'
-                                : entry.streakKind === 'family'
-                                ? 'cyan'
-                                : 'ember'
-                            return (
-                              <label
-                                key={entry.title}
-                                className={[
-                                  'pick-row',
-                                  checked && !exists ? 'selected' : '',
-                                  exists ? 'occupied' : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ')}
-                                title={entry.preview || undefined}
-                              >
-                                <input
-                                  type="checkbox"
-                                  disabled={exists}
-                                  checked={exists || checked}
-                                  onChange={() =>
-                                    setSelectedTitles((previous) => {
-                                      const next = new Map(previous)
-                                      if (next.has(entry.title)) next.delete(entry.title)
-                                      else next.set(entry.title, entry.streakDays ?? undefined)
-                                      return next
-                                    })
-                                  }
-                                />
-                                <span className="pick-name">{entry.title}</span>
-                                <span className="pick-meta">
-                                  {entry.streakDays != null && (
-                                    <span className={`badge ${kindTone}`}>🔥 {entry.streakDays}</span>
-                                  )}
-                                  {entry.streakDays == null && entry.streakLabel && (
-                                    <span className="badge gold">{entry.streakLabel}</span>
-                                  )}
-                                  {entry.streakDays == null && !entry.streakLabel && hasSparkHint(entry) && (
-                                    <span className="badge gold">🔥?</span>
-                                  )}
-                                  {group && <span className="badge">群</span>}
-                                  {exists && <span className="badge">已在列表</span>}
-                                </span>
-                              </label>
-                            )
-                          })
-                        )}
-                      </div>
-                      <div className="pick-foot">
-                        <span className="pick-stat">
-                          扫描 {scanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
-                        </span>
-                        <button
-                          className="btn primary small"
-                          type="button"
-                          disabled={batchSubmitting || selectedTitles.size === 0}
-                          onClick={() => void handleImportSelected()}
-                        >
-                          {batchSubmitting
-                            ? '导入中…'
-                            : `导入所选（${selectedTitles.size}）`}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="field">
-                  <label htmlFor="target-batch-text">或粘贴昵称列表（每行一个，与抖音显示完全一致）</label>
-                  <textarea
-                    id="target-batch-text"
-                    value={batchText}
-                    onChange={(event) => setBatchText(event.target.value)}
-                    placeholder={'好友A\n好友B\n好友C'}
-                    rows={5}
-                  />
-                  <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
-                    重复昵称自动跳过，不会中断整批；最多一次 200 行。
-                  </p>
-                </div>
-                <div className="field" style={{ maxWidth: 320 }}>
-                  <label htmlFor="target-batch-template">统一绑定模板（选填）</label>
-                  <select
-                    id="target-batch-template"
-                    value={batchTemplateId}
-                    onChange={(event) => setBatchTemplateId(event.target.value)}
+              <div className="form-grid">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button
+                    className="btn small"
+                    type="button"
+                    disabled={scanLoading || selectedAccount?.status !== 'healthy'}
+                    title={
+                      selectedAccount?.status !== 'healthy'
+                        ? '账号需先扫码登录才能扫描会话列表'
+                        : '打开浏览器滚动加载整个会话列表（只读，约需 1–2 分钟）'
+                    }
+                    onClick={() => void handleScan()}
                   >
-                    <option value="">不绑定</option>
-                    {templates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name}
-                      </option>
-                    ))}
-                  </select>
+                    {scanLoading ? '扫描中…（约 1–2 分钟）' : '🔍 从抖音会话列表扫描'}
+                  </button>
+                  {selectedAccount?.status !== 'healthy' && (
+                    <span className="muted" style={{ fontSize: 11.5 }}>
+                      账号需先扫码登录才能扫描
+                    </span>
+                  )}
+                  <span className="muted" style={{ fontSize: 11.5 }}>
+                    只读扫描，带火花标记的会话自动识别为续火对象
+                  </span>
                 </div>
+                {scanError && <div className="form-error">{scanError}</div>}
                 {batchResult && (
                   <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
                     {batchResult.created.length > 0 && (
@@ -539,12 +391,122 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                     )}
                   </div>
                 )}
-                <div className="form-actions">
-                  <button className="btn primary small" type="submit" disabled={batchSubmitting}>
-                    {batchSubmitting ? '添加中…' : '批量添加'}
-                  </button>
-                </div>
-              </form>
+                {scanEntries !== null && (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    <div className="pick-toolbar">
+                      <input
+                        className="pick-search"
+                        type="text"
+                        value={scanQuery}
+                        onChange={(event) => setScanQuery(event.target.value)}
+                        placeholder="搜索会话名…"
+                      />
+                      <label className="pick-switch">
+                        <input
+                          type="checkbox"
+                          checked={showNoStreak}
+                          onChange={(event) => setShowNoStreak(event.target.checked)}
+                        />
+                        显示无火花会话（{scanNoStreakCount}）
+                      </label>
+                    </div>
+                    <div className="pick-list">
+                      {scanFiltered.length === 0 ? (
+                        <div className="muted" style={{ padding: '14px 12px', fontSize: 12 }}>
+                          {scanQuery.trim()
+                            ? '没有匹配的会话，换个关键词试试。'
+                            : showNoStreak
+                            ? '没有可显示的会话。'
+                            : '没有带火花的会话——勾选右上角开关可查看全部会话。'}
+                        </div>
+                      ) : (
+                        scanFiltered.map((entry) => {
+                          const exists = existingNicknames.has(entry.title)
+                          const checked = selectedTitles.has(entry.title)
+                          const group = looksLikeGroup(entry.title, entry.preview)
+                          const kindTone =
+                            entry.streakKind === 'couple'
+                              ? 'gold'
+                              : entry.streakKind === 'family'
+                              ? 'cyan'
+                              : 'ember'
+                          return (
+                            <label
+                              key={entry.title}
+                              className={[
+                                'pick-row',
+                                checked && !exists ? 'selected' : '',
+                                exists ? 'occupied' : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              title={entry.preview || undefined}
+                            >
+                              <input
+                                type="checkbox"
+                                disabled={exists}
+                                checked={exists || checked}
+                                onChange={() =>
+                                  setSelectedTitles((previous) => {
+                                    const next = new Map(previous)
+                                    if (next.has(entry.title)) next.delete(entry.title)
+                                    else next.set(entry.title, entry.streakDays ?? undefined)
+                                    return next
+                                  })
+                                }
+                              />
+                              <span className="pick-name">{entry.title}</span>
+                              <span className="pick-meta">
+                                {entry.streakDays != null && (
+                                  <span className={`badge ${kindTone}`}>🔥 {entry.streakDays}</span>
+                                )}
+                                {entry.streakDays == null && entry.streakLabel && (
+                                  <span className="badge gold">{entry.streakLabel}</span>
+                                )}
+                                {entry.streakDays == null && !entry.streakLabel && hasSparkHint(entry) && (
+                                  <span className="badge gold">🔥?</span>
+                                )}
+                                {group && <span className="badge">群</span>}
+                                {exists && <span className="badge">已在列表</span>}
+                              </span>
+                            </label>
+                          )
+                        })
+                      )}
+                    </div>
+                    <div className="pick-foot">
+                      <span className="pick-stat">
+                        扫描 {scanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <select
+                          value={batchTemplateId}
+                          onChange={(event) => setBatchTemplateId(event.target.value)}
+                          style={{ width: 170, padding: '5px 8px', fontSize: 12 }}
+                          title="导入的好友统一绑定的模板（之后可单独换绑）"
+                        >
+                          <option value="">不绑定模板</option>
+                          {templates.map((template) => (
+                            <option key={template.id} value={template.id}>
+                              {template.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn primary small"
+                          type="button"
+                          disabled={batchSubmitting || selectedTitles.size === 0}
+                          onClick={() => void handleImportSelected()}
+                        >
+                          {batchSubmitting
+                            ? '导入中…'
+                            : `导入所选（${selectedTitles.size}）`}
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </section>
 
