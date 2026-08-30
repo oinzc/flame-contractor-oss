@@ -12,6 +12,7 @@ interface Props {
 
 export default function TargetsPage({ accounts, targets, templates, onChanged }: Props) {
   const [selectedAccountId, setSelectedAccountId] = useState(accounts[0]?.id ?? '')
+  const [showPaused, setShowPaused] = useState(false)
   const [nickname, setNickname] = useState('')
   const [platformUserId, setPlatformUserId] = useState('')
   const [templateId, setTemplateId] = useState('')
@@ -26,7 +27,10 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     }
   }, [accounts, selectedAccountId])
 
-  const selectedTargets = targets.filter((target) => target.accountId === selectedAccountId)
+  const accountTargets = targets.filter((target) => target.accountId === selectedAccountId)
+  const pausedCount = accountTargets.filter((target) => !target.enabled).length
+  // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
+  const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
 
   function templateName(id: string | null): string {
     if (!id) return '未绑定'
@@ -129,11 +133,25 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
           <section className="card">
             <div className="card-head">
               <h2>好友列表（{selectedTargets.length}）</h2>
+              {pausedCount > 0 && (
+                <label
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={showPaused}
+                    onChange={(event) => setShowPaused(event.target.checked)}
+                  />
+                  显示已暂停（{pausedCount}）
+                </label>
+              )}
             </div>
             {actionError && <div className="form-error" style={{ marginBottom: 8 }}>{actionError}</div>}
             {selectedTargets.length === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-                这个账号还没有好友，用下面的表单添加第一位。
+                {!showPaused && pausedCount > 0
+                  ? `好友都处于暂停状态（${pausedCount} 个），勾选上方「显示已暂停」可查看。`
+                  : '这个账号还没有好友，用下面的表单添加第一位。'}
               </p>
             ) : (
               <table className="table">
