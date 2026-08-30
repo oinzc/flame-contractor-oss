@@ -67,6 +67,11 @@ export const api = {
     }),
   deleteTarget: (id: string) =>
     request<void>(`/api/targets/${id}`, { method: 'DELETE' }),
+  createTargetsBatch: (input: { accountId: string; templateId?: string; nicknames: string[] }) =>
+    request<{ created: string[]; duplicates: string[]; failed: string[] }>('/api/targets/batch', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
   sendNow: (id: string) =>

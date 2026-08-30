@@ -20,6 +20,15 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [showBatch, setShowBatch] = useState(false)
+  const [batchText, setBatchText] = useState('')
+  const [batchTemplateId, setBatchTemplateId] = useState('')
+  const [batchResult, setBatchResult] = useState<{
+    created: string[]
+    duplicates: string[]
+    failed: string[]
+  } | null>(null)
+  const [batchSubmitting, setBatchSubmitting] = useState(false)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -74,6 +83,26 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : `${verb}失败，请重试`)
+    }
+  }
+
+  async function handleBatchSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    setBatchSubmitting(true)
+    setActionError(null)
+    try {
+      const result = await api.createTargetsBatch({
+        accountId: selectedAccountId,
+        templateId: batchTemplateId || undefined,
+        nicknames: batchText.split('\n'),
+      })
+      setBatchResult(result)
+      setBatchText('')
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '批量添加失败，请重试')
+    } finally {
+      setBatchSubmitting(false)
     }
   }
 
@@ -211,6 +240,69 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                   ))}
                 </tbody>
               </table>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="card-head">
+              <h2>批量添加好友</h2>
+              <button
+                className="btn ghost small"
+                type="button"
+                onClick={() => setShowBatch((previous) => !previous)}
+              >
+                {showBatch ? '收起' : '展开'}
+              </button>
+            </div>
+            {showBatch && (
+              <form className="form-grid" onSubmit={handleBatchSubmit}>
+                <div className="field">
+                  <label htmlFor="target-batch-text">昵称列表（每行一个，与抖音显示完全一致）</label>
+                  <textarea
+                    id="target-batch-text"
+                    value={batchText}
+                    onChange={(event) => setBatchText(event.target.value)}
+                    placeholder={'好友A\n好友B\n好友C'}
+                    rows={5}
+                  />
+                  <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                    重复昵称自动跳过，不会中断整批；最多一次 200 行。
+                  </p>
+                </div>
+                <div className="field" style={{ maxWidth: 320 }}>
+                  <label htmlFor="target-batch-template">统一绑定模板（选填）</label>
+                  <select
+                    id="target-batch-template"
+                    value={batchTemplateId}
+                    onChange={(event) => setBatchTemplateId(event.target.value)}
+                  >
+                    <option value="">不绑定</option>
+                    {templates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {batchResult && (
+                  <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+                    {batchResult.created.length > 0 && (
+                      <div>✅ 新增 {batchResult.created.length} 个：{batchResult.created.join('、')}</div>
+                    )}
+                    {batchResult.duplicates.length > 0 && (
+                      <div>↩️ 跳过重复 {batchResult.duplicates.length} 个：{batchResult.duplicates.join('、')}</div>
+                    )}
+                    {batchResult.failed.length > 0 && (
+                      <div>⚠️ 失败 {batchResult.failed.length} 个：{batchResult.failed.join('、')}</div>
+                    )}
+                  </div>
+                )}
+                <div className="form-actions">
+                  <button className="btn primary small" type="submit" disabled={batchSubmitting}>
+                    {batchSubmitting ? '添加中…' : '批量添加'}
+                  </button>
+                </div>
+              </form>
             )}
           </section>
 
