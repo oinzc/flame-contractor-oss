@@ -80,7 +80,13 @@ export const api = {
     request<{
       overall: 'ok' | 'auth_expired' | 'error'
       detail: string | null
-      entries: { title: string; preview: string; streakDays: number | null; streakKind: string | null }[]
+      entries: {
+        title: string
+        preview: string
+        streakDays: number | null
+        streakKind: string | null
+        streakLabel: string | null
+      }[]
     }>(`/api/accounts/${accountId}/scan-chats`, { method: 'POST' }),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
