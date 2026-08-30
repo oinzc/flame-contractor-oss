@@ -327,7 +327,9 @@ class DouyinChat:
         """全量扫描会话列表：边滚动边收集去重，连续多轮无新增即判定到底。
 
         只读操作——不点击任何会话、不发送任何消息；供好友批量导入挑选候选。
-        返回结构化条目：title=会话名（首行），preview=最后一条消息（供群聊识别）。
+        返回结构化条目：title=会话名，preview=最后一条消息，
+        streak_days=抖音官方火花天数（无火花标记为 None——这就是续火对象的判定信号），
+        streak_kind=火花类型（normal 普通 / couple 情侣 / family 家人，取自图标路径）。
         """
         entries: list[dict] = []
         seen: set[str] = set()
@@ -345,10 +347,40 @@ class DouyinChat:
                 if not title or title in seen:
                     continue
                 seen.add(title)
+
+                streak_days: int | None = None
+                streak_kind: str | None = None
+                streak_el = await item.query_selector(_s.CONVERSATION_STREAK)
+                if streak_el is not None:
+                    days_el = await streak_el.query_selector(_s.CONVERSATION_STREAK_DAYS)
+                    days_text = ((await days_el.inner_text()) or "").strip() if days_el else ""
+                    if days_text.isdigit():
+                        streak_days = int(days_text)
+                    icon = await streak_el.query_selector("img[src*='flame_icon']")
+                    src = (await icon.get_attribute("src")) if icon else None
+                    if src:
+                        # 图标路径形如 /flame_icon/<kind>/<variant>.png
+                        for kind in ("couple", "family", "normal"):
+                            if f"/{kind}/" in src:
+                                streak_kind = kind
+                                break
+
                 lines = [line.strip() for line in ((await item.inner_text()) or "").splitlines() if line.strip()]
-                # 行结构：[名字, 时间, 最后消息…]；长消息可能多行，取名字之后合并
-                preview = " ".join(lines[2:]) if len(lines) > 2 else ""
-                entries.append({"title": title, "preview": preview})
+                # 行结构：[名字, (火花天数), 时间, 最后消息…]；滤掉名字与火花数字后取消息
+                rest = [
+                    line
+                    for line in lines[1:]
+                    if not (streak_days is not None and line == str(streak_days))
+                ]
+                preview = " ".join(rest[1:]) if len(rest) > 1 else ""
+                entries.append(
+                    {
+                        "title": title,
+                        "preview": preview,
+                        "streak_days": streak_days,
+                        "streak_kind": streak_kind,
+                    }
+                )
             idle = idle + 1 if len(entries) == count_before else 0
             if idle >= SCAN_IDLE_ROUNDS:
                 break

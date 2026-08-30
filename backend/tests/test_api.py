@@ -668,7 +668,13 @@ def test_batch_create_targets(client):
         "/api/targets/batch",
         json={
             "accountId": account["id"],
-            "nicknames": ["新好友A", "已有好友", "新好友B", "  ", "新好友A"],
+            "items": [
+                {"nickname": "新好友A", "streakDays": 955},
+                {"nickname": "已有好友"},
+                {"nickname": "新好友B"},
+                {"nickname": "  "},
+                {"nickname": "新好友A"},
+            ],
         },
     )
     assert result.status_code == 201, result.text
@@ -679,11 +685,15 @@ def test_batch_create_targets(client):
 
     listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
     assert len(listing) == 3
+    seeded = next(t for t in listing if t["nicknameSnapshot"] == "新好友A")
+    assert seeded["streakDays"] == 955  # 扫描读到的官方火花天数随导入回填
 
     missing_account = client.post(
-        "/api/targets/batch", json={"accountId": "ghost", "nicknames": ["x"]}
+        "/api/targets/batch", json={"accountId": "ghost", "items": [{"nickname": "x"}]}
     )
     assert missing_account.status_code == 404
 
-    empty = client.post("/api/targets/batch", json={"accountId": account["id"], "nicknames": ["  "]})
+    empty = client.post(
+        "/api/targets/batch", json={"accountId": account["id"], "items": [{"nickname": "  "}]}
+    )
     assert empty.status_code == 422

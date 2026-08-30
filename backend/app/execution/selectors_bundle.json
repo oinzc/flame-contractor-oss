@@ -3,6 +3,8 @@
   "CONVERSATION_LIST": ".conversationConversationListwrapper",
   "CONVERSATION_ITEM": ".conversationConversationItemwrapper",
   "CONVERSATION_TITLE": ".conversationConversationItemtitle",
+  "CONVERSATION_STREAK": "[class*=\"StreakstreakContainer\"]",
+  "CONVERSATION_STREAK_DAYS": "[class*=\"StreaknormalText\"]",
   "SEARCH_RESULT_ITEM": "div[class*=\"SearchPanelitembox\"], div[class*=\"SearchPanelitem-box\"], div[class*=\"SearchPanelitem_box\"]",
   "SEARCH_NAME_SELECTORS": [
     "[class*=\"SearchPanelitemtitle\"]",

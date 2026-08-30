@@ -205,21 +205,31 @@ class TargetPatch(APIBase):
     template_id: str | None = None
 
 
+class BatchTargetItem(APIBase):
+    nickname: str
+    # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
+    streak_days: int | None = Field(default=None, ge=0)
+
+
 class TargetBatchCreate(APIBase):
     """批量添加好友：昵称逐行解析为独立好友，重复项跳过而非整批失败。"""
 
     account_id: str
     template_id: str | None = None
-    nicknames: list[str] = Field(max_length=200)
+    items: list[BatchTargetItem] = Field(max_length=200)
 
-    @field_validator("nicknames")
+    @field_validator("items")
     @classmethod
-    def _strip_nicknames(cls, value: list[str]) -> list[str]:
-        stripped = [item.strip() for item in value if item and item.strip()]
+    def _strip_items(cls, value: list[BatchTargetItem]) -> list[BatchTargetItem]:
+        stripped = [
+            BatchTargetItem(nickname=item.nickname.strip(), streak_days=item.streak_days)
+            for item in value
+            if item.nickname and item.nickname.strip()
+        ]
         if not stripped:
             raise ValueError("昵称列表不能为空")
         for item in stripped:
-            if len(item) > 80:
+            if len(item.nickname) > 80:
                 raise ValueError("单条昵称不能超过 80 字")
         return stripped
 
@@ -328,10 +338,13 @@ class DryRunRead(APIBase):
 
 
 class ScanChatItem(APIBase):
-    """扫描到的单个会话：title=会话名，preview=最后一条消息（供群聊识别）。"""
+    """扫描到的单个会话。streak_days 为抖音官方火花天数（None=无火花标记，
+    即非续火对象）；streak_kind: normal/couple/family。"""
 
     title: str
     preview: str = ""
+    streak_days: int | None = None
+    streak_kind: str | None = None
 
 
 class ScanChatsRead(APIBase):

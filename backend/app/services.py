@@ -36,8 +36,7 @@ from .schemas import (
     TargetBatchCreate,
     TargetBatchRead,
     TargetPatch,
-    TargetRead,
-    TemplateCreate,
+    TargetRead,    TemplateCreate,
     TemplatePatch,
     TemplateRead,
 )
@@ -435,7 +434,8 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
     created: list[str] = []
     duplicates: list[str] = []
     failed: list[str] = []
-    for nickname in payload.nicknames:
+    for item in payload.items:
+        nickname = item.nickname
         existing = session.exec(
             select(ContractTarget).where(
                 ContractTarget.account_id == payload.account_id,
@@ -451,6 +451,8 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                     account_id=payload.account_id,
                     nickname_snapshot=nickname,
                     template_id=payload.template_id,
+                    # 扫描读到的官方火花天数作为初始值；之后仍走本地累计
+                    streak_days=item.streak_days or 0,
                 )
             )
             session.commit()

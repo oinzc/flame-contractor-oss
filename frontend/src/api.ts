@@ -67,7 +67,11 @@ export const api = {
     }),
   deleteTarget: (id: string) =>
     request<void>(`/api/targets/${id}`, { method: 'DELETE' }),
-  createTargetsBatch: (input: { accountId: string; templateId?: string; nicknames: string[] }) =>
+  createTargetsBatch: (input: {
+    accountId: string
+    templateId?: string
+    items: { nickname: string; streakDays?: number }[]
+  }) =>
     request<{ created: string[]; duplicates: string[]; failed: string[] }>('/api/targets/batch', {
       method: 'POST',
       body: JSON.stringify(input),
@@ -76,7 +80,7 @@ export const api = {
     request<{
       overall: 'ok' | 'auth_expired' | 'error'
       detail: string | null
-      entries: { title: string; preview: string }[]
+      entries: { title: string; preview: string; streakDays: number | null; streakKind: string | null }[]
     }>(`/api/accounts/${accountId}/scan-chats`, { method: 'POST' }),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
