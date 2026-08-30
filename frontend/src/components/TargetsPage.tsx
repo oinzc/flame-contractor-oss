@@ -31,10 +31,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
-  const [scanEntries, setScanEntries] = useState<{ title: string; preview: string }[] | null>(null)
-  const [selectedTitles, setSelectedTitles] = useState<Set<string>>(new Set())
+  const [scanEntries, setScanEntries] = useState<
+    { title: string; preview: string; streakDays: number | null; streakKind: string | null }[]
+  | null>(null)
+  const [selectedTitles, setSelectedTitles] = useState<
+    Map<string, number | undefined>
+  >(new Map())
   const [scanQuery, setScanQuery] = useState('')
-  const [showGroups, setShowGroups] = useState(false)
+  const [showNoStreak, setShowNoStreak] = useState(false)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -49,12 +53,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
 
-  const scanGroupCount =
-    scanEntries?.filter((entry) => looksLikeGroup(entry.title, entry.preview)).length ?? 0
+  // 抖音官方火花天数就是续火对象的判定信号：默认只显示带火花的会话
+  const scanStreakCount =
+    scanEntries?.filter((entry) => entry.streakDays != null).length ?? 0
+  const scanNoStreakCount = (scanEntries?.length ?? 0) - scanStreakCount
   const scanExistCount =
     scanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
   const scanFiltered = (scanEntries ?? []).filter((entry) => {
-    if (!showGroups && looksLikeGroup(entry.title, entry.preview)) return false
+    if (!showNoStreak && entry.streakDays == null) return false
     const q = scanQuery.trim().toLowerCase()
     if (q && !entry.title.toLowerCase().includes(q)) return false
     return true
@@ -114,7 +120,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     setScanLoading(true)
     setScanError(null)
     setScanEntries(null)
-    setSelectedTitles(new Set())
+    setSelectedTitles(new Map())
     setScanQuery('')
     try {
       const result = await api.scanChats(selectedAccountId)
@@ -137,11 +143,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     try {
       const result = await api.createTargetsBatch({
         accountId: selectedAccountId,
-        nicknames: [...selectedTitles],
+        items: [...selectedTitles].map(([nickname, streakDays]) => ({
+          nickname,
+          streakDays: streakDays ?? undefined,
+        })),
       })
       setBatchResult(result)
       setScanEntries(null)
-      setSelectedTitles(new Set())
+      setSelectedTitles(new Map())
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '导入失败，请重试')
@@ -168,7 +177,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
       const result = await api.createTargetsBatch({
         accountId: selectedAccountId,
         templateId: batchTemplateId || undefined,
-        nicknames: batchText.split('\n'),
+        items: batchText.split('\n').map((line) => ({ nickname: line })),
       })
       setBatchResult(result)
       setBatchText('')
@@ -378,10 +387,10 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                         <label className="pick-switch">
                           <input
                             type="checkbox"
-                            checked={showGroups}
-                            onChange={(event) => setShowGroups(event.target.checked)}
+                            checked={showNoStreak}
+                            onChange={(event) => setShowNoStreak(event.target.checked)}
                           />
-                          显示疑似群聊（{scanGroupCount}）
+                          显示无火花会话（{scanNoStreakCount}）
                         </label>
                       </div>
                       <div className="pick-list">
@@ -389,13 +398,21 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                           <div className="muted" style={{ padding: '14px 12px', fontSize: 12 }}>
                             {scanQuery.trim()
                               ? '没有匹配的会话，换个关键词试试。'
-                              : '没有可显示的会话。'}
+                              : showNoStreak
+                              ? '没有可显示的会话。'
+                              : '没有带火花的会话——勾选右上角开关可查看全部会话。'}
                           </div>
                         ) : (
                           scanFiltered.map((entry) => {
                             const exists = existingNicknames.has(entry.title)
-                            const group = looksLikeGroup(entry.title, entry.preview)
                             const checked = selectedTitles.has(entry.title)
+                            const group = looksLikeGroup(entry.title, entry.preview)
+                            const kindTone =
+                              entry.streakKind === 'couple'
+                                ? 'gold'
+                                : entry.streakKind === 'family'
+                                ? 'cyan'
+                                : 'ember'
                             return (
                               <label
                                 key={entry.title}
@@ -414,16 +431,19 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                                   checked={exists || checked}
                                   onChange={() =>
                                     setSelectedTitles((previous) => {
-                                      const next = new Set(previous)
+                                      const next = new Map(previous)
                                       if (next.has(entry.title)) next.delete(entry.title)
-                                      else next.add(entry.title)
+                                      else next.set(entry.title, entry.streakDays ?? undefined)
                                       return next
                                     })
                                   }
                                 />
                                 <span className="pick-name">{entry.title}</span>
                                 <span className="pick-meta">
-                                  {group && <span className="badge gold">疑似群聊</span>}
+                                  {entry.streakDays != null && (
+                                    <span className={`badge ${kindTone}`}>🔥 {entry.streakDays}</span>
+                                  )}
+                                  {group && <span className="badge">群</span>}
                                   {exists && <span className="badge">已在列表</span>}
                                 </span>
                               </label>
@@ -433,7 +453,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                       </div>
                       <div className="pick-foot">
                         <span className="pick-stat">
-                          扫描 {scanEntries.length} · 群聊 {scanGroupCount}（已隐藏）· 已在列表 {scanExistCount}
+                          扫描 {scanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
                         </span>
                         <button
                           className="btn primary small"
