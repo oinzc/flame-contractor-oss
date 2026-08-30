@@ -20,7 +20,6 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [showBatch, setShowBatch] = useState(false)
   const [batchTemplateId, setBatchTemplateId] = useState('')
   const [batchResult, setBatchResult] = useState<{
     created: string[]
@@ -344,16 +343,8 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
           <section className="card">
             <div className="card-head">
               <h2>批量添加好友</h2>
-              <button
-                className="btn ghost small"
-                type="button"
-                onClick={() => setShowBatch((previous) => !previous)}
-              >
-                {showBatch ? '收起' : '展开'}
-              </button>
             </div>
-            {showBatch && (
-              <div className="form-grid">
+            <div className="form-grid">
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <button
                     className="btn small"
@@ -507,7 +498,6 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                   </div>
                 )}
               </div>
-            )}
           </section>
 
           <section className="card">
