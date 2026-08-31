@@ -23,6 +23,8 @@ from ..models import (
     MessageTemplate,
     SendAttempt,
     SendJob,
+    ScanTask,
+    ScanTaskStatus,
     TemplateType,
 )
 from .douyin_chat import (
@@ -96,13 +98,13 @@ class SendProgress:
 
 @dataclass
 class ScanProgress:
-    """单次会话扫描的内存快照；总数在滚动到底前未知，不伪造百分比。"""
+    """单次会话扫描快照；数据库负责跨进程生命周期保存。"""
 
     task_id: str
     account_id: str
     total: int | None = None
     completed: int = 0
-    status: str = "running"  # running | completed | failed
+    status: str = "running"  # running | completed | failed | interrupted
     stage: str = "准备扫描"
     current_item: str | None = None
     round: int = 0
@@ -238,6 +240,59 @@ class BrowserManager:
                 return progress
         return None
 
+    @staticmethod
+    def _scan_entries_from_json(value: str | None) -> list[dict]:
+        if not value:
+            return []
+        try:
+            entries = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return entries if isinstance(entries, list) else []
+
+    def _scan_progress_view_from_record(self, task: ScanTask) -> dict:
+        status = task.status.value if isinstance(task.status, ScanTaskStatus) else str(task.status)
+        return {
+            "task_id": task.id,
+            "account_id": task.account_id,
+            "status": status,
+            "total": task.total,
+            "completed": task.completed,
+            "stage": task.stage,
+            "current_item": task.current_item,
+            "round": task.round,
+            "max_rounds": task.max_rounds,
+            "overall": task.overall,
+            "detail": task.detail,
+            "entries": self._scan_entries_from_json(task.entries_json),
+            "started_at": task.started_at,
+            "finished_at": task.finished_at,
+        }
+
+    def _persist_scan_progress(self, progress: ScanProgress) -> None:
+        """把内存快照写入 SQLite；每次提交都是一个短事务，避免占住浏览器流程。"""
+        with Session(self._engine) as session:
+            task = session.get(ScanTask, progress.task_id)
+            if task is None:
+                return
+            task.status = ScanTaskStatus(progress.status)
+            task.total = progress.total
+            task.completed = progress.completed
+            task.stage = progress.stage
+            task.current_item = progress.current_item
+            task.round = progress.round
+            task.max_rounds = progress.max_rounds
+            task.overall = progress.overall
+            task.detail = progress.detail
+            task.entries_json = json.dumps(
+                progress.entries or [], ensure_ascii=False, separators=(",", ":")
+            )
+            task.started_at = progress.started_at or task.started_at
+            task.finished_at = progress.finished_at
+            task.updated_at = _utcnow()
+            session.add(task)
+            session.commit()
+
     def _scan_progress_view(self, progress: ScanProgress) -> dict:
         return {
             "task_id": progress.task_id,
@@ -263,6 +318,7 @@ class BrowserManager:
         for key, value in changes.items():
             if hasattr(progress, key):
                 setattr(progress, key, value)
+        self._persist_scan_progress(progress)
 
     async def start_scan_chats(self, account_id: str) -> dict:
         """创建后台扫描任务；浏览器扫描不会绑定前端页面生命周期。"""
@@ -283,6 +339,24 @@ class BrowserManager:
             account_id=account_id,
             started_at=_utcnow(),
         )
+        with Session(self._engine) as session:
+            session.add(
+                ScanTask(
+                    id=progress.task_id,
+                    account_id=account_id,
+                    status=ScanTaskStatus.RUNNING,
+                    total=progress.total,
+                    completed=progress.completed,
+                    stage=progress.stage,
+                    current_item=progress.current_item,
+                    round=progress.round,
+                    max_rounds=progress.max_rounds,
+                    entries_json="[]",
+                    started_at=progress.started_at or _utcnow(),
+                    updated_at=progress.started_at or _utcnow(),
+                )
+            )
+            session.commit()
         self._scan_progress[progress.task_id] = progress
         task = asyncio.create_task(self._run_scan_task(progress))
         self._scan_tasks[progress.task_id] = task
@@ -308,6 +382,7 @@ class BrowserManager:
                     finished_at=_utcnow(),
                 )
             else:
+                entries = result.get("entries") or progress.entries or []
                 self._update_scan_progress(
                     progress.task_id,
                     status="failed",
@@ -315,7 +390,7 @@ class BrowserManager:
                     current_item=None,
                     overall=overall,
                     detail=result["detail"],
-                    entries=[],
+                    entries=entries,
                     finished_at=_utcnow(),
                 )
         except asyncio.CancelledError:
@@ -328,15 +403,58 @@ class BrowserManager:
                 current_item=None,
                 overall="error",
                 detail=type(exc).__name__,
-                entries=[],
+                entries=progress.entries or [],
                 finished_at=_utcnow(),
             )
 
     def scan_chats_progress(self, account_id: str, task_id: str) -> dict:
         progress = self._scan_progress.get(task_id)
-        if progress is None or progress.account_id != account_id:
-            raise HTTPException(status_code=404, detail="扫描任务不存在")
-        return self._scan_progress_view(progress)
+        if progress is not None:
+            if progress.account_id != account_id:
+                raise HTTPException(status_code=404, detail="扫描任务不存在")
+            return self._scan_progress_view(progress)
+        with Session(self._engine) as session:
+            task = session.get(ScanTask, task_id)
+            if task is None or task.account_id != account_id:
+                raise HTTPException(status_code=404, detail="扫描任务不存在")
+            return self._scan_progress_view_from_record(task)
+
+    def latest_scan_chats(self, account_id: str) -> dict | None:
+        """读取账号最近一次扫描；用于前端刷新或新后端进程恢复任务坞。"""
+        with Session(self._engine) as session:
+            task = session.exec(
+                select(ScanTask)
+                .where(ScanTask.account_id == account_id)
+                .order_by(ScanTask.updated_at.desc())
+                .limit(1)
+            ).first()
+            if task is None:
+                return None
+            progress = self._scan_progress.get(task.id)
+            if progress is not None:
+                return self._scan_progress_view(progress)
+            return self._scan_progress_view_from_record(task)
+
+    def recover_persisted_scan_tasks(self) -> int:
+        """启动时收束遗留 running 任务；不自动重启浏览器或重复扫描。"""
+        now = _utcnow()
+        recovered = 0
+        with Session(self._engine) as session:
+            tasks = session.exec(
+                select(ScanTask).where(ScanTask.status == ScanTaskStatus.RUNNING)
+            ).all()
+            for task in tasks:
+                task.status = ScanTaskStatus.INTERRUPTED
+                task.stage = "后端重启，中断扫描"
+                task.current_item = None
+                task.detail = "后端在扫描完成前重启，已保留已发现结果；请重新发起扫描"
+                task.finished_at = now
+                task.updated_at = now
+                session.add(task)
+                recovered += 1
+            if recovered:
+                session.commit()
+        return recovered
 
     def _make_chat(self, page) -> DouyinChat:
         return DouyinChat(
@@ -641,12 +759,18 @@ class BrowserManager:
             if progress is not None:
                 self._update_scan_progress(progress.task_id, **changes)
 
-        async def on_scan_progress(count: int, round_no: int, current_item: str | None) -> None:
+        async def on_scan_progress(
+            count: int,
+            round_no: int,
+            current_item: str | None,
+            entries: list[dict],
+        ) -> None:
             update_progress(
                 stage="滚动读取会话",
                 completed=count,
                 current_item=current_item,
                 round=round_no,
+                entries=entries,
             )
 
         profile_path = ensure_profile_dir(self._settings, account_id)
@@ -1358,6 +1482,16 @@ class BrowserManager:
     # ------------------------------------------------------------ shutdown
 
     async def aclose(self) -> None:
+        for progress in list(self._scan_progress.values()):
+            if progress.status == "running":
+                self._update_scan_progress(
+                    progress.task_id,
+                    status="interrupted",
+                    stage="后端停止，中断扫描",
+                    current_item=None,
+                    detail="后端在扫描完成前停止，已保留已发现结果；请重新发起扫描",
+                    finished_at=_utcnow(),
+                )
         for flow in list(self._flows.values()):
             if flow.task is not None and not flow.task.done():
                 flow.task.cancel()

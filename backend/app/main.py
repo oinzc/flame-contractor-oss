@@ -30,6 +30,10 @@ def create_app(
         app.state.browser_manager = browser_manager
         app.state.settings = settings
         run_migrations(settings.database_url)
+        # 扫描进度写入 SQLite；进程重启后只收束遗留任务，不自动重开浏览器或重复扫描。
+        recover_scan_tasks = getattr(browser_manager, "recover_persisted_scan_tasks", None)
+        if callable(recover_scan_tasks):
+            recover_scan_tasks()
         # 启动时清理过期诊断产物（保守策略：仅删文件，失败不阻断启动）
         try:
             prune_old_artifacts(settings.artifacts_dir, settings.artifact_retention_days)

@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime, timezone
 from enum import Enum
 
+from sqlalchemy import Column, Text
 from sqlmodel import Field, SQLModel, UniqueConstraint
 
 
@@ -59,6 +60,13 @@ class ScheduleStatus(str, Enum):
     UNKNOWN_REQUIRES_REVIEW = "unknown_requires_review"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+
+
+class ScanTaskStatus(str, Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class FailureClass(str, Enum):
@@ -241,3 +249,26 @@ class SendSchedule(SQLModel, table=True):
     last_error: str | None = Field(default=None, max_length=256)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ScanTask(SQLModel, table=True):
+    """会话扫描任务快照；保存进度以便页面刷新或后端重启后继续查看。"""
+
+    __tablename__ = "scan_task"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
+    status: ScanTaskStatus = Field(default=ScanTaskStatus.RUNNING, max_length=16, index=True)
+    total: int | None = Field(default=None, ge=0)
+    completed: int = Field(default=0, ge=0)
+    stage: str = Field(default="准备扫描", max_length=64)
+    current_item: str | None = Field(default=None, max_length=255)
+    round: int = Field(default=0, ge=0)
+    max_rounds: int = Field(default=80, ge=1)
+    overall: str | None = Field(default=None, max_length=32)
+    detail: str | None = Field(default=None, max_length=256)
+    # 结果条目结构稳定且体量受会话列表规模约束，使用 SQLite Text 保存 JSON。
+    entries_json: str = Field(default="[]", sa_column=Column(Text, nullable=False))
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=utc_now, index=True)
