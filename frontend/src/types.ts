@@ -94,6 +94,7 @@ export interface ContractTarget {
 
 export interface ScanChatEntry {
   title: string
+  platformUserId: string | null
   preview: string
   streakDays: number | null
   streakKind: string | null

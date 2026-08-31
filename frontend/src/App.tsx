@@ -157,16 +157,18 @@ export default function App() {
   }, [scanTaskId, scanTaskStatus])
 
   async function finalizeScan(task: ScanTaskState) {
-    const existingNicknames = new Set(
-      targets
-        .filter((target) => target.accountId === task.accountId)
-        .map((target) => target.nicknameSnapshot),
+    const accountTargets = targets.filter((target) => target.accountId === task.accountId)
+    const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
+    const existingPlatformIds = new Set(
+      accountTargets
+        .map((target) => target.platformUserId)
+        .filter((platformUserId): platformUserId is string => Boolean(platformUserId)),
     )
-    const existingEntries = task.entries.filter((entry) => {
-      const hasOfficialState =
-        entry.streakDays != null || Boolean(entry.streakKind) || Boolean(entry.streakLabel)
-      return existingNicknames.has(entry.title) && hasOfficialState
-    })
+    const existingEntries = task.entries.filter(
+      (entry) =>
+        existingNicknames.has(entry.title) ||
+        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)),
+    )
     let batchResult: TargetBatchResult = {
       created: [],
       refreshed: [],
@@ -181,6 +183,7 @@ export default function App() {
           accountId: task.accountId,
           items: existingEntries.map((entry) => ({
             nickname: entry.title,
+            platformUserId: entry.platformUserId,
             streakDays: entry.streakDays ?? undefined,
             sparkKind: entry.streakKind,
             sparkLabel: entry.streakLabel,

@@ -18,6 +18,11 @@ OPEN_CONFIRM_TIMEOUT = 8.0
 # 全量扫描会话列表：滚动轮数上限 + 连续无新增即判定到底
 SCAN_MAX_ROUNDS = 80
 SCAN_IDLE_ROUNDS = 3
+IDENTITY_RESPONSE_PATHS = (
+    "/aweme/v1/web/im/user/info",
+    "/aweme/v1/web/user/profile/other",
+    "/aweme/v1/web/user/profile/scene",
+)
 
 
 def _item_selectors() -> tuple:
@@ -34,6 +39,8 @@ class ConversationOpen:
     opened: bool
     title: str | None
     exact: bool
+    platform_user_id: str | None = None
+    identity_verified: bool = False
 
 
 @dataclass
@@ -71,6 +78,97 @@ class DouyinChat:
         self.search_timeout = search_timeout
         self._sleep = sleep
         self._warmed = False
+        # 抖音会话列表 DOM 当前不暴露用户 ID；页面加载/打开会话时的用户信息
+        # 响应会带 sec_uid。一个显示名可能对应多人，因此保留集合，冲突时返回未知。
+        self._identity_ids_by_label: dict[str, set[str]] = {}
+        self._identity_tasks: set[asyncio.Task] = set()
+        on_response = getattr(page, "on", None)
+        if callable(on_response):
+            try:
+                on_response("response", self._on_response)
+            except Exception:
+                # 测试桩或替代页面协议可以没有事件总线；此时仍保留昵称严格匹配。
+                pass
+
+    def _on_response(self, response) -> None:
+        """异步接收抖音用户信息响应，不把凭据或完整响应保存到本地。"""
+        url = getattr(response, "url", None)
+        if not isinstance(url, str) or not any(path in url for path in IDENTITY_RESPONSE_PATHS):
+            return
+        try:
+            task = asyncio.create_task(self._capture_identity_response(response))
+        except RuntimeError:
+            return
+        self._identity_tasks.add(task)
+        task.add_done_callback(self._identity_tasks.discard)
+
+    async def _capture_identity_response(self, response) -> None:
+        try:
+            payload = await response.json()
+        except Exception:
+            return
+        for record in self._iter_identity_records(payload):
+            platform_user_id = self._first_non_empty(
+                record.get("sec_uid"),
+                record.get("sec_user_id"),
+                record.get("uid"),
+            )
+            if platform_user_id is None:
+                continue
+            for field in ("remark_name", "nickname", "unique_id"):
+                label = self._first_non_empty(record.get(field))
+                if label is not None:
+                    self._identity_ids_by_label.setdefault(label, set()).add(platform_user_id)
+
+    @classmethod
+    def _iter_identity_records(cls, value):
+        if isinstance(value, dict):
+            if any(cls._first_non_empty(value.get(field)) for field in ("nickname", "remark_name")):
+                yield value
+            for child in value.values():
+                yield from cls._iter_identity_records(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from cls._iter_identity_records(child)
+
+    @staticmethod
+    def _first_non_empty(*values) -> str | None:
+        for value in values:
+            if isinstance(value, (str, int)):
+                text = str(value).strip()
+                if text:
+                    return text
+        return None
+
+    def _identity_ids_for_label(self, label: str | None) -> set[str]:
+        if not label:
+            return set()
+        return self._identity_ids_by_label.get(label.strip(), set())
+
+    def platform_user_id_for_label(self, label: str | None) -> str | None:
+        """返回唯一可确认的用户 ID；同名冲突或未采集到时返回 None。"""
+        ids = self._identity_ids_for_label(label)
+        return next(iter(ids)) if len(ids) == 1 else None
+
+    async def _wait_for_identity_updates(self) -> None:
+        while self._identity_tasks:
+            await asyncio.gather(*tuple(self._identity_tasks), return_exceptions=True)
+
+    def _opened_identity_matches(
+        self,
+        requested_name: str,
+        right_title: str | None,
+        expected_platform_user_id: str,
+    ) -> tuple[bool, str | None]:
+        primary = self._primary_panel_title(right_title)
+        # 标题仍相同，优先按请求名核对；标题已改名时，按当前右侧主昵称核对。
+        label = requested_name if primary == requested_name else primary
+        ids = self._identity_ids_for_label(label)
+        if ids == {expected_platform_user_id}:
+            return True, expected_platform_user_id
+        if len(ids) == 1:
+            return False, next(iter(ids))
+        return False, None
 
     async def open_chat_page(self) -> None:
         await self.page.goto(_s.CHAT_URL)
@@ -137,7 +235,11 @@ class DouyinChat:
             await self._sleep(0.9)
         self._warmed = True
 
-    async def open_conversation(self, name: str) -> ConversationOpen:
+    async def open_conversation(
+        self,
+        name: str,
+        platform_user_id: str | None = None,
+    ) -> ConversationOpen:
         # 0) 预热：先滚动列表，让懒加载数据与搜索索引就绪
         try:
             await self.warm_up_list()
@@ -146,7 +248,7 @@ class DouyinChat:
         # 1) 搜索优先：直接搜索昵称，从结果中精确匹配
         try:
             await self.search(name)
-            result = await self._search_and_open(name)
+            result = await self._search_and_open(name, platform_user_id)
             if result is not None:
                 return result
         except Exception:
@@ -158,7 +260,7 @@ class DouyinChat:
         except Exception:
             pass
         for _ in range(MAX_LIST_SCROLLS):
-            result = await self._scan_items(name)
+            result = await self._scan_items(name, platform_user_id)
             if result.opened:
                 return result
             scroll_element = await self.page.query_selector(_s.CONVERSATION_LIST)
@@ -243,22 +345,31 @@ class DouyinChat:
             pass
         return result
 
-    async def _search_and_open(self, name: str) -> ConversationOpen | None:
+    async def _search_and_open(
+        self,
+        name: str,
+        platform_user_id: str | None = None,
+    ) -> ConversationOpen | None:
         """搜索后轮询等待结果渲染（首次加载时结果可能晚于固定等待时间）。"""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.search_timeout
         while True:
-            result = await self._scan_items(name)
+            result = await self._scan_items(name, platform_user_id)
             if result.opened:
                 return result
             if loop.time() >= deadline:
                 break
             await self._sleep(1.0)
         if await self._try_click_exact_by_text(name):
-            return await self._confirm_opened(name)
+            return await self._confirm_opened(name, platform_user_id)
         return None
 
-    async def _scan_items(self, name: str) -> ConversationOpen:
+    async def _scan_items(
+        self,
+        name: str,
+        platform_user_id: str | None = None,
+    ) -> ConversationOpen:
+        identity_mismatch: ConversationOpen | None = None
         for selector in _item_selectors():
             items = await self.page.query_selector_all(selector)
             for item in items:
@@ -272,20 +383,56 @@ class DouyinChat:
                     await target.click(timeout=2500)
                 except Exception:
                     continue  # 隐藏缓存行等不可点目标，跳过继续扫描
-                return await self._confirm_opened(name)
-        return ConversationOpen(opened=False, title=None, exact=False)
+                opened = await self._confirm_opened(name, platform_user_id)
+                if platform_user_id is None or opened.identity_verified:
+                    return opened
+                # 同名结果可能不止一个：继续核验其它候选，最终仍以稳定 ID 为准。
+                identity_mismatch = opened
+        return identity_mismatch or ConversationOpen(opened=False, title=None, exact=False)
 
-    async def _confirm_opened(self, name: str) -> ConversationOpen:
+    async def _confirm_opened(
+        self,
+        name: str,
+        platform_user_id: str | None = None,
+    ) -> ConversationOpen:
         """点击后轮询右侧标题确认（SPA 切换有延迟，同 unmev 的 _confirm_opened）。"""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.confirm_timeout
         right_title: str | None = None
         while True:
             right_title = await self.right_panel_title()
-            if self._primary_panel_title(right_title) == name:
+            primary = self._primary_panel_title(right_title)
+            if platform_user_id is not None:
+                await self._wait_for_identity_updates()
+                matched, observed = self._opened_identity_matches(
+                    name,
+                    right_title,
+                    platform_user_id,
+                )
+                if matched:
+                    return ConversationOpen(
+                        opened=True,
+                        title=right_title,
+                        exact=True,
+                        platform_user_id=observed,
+                        identity_verified=True,
+                    )
+                if observed is not None:
+                    return ConversationOpen(
+                        opened=True,
+                        title=right_title,
+                        exact=False,
+                        platform_user_id=observed,
+                    )
+            elif primary == name:
                 return ConversationOpen(opened=True, title=right_title, exact=True)
             if loop.time() >= deadline:
-                return ConversationOpen(opened=True, title=right_title, exact=False)
+                return ConversationOpen(
+                    opened=True,
+                    title=right_title,
+                    exact=False,
+                    platform_user_id=self.platform_user_id_for_label(primary),
+                )
             await self._sleep(0.5)
 
     @staticmethod
@@ -420,6 +567,9 @@ class DouyinChat:
                 break
             await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
             await self._sleep(0.8)
+        await self._wait_for_identity_updates()
+        for entry in entries:
+            entry["platform_user_id"] = self.platform_user_id_for_label(entry["title"])
         if progress_callback is not None:
             await progress_callback(len(entries), last_round, None)
         return entries

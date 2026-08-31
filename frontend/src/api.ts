@@ -72,6 +72,7 @@ export const api = {
     templateId?: string
     items: {
       nickname: string
+      platformUserId?: string | null
       streakDays?: number
       sparkKind?: string | null
       sparkLabel?: string | null
