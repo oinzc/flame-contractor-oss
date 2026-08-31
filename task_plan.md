@@ -4,10 +4,10 @@
 M5 已全部完成并完成换机迁移（2026-08-29）。下一步按三期推进：**M6 补齐无人值守可靠性闭环**（诊断/重试/熔断/自启），**M7 前端重设计**（信息架构+视觉，使用 emilkowalski 技能与本地设计技能），**M8 体验功能**（文案池/统计/备份/截图扫码，长在新设计上）。
 
 ## Next Step
-无强制待办（2026-08-30 深夜：CRUD 补齐+扫描导入+火花识别已全部落地并推送，项目将迁移到公司电脑开发，交接提示词见 `docs/HANDOFF_PROMPT.md`）。可选后续：风控页检测（等真实样本）、多账号实测、统计图表可视化。
+无强制待办（2026-08-31：全局调度暂停状态持久化已落地并验证，项目可继续按可选项迭代；交接提示词见 `docs/HANDOFF_PROMPT.md`）。可选后续：风控页检测（等真实样本）、多账号实测、统计图表可视化。
 
 ## Current Phase
-M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别）。前端采用 D1「驾驶舱」方向（用户拍板）；全量 134 passed + build 通过，关键功能真机实测
+M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别）。前端采用 D1「驾驶舱」方向（用户拍板）；全局调度暂停状态持久化；全量 131 passed + build 通过，关键功能真机实测
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -24,6 +24,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - [x] **M6-2 网络预检 + 有界重试 + 发送冷却 + 窗口外补发策略**：run_send 前置连通性预检（离线不消耗本轮、留待下个 tick）；failed_retryable 在窗口内有限次退避重试（默认 2 次、间隔 10min）；好友间发送冷却（默认 3s）；窗口已结束的到期计划转 `skipped` 而非深夜补发（`FLAME_WINDOW_EXPIRY_POLICY`）。
 - [x] **M6-3 连续失败熔断 + 成功汇总推送**：`Account.failure_streak` 列（迁移）；连续 N 天失败（默认 3）转 `cooldown` + Bark 汇总通知，成功清零；run_send 完成后可选成功推送（`FLAME_NOTIFY_ON_SUCCESS`，默认开）。
 - [x] **M6-4 开机自启**：`scripts/install_autostart.bat`（schtasks 登录时拉起前后端）+ README 说明。
+- [x] **M6-5 全局调度暂停状态持久化**：新增 `AppSetting`/Alembic 迁移，暂停/恢复写入数据库，后端启动恢复，避免重启后意外恢复自动发送。
 
 ## M7 前端重设计
 - [x] **M7-1 设计方向提案【用户拍板】**：加载 emil-design-eng / frontend-design / animation 系技能，产出 2–3 个完整方向（含预览页）供选择。
@@ -56,7 +57,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - `app/main.py` lifespan 挂载 `AsyncIOScheduler`，执行器复用 `browser_manager.run_send`；`requirements.txt` 加 `apscheduler>=3.10,<4`。
 - `app/api/scheduler.py`：`GET /api/scheduler`、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
-- **验证**：后端 pytest 77 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
+- **验证**：后端 pytest 131 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
 - **完整真机 E2E**：到期计划 → `Scheduler.tick()` 派发 1 个账号 → `BrowserManager.run_send` 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 tick `dispatched=0` 且不调用发送执行器。
 
 ## M5 子阶段
@@ -71,7 +72,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - [x] selector bundle 热更新（页面改版快速适配）。
 - [x] **火花天数手动校准**（`PATCH /api/targets/{id}` + 好友页「校准」按钮；不 DOM 读取）。
 ### Phase 4: 验收与交接
-- [x] 后端测试 77 passed；前端 build；图片/原生表情 E2E 实机验证通过。
+- [x] 后端测试 131 passed；前端 build；图片/原生表情 E2E 实机验证通过；调度暂停状态持久化回归通过。
 - [x] 完整自动调度真机 E2E：到期计划 → `tick` 派发 1 个账号 → 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 `tick` `dispatched=0` 且不调用发送执行器。
 - [x] 更新 PROJECT_STATUS / task_plan / docs。
 
@@ -83,7 +84,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - 调度器为进程内内存循环（APScheduler），持久调度语义由 `SendSchedule` 表承载。
 
 ## 复用 Success Criteria 参考（M3 保持）
-- 后端 pytest **77 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded。
+- 后端 pytest **131 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

@@ -1,9 +1,11 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-30 深夜 | 功能基线：CRUD 补齐 + 会话扫描导入 + 火花识别（见 git log）
+> 最近更新：2026-08-31 | 功能基线：CRUD 补齐 + 会话扫描导入 + 火花识别 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录）全部落地。后端 pytest **134 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录）全部落地。后端 pytest **131 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+
+**2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
 
 **2026-08-30 CRUD 补齐与好友导入（对照参考项目缺口清零）**：
 - 好友启停（`b1dc3dc`）、模板编辑/删除/启停（`af5d43e`，校验规则统一、池候选替换继承 LRU、仅内容变化 bump version）、账号删除+改名（`c525a55`，调度行级联清除 `4ff5616`）
@@ -42,7 +44,7 @@
 
 ### M4 自动调度（本轮新增，HEAD `3684462`）
 - 新增 `SendSchedule` 表（账号级每日调度）+ Alembic 迁移 `15a5feca9ee1`。
-- `app/scheduler.py`：懒生成当日计划（窗口内随机取时）、到期调度、账号级租约互斥、崩溃恢复、失败分类、可控暂停。
+- `app/scheduler.py`：懒生成当日计划（窗口内随机取时）、到期调度、账号级租约互斥、崩溃恢复、失败分类、可控暂停（状态持久化）。
 - `app/main.py` lifespan 挂载 `AsyncIOScheduler`（进程内，注入 `browser_manager.run_send` 作为执行器）。
 - 部署：`requirements.txt` 追加 `apscheduler>=3.10,<4`。
 - 新增 `app/api/scheduler.py`：`GET /api/scheduler`（状态+今日计划）、`POST /api/scheduler/{pause,resume}`。
@@ -85,21 +87,22 @@
 - 调度器只决定「账号今天何时发」，好友级发送与幂等（`run_send` 的 `(account, target, business_date, message_slot_id)`）完全复用。
 - SQLite 读出的 datetime 为 naive：调度器内统一用 `_utc_naive` 归一化后再比较，避免 aware/naive 比较错误。
 - 迁移替换 create_all；真实运行与测试均走 `alembic upgrade head`。
-- **火花天数 = 本地累计（`streak_days` 发送成功 +1），非抖音实时读取**：抖音网页版不提供稳定、对所有好友存在的火花天数 DOM；参考 ScriptCat-Douyin-Fire-Helper（本地记录+每日+1+手动调整）。DOM 读取已实机验证不可靠（误读风险 > 收益），放弃。
+- **火花天数 = 本地累计（`streak_days` 发送成功 +1）**：会话扫描阶段读取官方火花 DOM 只用于初始化/展示，之后不依赖 DOM 天数做发送决策；参考 ScriptCat-Douyin-Fire-Helper 的本地记录 + 每日 +1 + 手动调整做法。
 - **图片确认 = 发送前后非头像图片数量锚定**：图片气泡出现有延迟，且会话里头像图片会污染「contentBox 有 img」判断。`image_bubble_confirmed` 发送前记非头像图片数，发送后要求数量增加才判成功，规避历史图片误判，绝不把头像/旧图当成功。
+- **全局自动调度开关持久化**：`AppSetting` 以 `scheduler.paused` 记录暂停状态；启动先完成 Alembic 迁移再恢复，恢复失败时保持安全方向，不让暂停配置静默丢失。
 - 不加载任何反检测脚本；验证码与风控仅本人处理。
 
 ## 当前核心代码结构
 ```
 backend/app/
   core/        config(database_url/profiles_dir/artifacts_dir)、database、migrations
-  models.py    Account/ContractTarget/MessageTemplate/SendJob/SendAttempt/SendSchedule + 枚举
+  models.py    Account/AppSetting/ContractTarget/MessageTemplate/SendJob/SendAttempt/SendSchedule + 枚举
   schemas.py   API 输入/输出模型（camelCase 别名字段）+ SendScheduleRead/SchedulerStatusRead
   services.py  账号/模板/好友 CRUD、发送预览、仪表盘聚合
   scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
@@ -112,7 +115,7 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **77 passed**（39=CRUD/迁移/登录/定位/Dry Run/发送终态/幂等/RealApiPage 回归/零宽清空/气泡升级；10=调度；8=通知+图片：图片注入/图片不误判头像/图片模板校验/火花校准/Bark URL/推送无误；7=selector bundle：默认加载/未知 key/显式 reload/惰性 mtime/运行期取值/API 读与重载；4=原生表情：模板校验/匹配发送成功/找不到表情失败/无气泡不判成功；4=登录检测：轮询直到渲染/永不渲染超时/延迟渲染发送成功/仍未渲染判过期） |
+| 后端 pytest | **131 passed**（含调度暂停状态持久化与启动恢复回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | 端到端自动调度真机 E2E | 到期计划 → `Scheduler.tick()` 派发 1 个账号 → 真实 `run_send` 发送与终态确认；计划 `succeeded`、任务 `succeeded`；再次 tick `dispatched=0` 且未调用发送执行器 |
@@ -125,13 +128,13 @@ frontend/src/
 - 真实发送的「终态确认」以气泡内容 + 发布按钮为主，`SendStatusretry` 等失败标记选择器未经验证，失败标记可能检测不到（会退化为 unknown 而非误判成功）。
 - Profile 数据高敏感，仅依赖系统用户权限，未做额外加密。
 - Starlette httpx→httpx2 弃用警告存在，功能无影响。
-- **调度器为进程内内存循环（APScheduler），未用持久化 jobstore**：进程重启后后台循环自动重跑 `tick`，会重新生成当日/补跑当日计划（幂等键兜底不会重复发送）。真正需要的持久调度语义由 `SendSchedule` 表承载（唯一约束 + 租约字段），重启安全。
+- **调度器为进程内内存循环（APScheduler），未用持久化 jobstore**：进程重启后后台循环自动重跑 `tick`，会重新生成当日/补跑当日计划（幂等键兜底不会重复发送）。真正需要的计划语义由 `SendSchedule` 表承载（唯一约束 + 租约字段），全局暂停开关另由 `AppSetting` 持久化并在启动恢复。
 - 调度默认每 60s 轮询一次，到点判定依赖 `scheduled_at`；若进程在窗口内长时间挂起，重启后可能补发当日计划（幂等兜底）。
 - **headless 下登录检测波动（已修复，HEAD `4aa851b`）**：原 `run_send`/Dry Run 用 headless 打开持久 profile 后立即 `is_logged_in()` 单次查询会话列表，页面加载早期列表未渲染完易返回 False，被误判 auth_expired 并跳过发送。已改为 `DouyinChat.wait_logged_in(timeout, poll_interval)` 轮询：会话列表一旦出现即算已登录、超时才判失效；run_send / run_dry_run / 扫码登录三处统一走它，并新增 `login_check_timeout` 构造参数（默认 8s）。真机验证 `wait_logged_in=True`，截图经视觉桥确认会话列表完整渲染（实机复现偶发单次 False 不总是发生，但轮询逻辑已由单测覆盖「延迟渲染→True / 永不渲染→False」）。
 - **selector bundle 依赖 JSON 有效性**：`selectors_bundle.json` 语法错误或字段缺失时，`_Bundle` 会保留内存中的默认/上一版值继续运行（安全方向、不误发），但需人工修正并按需 `POST /api/selectors/reload`（或进程内惰性 mtime）才会刷新。
 
 ## 尝试过但失败的方案
-- **火花天数 DOM 读取（已放弃）**：尝试从抖音会话页读取真实火花天数，结论是不可靠——火花提示只在会话列表项的特定标签里出现、文案随状态变化（为你恢复 N 天火花 / 重燃中 N/M / 已连续 N 天）、不是每个好友都有（oinzc 实测无提示），且类名被多会话共用、抓整页会串行误读。读错天数发给好友比不读更糟，违背"宁可不发不错发"。采纳参考项目 ScriptCat 的"本地累计 + 手动调整"做法。
+- **早期全量直读火花 DOM（已放弃）**：曾尝试把会话页火花 DOM 直接作为发送依据，但提示文案随状态变化、不是每个好友都有且类名会串读。当前仅在扫描阶段识别官方徽标用于初始化/展示，发送决策仍坚持本地累计 + 手动调整，避免读错天数。
 - **图片发送旧实现（已替换）**：旧 `send_image` 直接找 `input[type=file]` 注入后点编辑器发布按钮 —— 但当前抖音聊天版发图是「点附件图标 → 选图 → 确认弹窗「发送」」，旧实现导致图发不出。实机验证改用确认弹窗发送后才真正发出。
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
@@ -146,7 +149,7 @@ M6/M7/M8 已全部完成，无强制待办。可选后续（未排期）：
 - **跨机迁移后登录失效**：抖音识别新设备作废旧会话（预期现象），须重新扫码。
 - **有头窗口整页黑屏（已部分修复，`84e9326`）**：两层原因——①Chromium「原生窗口遮挡计算」在自动化窗口上误判被遮挡而停止绘制，已通过 `--disable-features=CalculateNativeWinOcclusion` 修复（全新 Profile 验证有效）；②真实 Profile 下有头模式抖音页面 JS 卡在早期、登录框/会话列表不挂载（未深挖，headless 完全正常）。**全项目仅扫码登录用有头窗口**，发送/定位/调度均 headless 不受影响。
 - **本机重新扫码的可行路径（已实测）**：headless 打开登录页 + 定时截图二维码供手机扫描，登录态照常写入持久 Profile。计划在 M8-4 产品化为「截图扫码登录」。
-- **运维备忘**：调度器 `paused` 为内存态，重启后端即丢失，需重新暂停/恢复；`account.status` 在库中存枚举名（如 `HEALTHY`）。
+- **运维备忘**：调度循环本身为进程内状态，重启后会重新轮询；全局调度 `paused` 已由 `app_setting.scheduler.paused` 持久化并在启动恢复；`account.status` 在库中存枚举名（如 `HEALTHY`）。
 
 ## 应急运维工具（backend/scripts，实机排查用）
 - `probe_dry_run.py <account_id>`：走产品代码路径跑一次定位校验（只读不发）。
