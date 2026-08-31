@@ -1,13 +1,15 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-31 | 功能基线：CRUD 补齐 + 会话扫描导入 + 后台扫描进度/全局任务坞 + 火花识别/官方状态快照 + 火花徽标标题兼容 + 暂停状态持久化（见 git log）
+> 最近更新：2026-09-01 | 功能基线：稳定身份匹配 + CRUD 补齐 + 会话扫描导入 + SQLite 持久化扫描任务/全局任务坞 + 实时结果/取消重试 + 火花识别/官方状态快照 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录）全部落地。后端 pytest **134 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性）全部落地。后端 pytest **144 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
 
 **2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
 
 **2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容。
+
+**2026-09-01 会话扫描任务可靠性闭环**：新增 `ScanTask`/迁移 `d2e6f8a0b1c3`，每次进度快照和已发现会话条目写入 SQLite；`GET /scan-chats/latest` 可在刷新或后端重启后恢复最近快照。前端任务坞统一承载发送与扫描任务，扫描结果实时增长，支持取消并保留已发现条目、失败重试；后端重启会把遗留 `running` 收束为 `interrupted`，不自动续跑或自动导入/发送，避免重复操作。
 
 **2026-08-31 发送定位修复**：抖音右侧标题会在主昵称后追加官方火花状态；确认逻辑现在只对首个非空行做严格等值匹配，保留完整标题用于诊断，不放宽为模糊匹配。真实 Dry Run 14 个对象中 10 个 `found`、4 个 `not_found`，未发送消息。
 
@@ -101,28 +103,30 @@
 ```
 backend/app/
   core/        config(database_url/profiles_dir/artifacts_dir)、database、migrations
-  models.py    Account/AppSetting/ContractTarget/MessageTemplate/SendJob/SendAttempt/SendSchedule + 枚举
+  models.py    Account/AppSetting/ContractTarget/MessageTemplate/SendJob/SendAttempt/SendSchedule/ScanTask + 枚举
   schemas.py   API 输入/输出模型（camelCase 别名字段）+ SendScheduleRead/SchedulerStatusRead
   services.py  账号/模板/好友 CRUD、发送预览、仪表盘聚合
   scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
 frontend/src/
   App.tsx(顶栏导航+页面切换+全局刷新+scheduler 状态)、components/DashboardPage/AccountsPage/
-  TargetsPage/TemplatesPage/JobsPage/CreateAccountModal/SendModal/StatusBadge
-  lib/format.ts(状态文案映射+调度映射)、api.ts、types.ts、theme.css(Vercel 浅色)
+  TargetsPage/TemplatesPage/JobsPage/CreateAccountModal/SendModal/TaskDock/StatusBadge
+  lib/format.ts(状态文案映射+调度映射)、api.ts、types.ts、theme.css(D1 蚀刻 bento + 任务坞)
 ```
 
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **134 passed**（含会话扫描后台进度、火花徽标标题定位回归、官方状态快照持久化、调度暂停状态持久化与启动恢复回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **144 passed**（含稳定身份匹配、扫描任务 SQLite 持久化/恢复、实时结果、取消/重试、多账号互斥与重启回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
+| 2026-09-01 运行态检查 | 后端 `/health` 返回 `status=ok`、`database=ready`；账号「示例账号」为 `healthy`；前后端均监听回环地址 `127.0.0.1`（8000/5173） |
+| 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `29`；本轮重启后从 SQLite 读取最近一次 `completed` 快照 43 条。会话数随抖音页面状态变化，不写死为固定总数 |
 | 真实 Dry Run（2026-08-31） | `overall=ok`；14 个对象中 10 个 `found`（含三种火花徽标后缀），4 个 `not_found`；只读，未发送消息 |
 | 端到端自动调度真机 E2E | 到期计划 → `Scheduler.tick()` 派发 1 个账号 → 真实 `run_send` 发送与终态确认；计划 `succeeded`、任务 `succeeded`；再次 tick `dispatched=0` 且未调用发送执行器 |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |
@@ -138,7 +142,7 @@ frontend/src/
 - 调度默认每 60s 轮询一次，到点判定依赖 `scheduled_at`；若进程在窗口内长时间挂起，重启后可能补发当日计划（幂等兜底）。
 - **headless 下登录检测波动（已修复，HEAD `4aa851b`）**：原 `run_send`/Dry Run 用 headless 打开持久 profile 后立即 `is_logged_in()` 单次查询会话列表，页面加载早期列表未渲染完易返回 False，被误判 auth_expired 并跳过发送。已改为 `DouyinChat.wait_logged_in(timeout, poll_interval)` 轮询：会话列表一旦出现即算已登录、超时才判失效；run_send / run_dry_run / 扫码登录三处统一走它，并新增 `login_check_timeout` 构造参数（默认 8s）。真机验证 `wait_logged_in=True`，截图经视觉桥确认会话列表完整渲染（实机复现偶发单次 False 不总是发生，但轮询逻辑已由单测覆盖「延迟渲染→True / 永不渲染→False」）。
 - **selector bundle 依赖 JSON 有效性**：`selectors_bundle.json` 语法错误或字段缺失时，`_Bundle` 会保留内存中的默认/上一版值继续运行（安全方向、不误发），但需人工修正并按需 `POST /api/selectors/reload`（或进程内惰性 mtime）才会刷新。
-- **会话扫描进度是进程内内存态**：应用内切换页面不会影响后台扫描；若整页刷新或后端进程重启，任务快照会丢失，需要重新发起扫描。扫描总数在滚动到底前未知，界面不会用滚动轮次伪造百分比。
+- **会话扫描不是可跨重启续跑的队列**：应用内切换页面或关闭前端面板不会影响后台扫描；每次进度快照与已发现条目持久化到 SQLite。后端重启会将遗留 `running` 收束为 `interrupted`，保留部分结果但不自动续跑；`completed`/`cancelled` 快照可从 `latest` 读取。扫描总数在滚动到底前未知，界面不会用滚动轮次伪造百分比。
 
 ## 尝试过但失败的方案
 - **早期全量直读火花 DOM（已放弃）**：曾尝试把会话页火花 DOM 直接作为发送依据，但提示文案随状态变化、不是每个好友都有且类名会串读。当前仅在扫描阶段识别官方徽标用于初始化/展示，发送决策仍坚持本地累计 + 手动调整，避免读错天数。
@@ -146,9 +150,9 @@ frontend/src/
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-M6/M7/M8 已全部完成，无强制待办。可选后续（未排期）：
+M6/M7/M8 已全部完成，本轮扫描可靠性任务也已完成，无强制待办。可选后续（未排期）：
 1. 统计页图表可视化（当前为数字块 + CSV）；
-2. 多账号实测（架构已支持账号级隔离，但只实测过 1 个账号）；
+2. 第二个真实账号的扫码/扫描实测（账号级隔离、并发互斥已由测试覆盖）；
 3. 验证码/风控页检测——等真实风控页样本出现后用失败截图留证再写 selector；
 4. 转多用户/远程时才加鉴权与加密。
 

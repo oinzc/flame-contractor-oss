@@ -1,6 +1,6 @@
 # Flame Contractor 本地控制平面 API 文档
 
-> 版本：0.1.0 | 接口状态：骨架基线
+> 版本：0.1.0 | 接口状态：本机控制台当前实现
 
 ## 1. 通用规范
 
@@ -348,7 +348,7 @@ password, cookie, token, storageState, profilePath
 - 前端字段统一使用 camelCase；数据库字段使用 snake_case；
 - 时间戳为带时区 ISO 8601；
 - 日期幂等按账号配置时区计算；
-- 当前 API 不代表真实抖音执行能力已经实现；
+- 发送与会话扫描 API 的真实执行依赖抖音页面结构、登录态和本机 Playwright；假浏览器测试不能替代实机验证；
 - 不要在请求、日志、Issue 或截图中粘贴真实账号凭据。
 
 ## 9. Selector Bundle 热更新
@@ -447,8 +447,18 @@ password, cookie, token, storageState, profilePath
   - 判定续火对象 = 有火花天数 || 有文字徽标 || 最后消息提及「火花」（断火提醒形态）。
   - 登录失效返回 `overall=auth_expired` 并标记账号。
 - `POST /api/accounts/{id}/scan-chats/start`：发起后台扫描，返回 `202` 和 `taskId`；
-  浏览器扫描不绑定前端页面，控制台切换页面后仍可继续观察。
+  浏览器扫描不绑定前端页面，控制台切换页面或关闭前端面板后仍可继续观察。任务进度和已发现条目会持久化到 SQLite。
 - `GET /api/accounts/{id}/scan-chats/progress?taskId={taskId}`：读取扫描进度。
   扫描完成前 `total` 为 `null`，`completed` 表示当前已发现的会话数，另返回真实阶段、
-  当前会话和滚动轮次；完成时 `status=completed`、`total=completed`，并在 `entries` 返回结果。
-  扫描失败时保留 `status=failed` 与 `detail`，不会自动发送或导入新好友。
+  当前会话和滚动轮次；扫描过程中 `entries` 会返回当前已发现的条目，完成时
+  `status=completed`、`total=completed`，并返回最终结果。
+- `GET /api/accounts/{id}/scan-chats/latest`：读取该账号最近一次扫描快照；用于页面刷新、
+  前端重连或后端重启后恢复任务坞。没有历史任务时返回 `null`。`running` 只表示当前进程
+  仍在执行；后端重启会将遗留任务收束为 `interrupted`，保留已发现条目但不自动续跑。
+- `POST /api/accounts/{id}/scan-chats/cancel?taskId={taskId}`：取消指定后台扫描并保留已发现条目；
+  已完成、失败、中断或已取消的终态任务重复调用时返回原终态，不会覆盖真实结果。
+- 快照响应字段为 `{taskId, accountId, status, total, completed, stage, currentItem, round,
+  maxRounds, overall, detail, entries, startedAt, finishedAt}`；`status` 取值为
+  `running`/`completed`/`failed`/`interrupted`/`cancelled`。
+- `failed` 保留 `detail`；`cancelled` 表示用户主动取消；`interrupted` 表示后端停止或重启。
+  这些状态都不会自动发送或自动导入新好友，用户可查看保留结果并显式重试/手动导入。

@@ -1,6 +1,6 @@
 # Flame Contractor SQLite Schema 规格
 
-> 本文描述 0.1.0 骨架期核心表。实际建表由 SQLModel metadata 完成。
+> 本文描述当前 0.1.0 运行 schema（含 Alembic 迁移扩展）。实际建表与升级由 Alembic 完成。
 
 ## 1. 关系图
 
@@ -13,6 +13,7 @@ erDiagram
   MESSAGE_TEMPLATE ||--o{ SEND_JOB : renders
   SEND_JOB ||--o{ SEND_ATTEMPT : has
   ACCOUNT ||--o{ SEND_SCHEDULE : schedules_daily
+  ACCOUNT ||--o{ SCAN_TASK : scans
 
   ACCOUNT {
     string id PK
@@ -103,6 +104,24 @@ erDiagram
     datetime created_at
     datetime updated_at
   }
+
+  SCAN_TASK {
+    string id PK
+    string account_id FK
+    string status
+    integer total
+    integer completed
+    string stage
+    string current_item
+    integer round
+    integer max_rounds
+    string overall
+    string detail
+    text entries_json
+    datetime started_at
+    datetime finished_at
+    datetime updated_at
+  }
 ```
 
 ## 2. 约束
@@ -117,7 +136,8 @@ erDiagram
 
 - 外键 `account_id → account.id`；
 - 外键 `template_id → message_template.id`，可空；
-- 骨架期唯一：`(account_id, nickname_snapshot)`；
+- 展示名称回退唯一：`(account_id, nickname_snapshot)`；
+- 稳定身份唯一：`(account_id, platform_user_id)`；SQLite 允许同账号存在多个 `NULL` 稳定 ID，非空 ID 不可重复；
 - `streak_days >= 0` 由 API 和数据库 Check 共同限制。
 
 ### message_template
@@ -155,6 +175,15 @@ UNIQUE (account_id, business_date)
 ```
 
 保证同账号同一业务日期只有一条调度计划；Scheduler 重复运行也不会生成第二条。
+
+### scan_task
+
+- 外键 `account_id → account.id`，删除账号时由应用层先检查运行中任务并阻止危险删除；
+- `status` 取值：`running` / `completed` / `failed` / `interrupted` / `cancelled`；
+- `completed >= 0`；扫描滚动到底前 `total` 可以为 `NULL`，不以滚动轮次伪造总数或百分比；
+- `entries_json` 保存结构化的只读会话扫描快照，供进度展示、刷新恢复和用户手动导入，
+  本身不构成发送决策，也不会自动新增好友；
+- `updated_at` 建立索引，用于读取账号最近一次扫描快照。
 
 ## 3. SQLite 配置
 
