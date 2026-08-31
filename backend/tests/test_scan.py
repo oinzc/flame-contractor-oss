@@ -143,6 +143,61 @@ def test_cancel_scan_preserves_discovered_entries(settings):
         assert latest.json()["entries"][0]["platformUserId"] == "uid-a"
 
 
+def test_scan_tasks_are_isolated_by_account(settings):
+    """不同账号可并行扫描，但同一账号仍保持单任务互斥。"""
+    app = make_app(settings, [FakePage(logged_in=True), FakePage(logged_in=True)])
+    with TestClient(app) as client:
+        first_account = _account_with_targets(client)
+        second_account = client.post(
+            "/api/accounts", json={"displayName": "第二账号"}
+        ).json()
+        manager = app.state.browser_manager
+
+        async def blocked_scan(account_id, progress=None):
+            assert progress is not None
+            manager._update_scan_progress(
+                progress.task_id,
+                stage="滚动读取会话",
+                current_item=account_id,
+            )
+            await asyncio.Event().wait()
+
+        manager._scan_chats_impl = blocked_scan
+        first = client.post(f"/api/accounts/{first_account['id']}/scan-chats/start")
+        second = client.post(f"/api/accounts/{second_account['id']}/scan-chats/start")
+        assert first.status_code == 202, first.text
+        assert second.status_code == 202, second.text
+
+        same_account = client.post(f"/api/accounts/{first_account['id']}/scan-chats/start")
+        assert same_account.status_code == 409, same_account.text
+        send_conflict = client.post(f"/api/accounts/{first_account['id']}/send")
+        assert send_conflict.status_code == 409, send_conflict.text
+        assert "扫描" in send_conflict.json()["detail"]
+
+        first_cancel = client.post(
+            f"/api/accounts/{first_account['id']}/scan-chats/cancel",
+            params={"taskId": first.json()["taskId"]},
+        )
+        second_cancel = client.post(
+            f"/api/accounts/{second_account['id']}/scan-chats/cancel",
+            params={"taskId": second.json()["taskId"]},
+        )
+        assert first_cancel.json()["status"] == "cancelled"
+        assert second_cancel.json()["status"] == "cancelled"
+
+
+def test_scan_is_blocked_while_account_is_sending(settings):
+    """同账号已有发送进度时，不允许再启动会话扫描。"""
+    app = make_app(settings, [FakePage(logged_in=True)])
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+        app.state.browser_manager._start_send_progress(account["id"], 1)
+
+        conflict = client.post(f"/api/accounts/{account['id']}/scan-chats/start")
+        assert conflict.status_code == 409, conflict.text
+        assert "发送" in conflict.json()["detail"]
+
+
 def test_patch_target_template_rebind(client):
     """换绑模板：合法 id 生效；不存在 404；null 解绑。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
