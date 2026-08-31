@@ -7,7 +7,7 @@ M5 已全部完成并完成换机迁移（2026-08-29）。下一步按三期推�
 无强制待办（2026-08-31：全局调度暂停状态持久化已落地并验证，项目可继续按可选项迭代；交接提示词见 `docs/HANDOFF_PROMPT.md`）。可选后续：风控页检测（等真实样本）、多账号实测、统计图表可视化。
 
 ## Current Phase
-M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别）。前端采用 D1「驾驶舱」方向（用户拍板）；全局调度暂停状态持久化；全量 131 passed + build 通过，关键功能真机实测
+M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别）。前端采用 D1「驾驶舱」方向（用户拍板）；全局调度暂停状态持久化；全量 132 passed + build 通过，关键功能真机实测
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -57,7 +57,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - `app/main.py` lifespan 挂载 `AsyncIOScheduler`，执行器复用 `browser_manager.run_send`；`requirements.txt` 加 `apscheduler>=3.10,<4`。
 - `app/api/scheduler.py`：`GET /api/scheduler`、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
-- **验证**：后端 pytest 131 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
+- **验证**：后端 pytest 132 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
 - **完整真机 E2E**：到期计划 → `Scheduler.tick()` 派发 1 个账号 → `BrowserManager.run_send` 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 tick `dispatched=0` 且不调用发送执行器。
 
 ## M5 子阶段
@@ -72,7 +72,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - [x] selector bundle 热更新（页面改版快速适配）。
 - [x] **火花天数手动校准**（`PATCH /api/targets/{id}` + 好友页「校准」按钮；不 DOM 读取）。
 ### Phase 4: 验收与交接
-- [x] 后端测试 131 passed；前端 build；图片/原生表情 E2E 实机验证通过；调度暂停状态持久化回归通过。
+- [x] 后端测试 132 passed；前端 build；图片/原生表情 E2E 实机验证通过；调度暂停状态持久化回归通过。
 - [x] 完整自动调度真机 E2E：到期计划 → `tick` 派发 1 个账号 → 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 `tick` `dispatched=0` 且不调用发送执行器。
 - [x] 更新 PROJECT_STATUS / task_plan / docs。
 
@@ -84,7 +84,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - 调度器为进程内内存循环（APScheduler），持久调度语义由 `SendSchedule` 表承载。
 
 ## 复用 Success Criteria 参考（M3 保持）
-- 后端 pytest **131 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded。
+- 后端 pytest **132 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

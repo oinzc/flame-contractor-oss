@@ -146,7 +146,7 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-- 后端 pytest 当前为 **131 passed**；
+- 后端 pytest 当前为 **132 passed**；
 - 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
 ## 当前能力边界
