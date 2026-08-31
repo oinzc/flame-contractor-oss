@@ -244,18 +244,19 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
           </div>
 
           <section className="card">
-            <div className="card-head">
-              <h2>好友列表（{selectedTargets.length}）</h2>
+            <div className="target-list-head">
+              <div className="target-list-title">
+                <h2>好友列表（{selectedTargets.length}）</h2>
+              </div>
               {pausedCount > 0 && (
-                <label
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, cursor: 'pointer' }}
-                >
+                <label className={`target-paused-toggle${showPaused ? ' is-active' : ''}`}>
                   <input
                     type="checkbox"
                     checked={showPaused}
                     onChange={(event) => setShowPaused(event.target.checked)}
                   />
-                  显示已暂停（{pausedCount}）
+                  <span className="target-paused-label">显示已暂停</span>
+                  <span className="target-paused-count">（{pausedCount}）</span>
                 </label>
               )}
             </div>
@@ -267,76 +268,78 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                   : '这个账号还没有好友，用下面的表单添加第一位。'}
               </p>
             ) : (
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>昵称</th>
-                    <th>抖音号</th>
-                    <th>模板</th>
-                    <th>火花天数</th>
-                    <th>上次确认发送</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedTargets.map((target) => (
-                    <tr key={target.id}>
-                      <td>
-                        {target.nicknameSnapshot}
-                        {!target.enabled && (
-                          <span className="muted" style={{ marginLeft: 6, fontSize: 11.5 }}>
-                            （已暂停）
-                          </span>
-                        )}
-                      </td>
-                      <td className="mono">{target.platformUserId ?? '—'}</td>
-                      <td>
-                        <select
-                          value={target.templateId ?? ''}
-                          onChange={(event) => handleRebindTemplate(target, event.target.value)}
-                          style={{ maxWidth: 140, fontSize: 12.5 }}
-                        >
-                          <option value="">不绑定</option>
-                          {templates.map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.name}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="mono">
-                        {target.streakDays} 天
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          style={{ marginLeft: 6 }}
-                          onClick={() => handleAdjustStreak(target)}
-                        >
-                          校准
-                        </button>
-                      </td>
-                      <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
-                      <td>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={() => handleToggleEnabled(target)}
-                        >
-                          {target.enabled ? '暂停' : '启用'}
-                        </button>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          style={{ marginLeft: 6 }}
-                          onClick={() => handleDelete(target)}
-                        >
-                          删除
-                        </button>
-                      </td>
+              <div className="target-table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>昵称</th>
+                      <th>抖音号</th>
+                      <th>模板</th>
+                      <th>火花天数</th>
+                      <th>上次确认发送</th>
+                      <th>操作</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {selectedTargets.map((target) => (
+                      <tr key={target.id}>
+                        <td>
+                          {target.nicknameSnapshot}
+                          {!target.enabled && (
+                            <span className="muted" style={{ marginLeft: 6, fontSize: 11.5 }}>
+                              （已暂停）
+                            </span>
+                          )}
+                        </td>
+                        <td className="mono">{target.platformUserId ?? '—'}</td>
+                        <td>
+                          <select
+                            value={target.templateId ?? ''}
+                            onChange={(event) => handleRebindTemplate(target, event.target.value)}
+                            style={{ maxWidth: 140, fontSize: 12.5 }}
+                          >
+                            <option value="">不绑定</option>
+                            {templates.map((template) => (
+                              <option key={template.id} value={template.id}>
+                                {template.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="mono">
+                          {target.streakDays} 天
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            style={{ marginLeft: 6 }}
+                            onClick={() => handleAdjustStreak(target)}
+                          >
+                            校准
+                          </button>
+                        </td>
+                        <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
+                        <td>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => handleToggleEnabled(target)}
+                          >
+                            {target.enabled ? '暂停' : '启用'}
+                          </button>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            style={{ marginLeft: 6 }}
+                            onClick={() => handleDelete(target)}
+                          >
+                            删除
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
 
