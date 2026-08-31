@@ -489,7 +489,7 @@ class DouyinChat:
 
     async def scan_all_chats(
         self,
-        progress_callback: Callable[[int, int, str | None], Awaitable[None]] | None = None,
+        progress_callback: Callable[[int, int, str | None, list[dict]], Awaitable[None]] | None = None,
     ) -> list[dict]:
         """全量扫描会话列表：边滚动边收集去重，连续多轮无新增即判定到底。
 
@@ -498,7 +498,7 @@ class DouyinChat:
         streak_days=抖音官方火花天数（无火花标记为 None——这就是续火对象的判定信号），
         streak_kind=火花类型（normal 普通 / couple 情侣 / family 家人，取自图标路径）。
 
-        progress_callback 只报告已发现数量、当前滚动轮次和最近发现的标题。
+        progress_callback 只报告已发现数量、当前滚动轮次、最近发现的标题和结果快照。
         全量列表在滚动到底前无法知道最终总数，因此调用方不应把轮次上限当作百分比。
         """
         entries: list[dict] = []
@@ -557,7 +557,7 @@ class DouyinChat:
                     }
                 )
                 if progress_callback is not None:
-                    await progress_callback(len(entries), round_no, title)
+                    await progress_callback(len(entries), round_no, title, list(entries))
             idle = idle + 1 if len(entries) == count_before else 0
             at_bottom = await self.page.evaluate(
                 "(el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 5",
@@ -571,7 +571,7 @@ class DouyinChat:
         for entry in entries:
             entry["platform_user_id"] = self.platform_user_id_for_label(entry["title"])
         if progress_callback is not None:
-            await progress_callback(len(entries), last_round, None)
+            await progress_callback(len(entries), last_round, None, list(entries))
         return entries
 
     async def _type_text(self, text: str) -> None:

@@ -389,7 +389,7 @@ class ScanProgressRead(APIBase):
 
     task_id: str
     account_id: str
-    status: Literal["running", "completed", "failed"]
+    status: Literal["running", "completed", "failed", "interrupted"]
     total: int | None = None
     completed: int = 0
     stage: str

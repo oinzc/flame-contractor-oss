@@ -85,6 +85,18 @@ def read_scan_chats_progress(
     return manager.scan_chats_progress(account_id, task_id)
 
 
+@router.get("/scan-chats/latest", response_model=ScanProgressRead | None)
+def read_latest_scan_chats(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+) -> dict | None:
+    """读取最近一次扫描快照；后端重启后仍可恢复任务坞。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return manager.latest_scan_chats(account_id)
+
+
 @router.get("/send/preview", response_model=SendPreviewRead)
 def read_send_preview(account_id: str, session: SessionDep) -> dict:
     _require_account(session, account_id)
