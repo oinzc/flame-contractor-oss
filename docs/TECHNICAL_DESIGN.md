@@ -1,6 +1,6 @@
 # Flame Contractor 技术设计
 
-> 版本：0.1.0 | 目标：本机自用版骨架
+> 版本：0.1.0 | 目标：本机自用版当前实现与边界
 
 ## 1. 架构目标
 
@@ -17,11 +17,9 @@ flowchart LR
   UI[React/Vite 本地控制台] -->|/api| API[FastAPI 控制平面]
   API --> DB[(SQLite WAL)]
   API --> ART[本地 Artifact Store]
-  API -.下一阶段.-> SCH[Scheduler]
-  SCH -.租约.-> W1[Account Worker A]
-  SCH -.租约.-> W2[Account Worker B]
-  W1 -.独立 Profile.-> DY[抖音网页版]
-  W2 -.独立 Profile.-> DY
+  API --> SCH[APScheduler]
+  SCH --> BM[BrowserManager]
+  BM -.账号级互斥 + 独立 Profile.-> DY[抖音网页版]
 ```
 
 ### 2.1 当前骨架
@@ -32,12 +30,13 @@ flowchart LR
 - `data/`：运行时 SQLite（被 Git 忽略）；
 - `artifacts/`：后续脱敏截图/Trace（被 Git 忽略）。
 
-### 2.2 下一阶段组件
+### 2.2 当前组件与边界
 
-- Scheduler：按发送窗口生成任务、租约与重试；
-- Worker：每账号独立进程和浏览器 Profile；
-- Douyin Adapter：selector、身份确认、输入和发送终态确认；
-- Artifact Service：短期保存脱敏诊断文件。
+- Scheduler：按发送窗口生成任务、租约与有界重试；调度循环是进程内 APScheduler，持久语义由 SQLite 记录承载；
+- BrowserManager：按账号复用独立持久 Profile，串行执行登录、扫描、定位和发送，账号级流程互斥；
+- Douyin Adapter：selector、身份确认、输入和发送终态确认；无法可靠判断时记录 `unknown_requires_review`，不自动重发；
+- ScanTask：把后台会话扫描的进度和已发现条目持久化到 SQLite，后端重启将遗留任务收束为 `interrupted`，不自动续跑；
+- Artifact Store：短期保存失败/未知结果的诊断截图与元数据，不保存 Cookie、Token 或消息正文。
 
 ## 3. 后端分层
 
@@ -81,16 +80,16 @@ app/
 
 - 属于一个 Account；
 - `platform_user_id` 获得后用于稳定身份匹配；
-- 昵称仅为快照，不作为唯一身份依据；
-- `(account_id, nickname_snapshot)` 在骨架阶段唯一，避免明显重复绑定；
-- 后续可迁移为 `(account_id, platform_user_id)` 条件唯一。
+- 昵称是可变的展示快照和无稳定 ID 时的导入回退键，不作为发送身份确认的唯一依据；
+- 数据库同时约束 `(account_id, nickname_snapshot)` 与 `(account_id, platform_user_id)`，后者对非空稳定 ID 生效，防止同一账号重复绑定；
+- 会话扫描可回填稳定 ID、更新昵称快照和官方火花展示快照，但官方火花天数不参与发送决策。
 
 ### 4.3 MessageTemplate
 
 - 稳定 UUID；
-- 当前只允许 `text`；
+- 类型支持 `text` / `image` / `sticker` / `pool`；
 - `content` 使用受控 Mustache 风格变量；
-- `version` 每次修改递增（更新 API 后续实现）。
+- 只有实际发送内容变化才递增 `version`，用于每日幂等键。
 
 ### 4.4 SendJob
 
@@ -121,7 +120,15 @@ stateDiagram-v2
   failed_retryable --> failed_terminal
 ```
 
-### 4.5 SendAttempt
+### 4.5 ScanTask
+
+- 一个账号的一次后台会话列表扫描；扫描只读抖音页面，不直接创建好友或触发发送；
+- `status` 生命周期为 `running → completed/failed/cancelled`，后端停止或重启时为 `interrupted`；
+- `total` 在滚动到底前保持未知，`completed` 表示当前真实发现条目数；前端任务坞展示阶段、当前对象和实时条目；
+- `entries_json` 保存当前扫描条目快照，支持页面刷新、全局任务坞恢复和取消后的手动导入；
+- 恢复只恢复可查看的快照，不恢复浏览器执行，不自动续跑，符合“宁可不发不错发”边界。
+
+### 4.6 SendAttempt
 
 - 每次真实尝试独立记录；
 - 记录阶段、开始/结束、失败分类和 artifact 引用；
