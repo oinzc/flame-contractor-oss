@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 # 关键：必须用「模块引用 + 运行期取值」，不能在导入时 `from .selectors import X`
 # 捕获常量——那样 selector 热更新对这个文件就失效了。
@@ -339,13 +340,19 @@ class DouyinChat:
                         return titles
         return titles
 
-    async def scan_all_chats(self) -> list[dict]:
+    async def scan_all_chats(
+        self,
+        progress_callback: Callable[[int, int, str | None], Awaitable[None]] | None = None,
+    ) -> list[dict]:
         """全量扫描会话列表：边滚动边收集去重，连续多轮无新增即判定到底。
 
         只读操作——不点击任何会话、不发送任何消息；供好友批量导入挑选候选。
         返回结构化条目：title=会话名，preview=最后一条消息，
         streak_days=抖音官方火花天数（无火花标记为 None——这就是续火对象的判定信号），
         streak_kind=火花类型（normal 普通 / couple 情侣 / family 家人，取自图标路径）。
+
+        progress_callback 只报告已发现数量、当前滚动轮次和最近发现的标题。
+        全量列表在滚动到底前无法知道最终总数，因此调用方不应把轮次上限当作百分比。
         """
         entries: list[dict] = []
         seen: set[str] = set()
@@ -353,7 +360,9 @@ class DouyinChat:
         if scroll_element is None:
             return entries
         idle = 0
-        for _ in range(SCAN_MAX_ROUNDS):
+        last_round = 0
+        for round_no in range(1, SCAN_MAX_ROUNDS + 1):
+            last_round = round_no
             count_before = len(entries)
             for item in await self.page.query_selector_all(_s.CONVERSATION_ITEM):
                 title_element = await item.query_selector(_s.CONVERSATION_TITLE)
@@ -400,6 +409,8 @@ class DouyinChat:
                         "streak_label": streak_label,
                     }
                 )
+                if progress_callback is not None:
+                    await progress_callback(len(entries), round_no, title)
             idle = idle + 1 if len(entries) == count_before else 0
             at_bottom = await self.page.evaluate(
                 "(el) => el.scrollTop + el.clientHeight >= el.scrollHeight - 5",
@@ -409,6 +420,8 @@ class DouyinChat:
                 break
             await self.page.evaluate("(el) => { el.scrollTop += 900 }", scroll_element)
             await self._sleep(0.8)
+        if progress_callback is not None:
+            await progress_callback(len(entries), last_round, None)
         return entries
 
     async def _type_text(self, text: str) -> None:

@@ -70,9 +70,14 @@ export const api = {
   createTargetsBatch: (input: {
     accountId: string
     templateId?: string
-    items: { nickname: string; streakDays?: number }[]
+    items: {
+      nickname: string
+      streakDays?: number
+      sparkKind?: string | null
+      sparkLabel?: string | null
+    }[]
   }) =>
-    request<{ created: string[]; duplicates: string[]; failed: string[] }>('/api/targets/batch', {
+    request<import('./types').TargetBatchResult>('/api/targets/batch', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
@@ -80,16 +85,20 @@ export const api = {
     request<{
       overall: 'ok' | 'auth_expired' | 'error'
       detail: string | null
-      entries: {
-        title: string
-        preview: string
-        streakDays: number | null
-        streakKind: string | null
-        streakLabel: string | null
-      }[]
+      entries: import('./types').ScanChatEntry[]
     }>(`/api/accounts/${accountId}/scan-chats`, { method: 'POST' }),
+  startScanChats: (accountId: string) =>
+    request<import('./types').ScanProgress>(`/api/accounts/${accountId}/scan-chats/start`, {
+      method: 'POST',
+    }),
+  scanChatsProgress: (accountId: string, taskId: string) =>
+    request<import('./types').ScanProgress>(
+      `/api/accounts/${accountId}/scan-chats/progress?taskId=${encodeURIComponent(taskId)}`,
+    ),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
+  sendProgress: (id: string) =>
+    request<import('./types').SendProgress>(`/api/accounts/${id}/send/progress`),
   sendNow: (id: string) =>
     request<import('./types').SendRead>(`/api/accounts/${id}/send`, { method: 'POST' }),
   templates: () => request<import('./types').MessageTemplate[]>('/api/templates'),

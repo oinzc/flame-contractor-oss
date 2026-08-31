@@ -432,6 +432,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         raise HTTPException(status_code=404, detail="模板不存在")
 
     created: list[str] = []
+    refreshed: list[str] = []
     duplicates: list[str] = []
     failed: list[str] = []
     for item in payload.items:
@@ -443,9 +444,25 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             )
         ).first()
         if existing is not None:
-            duplicates.append(nickname)
+            # 扫描导入可以刷新已有好友的官方徽标快照；本地累计天数保持不变。
+            if "spark_kind" in item.model_fields_set or "spark_label" in item.model_fields_set:
+                now = utc_now()
+                existing.spark_kind = item.spark_kind
+                existing.spark_label = item.spark_label
+                existing.spark_scanned_at = now
+                existing.updated_at = now
+                session.add(existing)
+                session.commit()
+                refreshed.append(nickname)
+            else:
+                duplicates.append(nickname)
             continue
         try:
+            scanned_at = (
+                utc_now()
+                if "spark_kind" in item.model_fields_set or "spark_label" in item.model_fields_set
+                else None
+            )
             session.add(
                 ContractTarget(
                     account_id=payload.account_id,
@@ -453,6 +470,9 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                     template_id=payload.template_id,
                     # 扫描读到的官方火花天数作为初始值；之后仍走本地累计
                     streak_days=item.streak_days or 0,
+                    spark_kind=item.spark_kind,
+                    spark_label=item.spark_label,
+                    spark_scanned_at=scanned_at,
                 )
             )
             session.commit()
@@ -463,7 +483,12 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         except Exception as exc:  # 单条失败不拖垮整批
             session.rollback()
             failed.append(f"{nickname}：{exc.__class__.__name__}")
-    return TargetBatchRead(created=created, duplicates=duplicates, failed=failed)
+    return TargetBatchRead(
+        created=created,
+        refreshed=refreshed,
+        duplicates=duplicates,
+        failed=failed,
+    )
 
 
 def delete_target(session: Session, target_id: str) -> None:

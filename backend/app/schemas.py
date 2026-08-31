@@ -209,6 +209,9 @@ class BatchTargetItem(APIBase):
     nickname: str
     # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
     streak_days: int | None = Field(default=None, ge=0)
+    # 扫描读到的抖音官方状态：只作为展示快照，不覆盖本地 streak_days
+    spark_kind: str | None = Field(default=None, max_length=16)
+    spark_label: str | None = Field(default=None, max_length=64)
 
 
 class TargetBatchCreate(APIBase):
@@ -221,11 +224,20 @@ class TargetBatchCreate(APIBase):
     @field_validator("items")
     @classmethod
     def _strip_items(cls, value: list[BatchTargetItem]) -> list[BatchTargetItem]:
-        stripped = [
-            BatchTargetItem(nickname=item.nickname.strip(), streak_days=item.streak_days)
-            for item in value
-            if item.nickname and item.nickname.strip()
-        ]
+        stripped: list[BatchTargetItem] = []
+        for item in value:
+            if not item.nickname or not item.nickname.strip():
+                continue
+            data: dict[str, object] = {
+                "nickname": item.nickname.strip(),
+                "streak_days": item.streak_days,
+            }
+            # 保留调用方是否真的携带了官方快照字段；旧客户端只传昵称时，
+            # 不能被误判成「清空已有官方状态」的刷新请求。
+            for field in ("spark_kind", "spark_label"):
+                if field in item.model_fields_set:
+                    data[field] = getattr(item, field)
+            stripped.append(BatchTargetItem(**data))
         if not stripped:
             raise ValueError("昵称列表不能为空")
         for item in stripped:
@@ -236,6 +248,7 @@ class TargetBatchCreate(APIBase):
 
 class TargetBatchRead(APIBase):
     created: list[str] = []
+    refreshed: list[str] = []
     duplicates: list[str] = []
     failed: list[str] = []
 
@@ -247,6 +260,9 @@ class TargetRead(APIBase):
     nickname_snapshot: str
     template_id: str | None
     enabled: bool
+    spark_kind: str | None
+    spark_label: str | None
+    spark_scanned_at: datetime | None
     streak_days: int
     last_sent_at: datetime | None
     last_confirmed_at: datetime | None
@@ -356,6 +372,25 @@ class ScanChatsRead(APIBase):
     entries: list[ScanChatItem] = []
 
 
+class ScanProgressRead(APIBase):
+    """后台会话扫描进度；滚动到底前 total 未知，不伪造百分比。"""
+
+    task_id: str
+    account_id: str
+    status: Literal["running", "completed", "failed"]
+    total: int | None = None
+    completed: int = 0
+    stage: str
+    current_item: str | None = None
+    round: int = 0
+    max_rounds: int = 80
+    overall: Literal["ok", "auth_expired", "error"] | None = None
+    detail: str | None = None
+    entries: list[ScanChatItem] = []
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 # ---------------------------------------------------------------- send
 
 class SendPreviewItemRead(APIBase):
@@ -389,6 +424,22 @@ class SendRead(APIBase):
     detail: str | None = None
     results: list[SendTargetResultRead]
     artifact_path: str | None = None
+
+
+class SendProgressRead(APIBase):
+    """发送进度快照；只反映处理数量和当前阶段，不承载登录态。"""
+
+    account_id: str
+    status: Literal["idle", "running", "completed", "failed"]
+    total: int
+    completed: int
+    current_target: str | None = None
+    stage: str
+    last_result: str | None = None
+    overall: Literal["ok", "partial", "auth_expired", "error", "network_unavailable"] | None = None
+    detail: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 

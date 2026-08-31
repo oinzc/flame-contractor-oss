@@ -1,16 +1,36 @@
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
-import type { Account, ContractTarget, MessageTemplate } from '../types'
+import type {
+  Account,
+  ContractTarget,
+  MessageTemplate,
+  ScanChatEntry,
+  ScanTaskState,
+  TargetBatchResult,
+} from '../types'
 import { formatDateTime } from '../lib/format'
+import SparkBadge from './SparkBadge'
+import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
 
 interface Props {
   accounts: Account[]
   targets: ContractTarget[]
   templates: MessageTemplate[]
   onChanged: () => void
+  scanTask: ScanTaskState | null
+  scanStarting: boolean
+  onStartScan: (accountId: string) => Promise<void>
 }
 
-export default function TargetsPage({ accounts, targets, templates, onChanged }: Props) {
+export default function TargetsPage({
+  accounts,
+  targets,
+  templates,
+  onChanged,
+  scanTask,
+  scanStarting,
+  onStartScan,
+}: Props) {
   const [selectedAccountId, setSelectedAccountId] = useState(accounts[0]?.id ?? '')
   const [showPaused, setShowPaused] = useState(false)
   const [nickname, setNickname] = useState('')
@@ -21,26 +41,11 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [batchTemplateId, setBatchTemplateId] = useState('')
-  const [batchResult, setBatchResult] = useState<{
-    created: string[]
-    duplicates: string[]
-    failed: string[]
-  } | null>(null)
+  const [batchResult, setBatchResult] = useState<TargetBatchResult | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
-  const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
-  const [scanEntries, setScanEntries] = useState<
-    {
-      title: string
-      preview: string
-      streakDays: number | null
-      streakKind: string | null
-      streakLabel: string | null
-    }[]
-  | null>(null)
-  const [selectedTitles, setSelectedTitles] = useState<
-    Map<string, number | undefined>
-  >(new Map())
+  const [scanEntries, setScanEntries] = useState<ScanChatEntry[] | null>(null)
+  const [selectedEntries, setSelectedEntries] = useState<Map<string, ScanChatEntry>>(new Map())
   const [scanQuery, setScanQuery] = useState('')
   const [showNoStreak, setShowNoStreak] = useState(false)
 
@@ -50,12 +55,43 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
     }
   }, [accounts, selectedAccountId])
 
+  useEffect(() => {
+    if (!scanTask || scanTask.accountId !== selectedAccountId) {
+      setScanEntries(null)
+      setSelectedEntries(new Map())
+      setScanQuery('')
+      setBatchResult(null)
+      return
+    }
+    if (scanTask.status === 'running') {
+      setScanEntries(null)
+      setSelectedEntries(new Map())
+      setScanQuery('')
+      setBatchResult(null)
+      return
+    }
+    if (scanTask.status === 'completed') {
+      setScanEntries(scanTask.entries)
+      setBatchResult(scanTask.batchResult)
+    } else {
+      setScanEntries(null)
+    }
+  }, [scanTask?.taskId, scanTask?.status, scanTask?.batchResult, selectedAccountId])
+
   const accountTargets = targets.filter((target) => target.accountId === selectedAccountId)
   const pausedCount = accountTargets.filter((target) => !target.enabled).length
   // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
   const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
+  const selectedScanTask =
+    scanTask?.accountId === selectedAccountId ? scanTask : null
+  const scanLoading = scanStarting || scanTask?.status === 'running'
+  const displayedScanError =
+    scanError ??
+    (selectedScanTask?.status === 'failed'
+      ? selectedScanTask.detail ?? '扫描失败，请重新发起'
+      : selectedScanTask?.syncError ?? null)
 
   // 抖音官方火花天数就是续火对象的判定信号；火花将熄的（消息提示）也算
   const scanStreakCount =
@@ -138,40 +174,37 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
   }
 
   async function handleScan() {
-    setScanLoading(true)
     setScanError(null)
+    setActionError(null)
+    setBatchResult(null)
     setScanEntries(null)
-    setSelectedTitles(new Map())
+    setSelectedEntries(new Map())
     setScanQuery('')
     try {
-      const result = await api.scanChats(selectedAccountId)
-      if (result.overall !== 'ok') {
-        setScanError(result.detail ?? '扫描失败，请重试')
-      } else {
-        setScanEntries(result.entries)
-      }
+      await onStartScan(selectedAccountId)
     } catch (err) {
       setScanError(err instanceof ApiError ? err.message : '扫描失败，请重试')
-    } finally {
-      setScanLoading(false)
     }
   }
 
   async function handleImportSelected() {
-    if (selectedTitles.size === 0) return
+    if (selectedEntries.size === 0) return
     setBatchSubmitting(true)
     setActionError(null)
     try {
       const result = await api.createTargetsBatch({
         accountId: selectedAccountId,
-        items: [...selectedTitles].map(([nickname, streakDays]) => ({
-          nickname,
-          streakDays: streakDays ?? undefined,
+        items: [...selectedEntries.values()].map((entry) => ({
+          nickname: entry.title,
+          streakDays: entry.streakDays ?? undefined,
+          // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
+          sparkKind: entry.streakKind,
+          sparkLabel: entry.streakLabel,
         })),
       })
       setBatchResult(result)
       setScanEntries(null)
-      setSelectedTitles(new Map())
+      setSelectedEntries(new Map())
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '导入失败，请重试')
@@ -248,19 +281,41 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
               <div className="target-list-title">
                 <h2>好友列表（{selectedTargets.length}）</h2>
               </div>
-              {pausedCount > 0 && (
-                <label className={`target-paused-toggle${showPaused ? ' is-active' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={showPaused}
-                    onChange={(event) => setShowPaused(event.target.checked)}
-                  />
-                  <span className="target-paused-label">显示已暂停</span>
-                  <span className="target-paused-count">（{pausedCount}）</span>
-                </label>
-              )}
+              <div className="target-list-actions">
+                <button
+                  className="btn small"
+                  type="button"
+                  disabled={scanLoading || selectedAccount?.status !== 'healthy'}
+                  title={
+                    selectedAccount?.status !== 'healthy'
+                      ? '账号需先扫码登录才能扫描会话列表'
+                      : '后台滚动加载整个会话列表；切换页面不会中断，完成后自动刷新已在列表好友的官方展示状态（约需 1–2 分钟）'
+                  }
+                  onClick={() => void handleScan()}
+                >
+                  {scanLoading
+                    ? scanStarting
+                      ? '正在启动扫描…'
+                      : selectedScanTask?.status === 'running'
+                        ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
+                        : '其他账号扫描中…'
+                    : '扫描会话列表'}
+                </button>
+                {pausedCount > 0 && (
+                  <label className={`target-paused-toggle${showPaused ? ' is-active' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={showPaused}
+                      onChange={(event) => setShowPaused(event.target.checked)}
+                    />
+                    <span className="target-paused-label">显示已暂停</span>
+                    <span className="target-paused-count">（{pausedCount}）</span>
+                  </label>
+                )}
+              </div>
             </div>
             {actionError && <div className="form-error" style={{ marginBottom: 8 }}>{actionError}</div>}
+            {displayedScanError && <div className="form-error" style={{ marginBottom: 8 }}>{displayedScanError}</div>}
             {selectedTargets.length === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                 {!showPaused && pausedCount > 0
@@ -275,7 +330,7 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                       <th>昵称</th>
                       <th>抖音号</th>
                       <th>模板</th>
-                      <th>火花天数</th>
+                      <th>火花状态</th>
                       <th>上次确认发送</th>
                       <th>操作</th>
                     </tr>
@@ -306,16 +361,27 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                             ))}
                           </select>
                         </td>
-                        <td className="mono">
-                          {target.streakDays} 天
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            style={{ marginLeft: 6 }}
-                            onClick={() => handleAdjustStreak(target)}
-                          >
-                            校准
-                          </button>
+                        <td>
+                          <div className="target-spark-cell">
+                            <SparkBadge
+                              days={target.streakDays}
+                              kind={target.sparkKind}
+                              label={target.sparkLabel}
+                              scannedAt={target.sparkScannedAt}
+                            />
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => handleAdjustStreak(target)}
+                            >
+                              校准
+                            </button>
+                            {target.sparkLabel && target.sparkScannedAt && (
+                              <span className="spark-scan-note">
+                                抖音扫描于 {formatDateTime(target.sparkScannedAt)}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="mono">{formatDateTime(target.lastConfirmedAt)}</td>
                         <td>
@@ -345,37 +411,56 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
 
           <section className="card">
             <div className="card-head">
-              <h2>批量添加好友</h2>
+              <h2>会话扫描与批量添加</h2>
             </div>
-            <div className="form-grid">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <button
-                    className="btn small"
-                    type="button"
-                    disabled={scanLoading || selectedAccount?.status !== 'healthy'}
-                    title={
-                      selectedAccount?.status !== 'healthy'
-                        ? '账号需先扫码登录才能扫描会话列表'
-                        : '打开浏览器滚动加载整个会话列表（只读，约需 1–2 分钟）'
-                    }
-                    onClick={() => void handleScan()}
-                  >
-                    {scanLoading ? '扫描中…（约 1–2 分钟）' : '🔍 从抖音会话列表扫描'}
-                  </button>
-                  {selectedAccount?.status !== 'healthy' && (
-                    <span className="muted" style={{ fontSize: 11.5 }}>
-                      账号需先扫码登录才能扫描
-                    </span>
-                  )}
-                  <span className="muted" style={{ fontSize: 11.5 }}>
-                    只读扫描，带火花标记的会话自动识别为续火对象
+            <p className="scan-helper">
+              扫描完成后，已在列表的好友会自动刷新官方火花状态；新好友仍需在下方勾选后导入。
+            </p>
+            {selectedScanTask && (
+              <section
+                className={`scan-inline-progress${selectedScanTask.status === 'failed' ? ' is-error' : ''}${selectedScanTask.status === 'completed' ? ' is-complete' : ''}`}
+                aria-live="polite"
+              >
+                <div className="scan-inline-head">
+                  <div>
+                    <span className="scan-section-kicker">SESSION SCAN</span>
+                    <strong>
+                      {selectedScanTask.status === 'running'
+                        ? '正在读取会话列表'
+                        : selectedScanTask.status === 'completed'
+                          ? '会话列表扫描完成'
+                          : '会话列表扫描未完成'}
+                    </strong>
+                    <p>
+                      {selectedScanTask.syncStatus === 'pending'
+                        ? '正在把已存在好友的官方状态写回本地…'
+                        : selectedScanTask.pollError ?? selectedScanTask.syncError ?? selectedScanTask.stage}
+                    </p>
+                  </div>
+                  <b>
+                    {scanProgressPercent(selectedScanTask) === null
+                      ? '读取中'
+                      : `${scanProgressPercent(selectedScanTask)}%`}
+                  </b>
+                </div>
+                <ScanProgressBar task={selectedScanTask} />
+                <div className="scan-inline-meta">
+                  <span>{scanProgressCount(selectedScanTask)}</span>
+                  <span>
+                    {selectedScanTask.currentItem ??
+                      (selectedScanTask.status === 'running' ? '等待下一段列表…' : '结果已就绪')}
                   </span>
                 </div>
-                {scanError && <div className="form-error">{scanError}</div>}
+              </section>
+            )}
+            <div className="form-grid">
                 {batchResult && (
                   <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
                     {batchResult.created.length > 0 && (
                       <div>✅ 新增 {batchResult.created.length} 个：{batchResult.created.join('、')}</div>
+                    )}
+                    {batchResult.refreshed.length > 0 && (
+                      <div>🔄 已更新官方状态 {batchResult.refreshed.length} 个：{batchResult.refreshed.join('、')}</div>
                     )}
                     {batchResult.duplicates.length > 0 && (
                       <div>↩️ 跳过重复 {batchResult.duplicates.length} 个：{batchResult.duplicates.join('、')}</div>
@@ -416,20 +501,14 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                       ) : (
                         scanFiltered.map((entry) => {
                           const exists = existingNicknames.has(entry.title)
-                          const checked = selectedTitles.has(entry.title)
+                          const checked = selectedEntries.has(entry.title)
                           const group = looksLikeGroup(entry.title, entry.preview)
-                          const kindTone =
-                            entry.streakKind === 'couple'
-                              ? 'gold'
-                              : entry.streakKind === 'family'
-                              ? 'cyan'
-                              : 'ember'
                           return (
                             <label
                               key={entry.title}
                               className={[
                                 'pick-row',
-                                checked && !exists ? 'selected' : '',
+                                checked ? 'selected' : '',
                                 exists ? 'occupied' : '',
                               ]
                                 .filter(Boolean)
@@ -438,30 +517,34 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                             >
                               <input
                                 type="checkbox"
-                                disabled={exists}
-                                checked={exists || checked}
+                                checked={checked}
                                 onChange={() =>
-                                  setSelectedTitles((previous) => {
+                                  setSelectedEntries((previous) => {
                                     const next = new Map(previous)
                                     if (next.has(entry.title)) next.delete(entry.title)
-                                    else next.set(entry.title, entry.streakDays ?? undefined)
+                                    else next.set(entry.title, entry)
                                     return next
                                   })
                                 }
                               />
                               <span className="pick-name">{entry.title}</span>
                               <span className="pick-meta">
-                                {entry.streakDays != null && (
-                                  <span className={`badge ${kindTone}`}>🔥 {entry.streakDays}</span>
-                                )}
-                                {entry.streakDays == null && entry.streakLabel && (
-                                  <span className="badge gold">{entry.streakLabel}</span>
+                                {isStreakTarget(entry) && (
+                                  <SparkBadge
+                                    days={entry.streakDays}
+                                    kind={entry.streakKind}
+                                    label={entry.streakLabel}
+                                  />
                                 )}
                                 {entry.streakDays == null && !entry.streakLabel && hasSparkHint(entry) && (
                                   <span className="badge gold">🔥?</span>
                                 )}
                                 {group && <span className="badge">群</span>}
-                                {exists && <span className="badge">已在列表</span>}
+                                {exists && (
+                                  <span className="badge">
+                                    {checked ? '将刷新官方状态' : '已在列表'}
+                                  </span>
+                                )}
                               </span>
                             </label>
                           )
@@ -489,12 +572,12 @@ export default function TargetsPage({ accounts, targets, templates, onChanged }:
                         <button
                           className="btn primary small"
                           type="button"
-                          disabled={batchSubmitting || selectedTitles.size === 0}
+                          disabled={batchSubmitting || selectedEntries.size === 0}
                           onClick={() => void handleImportSelected()}
                         >
                           {batchSubmitting
                             ? '导入中…'
-                            : `导入所选（${selectedTitles.size}）`}
+                            : `导入 / 刷新所选（${selectedEntries.size}）`}
                         </button>
                       </span>
                     </div>

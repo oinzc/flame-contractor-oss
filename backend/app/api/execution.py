@@ -1,11 +1,19 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 
 from ..core.database import SessionDep
 from ..models import Account
-from ..schemas import DryRunRead, LoginStatusRead, ScanChatsRead, SendPreviewRead, SendRead
+from ..schemas import (
+    DryRunRead,
+    LoginStatusRead,
+    ScanChatsRead,
+    ScanProgressRead,
+    SendPreviewRead,
+    SendProgressRead,
+    SendRead,
+)
 from ..services import send_preview
 
 router = APIRouter(prefix="/accounts/{account_id}", tags=["execution"])
@@ -46,16 +54,48 @@ async def dry_run(account_id: str, request: Request, session: SessionDep) -> dic
 
 @router.post("/scan-chats", response_model=ScanChatsRead)
 async def scan_chats(account_id: str, request: Request, session: SessionDep) -> dict:
-    """全量扫描该账号的抖音会话列表（只读），供好友批量导入勾选。"""
+    """兼容旧客户端的同步扫描接口。控制台使用下面的后台任务接口。"""
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
     return await manager.scan_chats(account_id)
+
+
+@router.post(
+    "/scan-chats/start",
+    response_model=ScanProgressRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_scan_chats(account_id: str, request: Request, session: SessionDep) -> dict:
+    """发起后台会话扫描；前端可切换页面后继续轮询进度。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.start_scan_chats(account_id)
+
+
+@router.get("/scan-chats/progress", response_model=ScanProgressRead)
+def read_scan_chats_progress(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+    task_id: str = Query(..., alias="taskId"),
+) -> dict:
+    """读取后台会话扫描进度与完成后的扫描结果。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return manager.scan_chats_progress(account_id, task_id)
 
 
 @router.get("/send/preview", response_model=SendPreviewRead)
 def read_send_preview(account_id: str, session: SessionDep) -> dict:
     _require_account(session, account_id)
     return send_preview(session, account_id)
+
+
+@router.get("/send/progress", response_model=SendProgressRead)
+def read_send_progress(account_id: str, request: Request, session: SessionDep) -> dict:
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return manager.send_progress(account_id)
 
 
 @router.post("/send", response_model=SendRead)

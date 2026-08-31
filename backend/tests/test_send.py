@@ -101,6 +101,12 @@ def test_send_succeeds_and_updates_everything(settings):
         assert payload["results"][0]["status"] == "succeeded"
         assert payload["artifactPath"]
 
+        progress = client.get(f"/api/accounts/{account['id']}/send/progress")
+        assert progress.status_code == 200, progress.text
+        assert progress.json()["status"] == "completed"
+        assert progress.json()["completed"] == progress.json()["total"] == 1
+        assert progress.json()["stage"] == "发送完成"
+
         with Session(app.state.engine) as session:
             job = session.exec(select(SendJob)).one()
             assert job.status == JobStatus.SUCCEEDED

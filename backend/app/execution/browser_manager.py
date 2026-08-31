@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Awaitable, Callable
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -24,7 +25,14 @@ from ..models import (
     SendJob,
     TemplateType,
 )
-from .douyin_chat import DomChangedError, DouyinChat, Sticker, read_qr_data_url, read_self_nickname
+from .douyin_chat import (
+    SCAN_MAX_ROUNDS,
+    DomChangedError,
+    DouyinChat,
+    Sticker,
+    read_qr_data_url,
+    read_self_nickname,
+)
 from .message_renderer import render_message
 from .pool import pick_pool_item
 from .profile_store import ensure_profile_dir
@@ -69,6 +77,43 @@ class DryRunTargetResult:
     detail: str | None = None
 
 
+@dataclass
+class SendProgress:
+    """单账号发送流程的内存快照，供前端展示可核验的真实进度。"""
+
+    account_id: str
+    total: int
+    completed: int = 0
+    status: str = "running"  # running | completed | failed
+    stage: str = "准备发送"
+    current_target: str | None = None
+    last_result: str | None = None
+    overall: str | None = None
+    detail: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+@dataclass
+class ScanProgress:
+    """单次会话扫描的内存快照；总数在滚动到底前未知，不伪造百分比。"""
+
+    task_id: str
+    account_id: str
+    total: int | None = None
+    completed: int = 0
+    status: str = "running"  # running | completed | failed
+    stage: str = "准备扫描"
+    current_item: str | None = None
+    round: int = 0
+    max_rounds: int = SCAN_MAX_ROUNDS
+    overall: str | None = None
+    detail: str | None = None
+    entries: list[dict] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class BrowserManager:
     """每账号一个浏览器会话；负责扫码登录流程与 Dry Run。
 
@@ -101,6 +146,9 @@ class BrowserManager:
         self._engine = engine
         self._settings = settings
         self._flows: dict[str, LoginFlow] = {}
+        self._send_progress: dict[str, SendProgress] = {}
+        self._scan_progress: dict[str, ScanProgress] = {}
+        self._scan_tasks: dict[str, asyncio.Task] = {}
         self._playwright = None
         self._browser_factory = browser_factory
         self._login_poll_interval = login_poll_interval
@@ -116,6 +164,179 @@ class BrowserManager:
         self._qr_login_timeout = qr_login_timeout
         self._qr_screenshot_interval = qr_screenshot_interval
         self._sleep = sleep
+
+    def _start_send_progress(self, account_id: str, total: int) -> None:
+        self._send_progress[account_id] = SendProgress(
+            account_id=account_id,
+            total=total,
+            started_at=_utcnow(),
+        )
+
+    def _update_send_progress(self, account_id: str, **changes: object) -> None:
+        progress = self._send_progress.get(account_id)
+        if progress is None:
+            return
+        for key, value in changes.items():
+            if hasattr(progress, key):
+                setattr(progress, key, value)
+
+    def _finish_send_progress(
+        self,
+        account_id: str,
+        *,
+        status: str,
+        completed: int,
+        stage: str,
+        overall: str,
+        detail: str | None,
+    ) -> None:
+        self._update_send_progress(
+            account_id,
+            status=status,
+            completed=completed,
+            stage=stage,
+            current_target=None,
+            overall=overall,
+            detail=detail,
+            finished_at=_utcnow(),
+        )
+
+    def send_progress(self, account_id: str) -> dict:
+        """返回可序列化的发送进度；不暴露浏览器、消息或凭据信息。"""
+        progress = self._send_progress.get(account_id)
+        if progress is None:
+            return {
+                "account_id": account_id,
+                "status": "idle",
+                "total": 0,
+                "completed": 0,
+                "current_target": None,
+                "stage": "未开始",
+                "last_result": None,
+                "overall": None,
+                "detail": None,
+                "started_at": None,
+                "finished_at": None,
+            }
+        return {
+            "account_id": progress.account_id,
+            "status": progress.status,
+            "total": progress.total,
+            "completed": progress.completed,
+            "current_target": progress.current_target,
+            "stage": progress.stage,
+            "last_result": progress.last_result,
+            "overall": progress.overall,
+            "detail": progress.detail,
+            "started_at": progress.started_at,
+            "finished_at": progress.finished_at,
+        }
+
+    def _active_scan(self, account_id: str) -> ScanProgress | None:
+        for progress in reversed(list(self._scan_progress.values())):
+            if progress.account_id == account_id and progress.status == "running":
+                return progress
+        return None
+
+    def _scan_progress_view(self, progress: ScanProgress) -> dict:
+        return {
+            "task_id": progress.task_id,
+            "account_id": progress.account_id,
+            "status": progress.status,
+            "total": progress.total,
+            "completed": progress.completed,
+            "stage": progress.stage,
+            "current_item": progress.current_item,
+            "round": progress.round,
+            "max_rounds": progress.max_rounds,
+            "overall": progress.overall,
+            "detail": progress.detail,
+            "entries": progress.entries or [],
+            "started_at": progress.started_at,
+            "finished_at": progress.finished_at,
+        }
+
+    def _update_scan_progress(self, task_id: str, **changes: object) -> None:
+        progress = self._scan_progress.get(task_id)
+        if progress is None:
+            return
+        for key, value in changes.items():
+            if hasattr(progress, key):
+                setattr(progress, key, value)
+
+    async def start_scan_chats(self, account_id: str) -> dict:
+        """创建后台扫描任务；浏览器扫描不会绑定前端页面生命周期。"""
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能扫描会话")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号已有会话扫描进行中")
+        send_progress = self._send_progress.get(account_id)
+        if send_progress is not None and send_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号正在发送，暂不能扫描会话")
+
+        with Session(self._engine) as session:
+            if session.get(Account, account_id) is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+
+        progress = ScanProgress(
+            task_id=str(uuid4()),
+            account_id=account_id,
+            started_at=_utcnow(),
+        )
+        self._scan_progress[progress.task_id] = progress
+        task = asyncio.create_task(self._run_scan_task(progress))
+        self._scan_tasks[progress.task_id] = task
+        task.add_done_callback(lambda _: self._scan_tasks.pop(progress.task_id, None))
+        return self._scan_progress_view(progress)
+
+    async def _run_scan_task(self, progress: ScanProgress) -> None:
+        try:
+            result = await self._scan_chats_impl(progress.account_id, progress)
+            overall = result["overall"]
+            if overall == "ok":
+                entries = result["entries"]
+                self._update_scan_progress(
+                    progress.task_id,
+                    status="completed",
+                    total=len(entries),
+                    completed=len(entries),
+                    stage="扫描完成",
+                    current_item=None,
+                    overall=overall,
+                    detail=None,
+                    entries=entries,
+                    finished_at=_utcnow(),
+                )
+            else:
+                self._update_scan_progress(
+                    progress.task_id,
+                    status="failed",
+                    stage="登录失效" if overall == "auth_expired" else "扫描失败",
+                    current_item=None,
+                    overall=overall,
+                    detail=result["detail"],
+                    entries=[],
+                    finished_at=_utcnow(),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._update_scan_progress(
+                progress.task_id,
+                status="failed",
+                stage="流程中断",
+                current_item=None,
+                overall="error",
+                detail=type(exc).__name__,
+                entries=[],
+                finished_at=_utcnow(),
+            )
+
+    def scan_chats_progress(self, account_id: str, task_id: str) -> dict:
+        progress = self._scan_progress.get(task_id)
+        if progress is None or progress.account_id != account_id:
+            raise HTTPException(status_code=404, detail="扫描任务不存在")
+        return self._scan_progress_view(progress)
 
     def _make_chat(self, page) -> DouyinChat:
         return DouyinChat(
@@ -397,22 +618,46 @@ class BrowserManager:
 
     # ------------------------------------------------------------ dry run
 
-    async def scan_chats(self, account_id: str) -> dict:
-        """全量扫描账号会话列表（只读，不点击会话、不发送消息），供好友批量导入挑选。"""
+    async def _scan_chats_impl(
+        self,
+        account_id: str,
+        progress: ScanProgress | None = None,
+    ) -> dict:
+        """执行一次全量扫描；progress 存在时把真实扫描阶段写入内存快照。"""
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能扫描会话")
+        if progress is None and self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号已有会话扫描进行中")
+        send_progress = self._send_progress.get(account_id)
+        if send_progress is not None and send_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号正在发送，暂不能扫描会话")
 
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             if account is None:
                 raise HTTPException(status_code=404, detail="账号不存在")
 
+        def update_progress(**changes: object) -> None:
+            if progress is not None:
+                self._update_scan_progress(progress.task_id, **changes)
+
+        async def on_scan_progress(count: int, round_no: int, current_item: str | None) -> None:
+            update_progress(
+                stage="滚动读取会话",
+                completed=count,
+                current_item=current_item,
+                round=round_no,
+            )
+
         profile_path = ensure_profile_dir(self._settings, account_id)
         context = None
         try:
+            update_progress(stage="启动浏览器")
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
+            update_progress(stage="打开会话列表")
             await chat.open_chat_page()
+            update_progress(stage="检查登录状态")
             if not await chat.wait_logged_in(
                 timeout=self._login_check_timeout,
                 poll_interval=self._login_poll_interval,
@@ -424,7 +669,10 @@ class BrowserManager:
                     "entries": [],
                 }
             try:
-                entries = await chat.scan_all_chats()
+                update_progress(stage="滚动读取会话", current_item=None)
+                entries = await chat.scan_all_chats(
+                    progress_callback=on_scan_progress if progress is not None else None,
+                )
             except Exception as exc:
                 return {"overall": "error", "detail": type(exc).__name__, "entries": []}
             self._touch_verified(account_id)
@@ -438,9 +686,15 @@ class BrowserManager:
                 except Exception:
                     pass
 
+    async def scan_chats(self, account_id: str) -> dict:
+        """兼容旧客户端的同步扫描接口；新控制台使用 start/progress 接口。"""
+        return await self._scan_chats_impl(account_id)
+
     async def run_dry_run(self, account_id: str) -> dict:
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能执行 Dry Run")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能执行 Dry Run")
 
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
@@ -572,6 +826,11 @@ class BrowserManager:
     async def run_send(self, account_id: str) -> dict:
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能发送")
+        existing_progress = self._send_progress.get(account_id)
+        if existing_progress is not None and existing_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号已有发送任务进行中")
 
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
@@ -588,9 +847,32 @@ class BrowserManager:
         if not targets:
             raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
 
+        self._start_send_progress(account_id, len(targets))
+        self._update_send_progress(account_id, stage="检查网络")
+
         # M6-2 网络预检：离线时不开浏览器、不消耗任何当日任务（幂等键未触碰）
         checker = self._network_checker or self._default_network_ok
-        if not await checker():
+        try:
+            network_ok = await checker()
+        except Exception as exc:
+            self._finish_send_progress(
+                account_id,
+                status="failed",
+                completed=0,
+                stage="网络检查失败",
+                overall="error",
+                detail=type(exc).__name__,
+            )
+            raise
+        if not network_ok:
+            self._finish_send_progress(
+                account_id,
+                status="failed",
+                completed=0,
+                stage="网络不可用",
+                overall="network_unavailable",
+                detail="网络不可用，本轮未开始",
+            )
             return {
                 "account_id": account_id,
                 "overall": "network_unavailable",
@@ -606,9 +888,11 @@ class BrowserManager:
         context = None
         diagnostics: dict | None = None
         try:
+            self._update_send_progress(account_id, stage="启动浏览器")
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
             await chat.open_chat_page()
+            self._update_send_progress(account_id, stage="检查登录状态")
             if not await chat.wait_logged_in(
                 timeout=self._login_check_timeout,
                 poll_interval=self._login_poll_interval,
@@ -621,19 +905,52 @@ class BrowserManager:
                     "screenshot": await self._capture_shot(chat, account_id, "auth_expired"),
                     "page_url": self._page_url(chat),
                 }
+                self._finish_send_progress(
+                    account_id,
+                    status="failed",
+                    completed=0,
+                    stage="登录失效",
+                    overall=overall,
+                    detail=detail,
+                )
             else:
                 business_date = datetime.now(ZoneInfo(account.timezone)).date()
+                self._update_send_progress(account_id, stage="定位好友")
                 for index, target in enumerate(targets):
+                    self._update_send_progress(
+                        account_id,
+                        completed=index,
+                        current_target=target.nickname_snapshot,
+                        stage="冷却中" if index > 0 and self._send_cooldown > 0 else "定位并发送",
+                    )
                     # M6-2 发送冷却：好友之间留出间隔，降低频率风险（首轮不等待）
                     if index > 0 and self._send_cooldown > 0:
                         await self._sleep(self._send_cooldown)
+                        self._update_send_progress(
+                            account_id,
+                            stage="定位并发送",
+                        )
                     result = await self._send_one(chat, account, target, business_date)
                     results.append(result)
+                    self._update_send_progress(
+                        account_id,
+                        completed=index + 1,
+                        last_result=result["status"],
+                        stage="已处理",
+                    )
                     if result["status"] not in ("succeeded", "duplicate_succeeded", "skipped"):
                         overall = "partial"
         except Exception as exc:
             overall = "error"
             detail = type(exc).__name__
+            self._finish_send_progress(
+                account_id,
+                status="failed",
+                completed=len(results),
+                stage="流程中断",
+                overall=overall,
+                detail=detail,
+            )
         finally:
             if context is not None:
                 try:
@@ -644,6 +961,25 @@ class BrowserManager:
         artifact_path = self._write_send_artifact(
             account_id, overall, detail, results, diagnostics=diagnostics
         )
+        if overall in ("ok", "partial"):
+            self._finish_send_progress(
+                account_id,
+                status="completed",
+                completed=len(targets),
+                stage="发送完成",
+                overall=overall,
+                detail=detail,
+            )
+        elif overall != "auth_expired":
+            # auth_expired 已在上面的诊断分支记录；其它终态也要让任务坞保持可见。
+            self._finish_send_progress(
+                account_id,
+                status="failed",
+                completed=len(results),
+                stage="发送结束",
+                overall=overall,
+                detail=detail,
+            )
         return {
             "account_id": account_id,
             "overall": overall,
@@ -1009,13 +1345,23 @@ class BrowserManager:
         for flow in list(self._flows.values()):
             if flow.task is not None and not flow.task.done():
                 flow.task.cancel()
+        for task in list(self._scan_tasks.values()):
+            if not task.done():
+                task.cancel()
         for flow in list(self._flows.values()):
             if flow.task is not None:
                 try:
                     await flow.task
                 except (asyncio.CancelledError, Exception):
                     pass
+        for task in list(self._scan_tasks.values()):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._flows.clear()
+        self._scan_tasks.clear()
+        self._scan_progress.clear()
         if self._playwright is not None:
             await self._playwright.stop()
             self._playwright = None

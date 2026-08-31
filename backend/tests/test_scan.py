@@ -1,5 +1,7 @@
 """会话列表扫描（好友批量导入候选）与好友换绑模板的测试。"""
 
+import time
+
 from fastapi.testclient import TestClient
 
 from tests.fakes import FakePage, make_app
@@ -47,6 +49,46 @@ def test_scan_chats_requires_login(settings):
 
         updated = client.get("/api/accounts").json()[0]
         assert updated["status"] == "auth_expired"
+
+
+def test_scan_chats_background_progress_reaches_completion(settings):
+    """后台扫描返回任务号，完成后进度快照包含真实结果与 100% 终态。"""
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友A", "好友B"),
+                titles_revealed_by_scroll=("好友C",),
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        started = client.post(f"/api/accounts/{account['id']}/scan-chats/start")
+        assert started.status_code == 202, started.text
+        initial = started.json()
+        assert initial["taskId"]
+        assert initial["accountId"] == account["id"]
+        assert initial["status"] == "running"
+
+        deadline = time.monotonic() + 5
+        snapshot = initial
+        while snapshot["status"] == "running" and time.monotonic() < deadline:
+            time.sleep(0.01)
+            response = client.get(
+                f"/api/accounts/{account['id']}/scan-chats/progress",
+                params={"taskId": initial["taskId"]},
+            )
+            assert response.status_code == 200, response.text
+            snapshot = response.json()
+
+        assert snapshot["status"] == "completed", snapshot
+        assert snapshot["overall"] == "ok"
+        assert snapshot["total"] == 3
+        assert snapshot["completed"] == 3
+        assert snapshot["entries"][-1]["title"] == "好友C"
 
 
 def test_patch_target_template_rebind(client):

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from './api'
 import type {
   Account,
@@ -7,7 +7,9 @@ import type {
   DashboardSummary,
   Health,
   MessageTemplate,
+  ScanTaskState,
   SchedulerStatus,
+  TargetBatchResult,
 } from './types'
 import CreateAccountModal from './components/CreateAccountModal'
 import DashboardPage from './components/DashboardPage'
@@ -15,6 +17,7 @@ import AccountsPage from './components/AccountsPage'
 import TargetsPage from './components/TargetsPage'
 import TemplatesPage from './components/TemplatesPage'
 import JobsPage from './components/JobsPage'
+import ScanProgressDock from './components/ScanProgress'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
 
@@ -52,6 +55,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [now, setNow] = useState(() => new Date())
+  const [scanTask, setScanTask] = useState<ScanTaskState | null>(null)
+  const [scanStarting, setScanStarting] = useState(false)
+  const [scanDockVisible, setScanDockVisible] = useState(false)
+  const scanCompletionHandledRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -93,6 +100,139 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [])
 
+  const scanTaskId = scanTask?.taskId ?? null
+  const scanTaskStatus = scanTask?.status ?? null
+
+  // 扫描任务属于 App 生命周期：好友页卸载、切到总览或任务页时，轮询不会中断。
+  useEffect(() => {
+    if (!scanTaskId || scanTaskStatus !== 'running') return undefined
+
+    let cancelled = false
+    let timer: number | null = null
+
+    const poll = async () => {
+      try {
+        const next = await api.scanChatsProgress(scanTask!.accountId, scanTaskId)
+        if (cancelled) return
+        setScanTask((previous) => {
+          if (!previous || previous.taskId !== scanTaskId) return previous
+          return { ...previous, ...next, pollError: null }
+        })
+        if (next.status === 'running') {
+          timer = window.setTimeout(() => void poll(), 800)
+        }
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setScanTask((previous) => {
+            if (!previous || previous.taskId !== scanTaskId) return previous
+            return {
+              ...previous,
+              status: 'failed',
+              stage: '扫描任务失效',
+              overall: 'error',
+              detail: '后端扫描任务已失效，请重新发起扫描',
+              currentItem: null,
+              pollError: null,
+            }
+          })
+          return
+        }
+        setScanTask((previous) => {
+          if (!previous || previous.taskId !== scanTaskId) return previous
+          return {
+            ...previous,
+            pollError: '进度读取暂时失败，正在自动重连…',
+          }
+        })
+        timer = window.setTimeout(() => void poll(), 1200)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [scanTaskId, scanTaskStatus])
+
+  async function finalizeScan(task: ScanTaskState) {
+    const existingNicknames = new Set(
+      targets
+        .filter((target) => target.accountId === task.accountId)
+        .map((target) => target.nicknameSnapshot),
+    )
+    const existingEntries = task.entries.filter((entry) => {
+      const hasOfficialState =
+        entry.streakDays != null || Boolean(entry.streakKind) || Boolean(entry.streakLabel)
+      return existingNicknames.has(entry.title) && hasOfficialState
+    })
+    let batchResult: TargetBatchResult = {
+      created: [],
+      refreshed: [],
+      duplicates: [],
+      failed: [],
+    }
+
+    try {
+      if (existingEntries.length > 0) {
+        // 扫描不会自动新增好友；只把已存在好友的官方状态快照同步回列表。
+        batchResult = await api.createTargetsBatch({
+          accountId: task.accountId,
+          items: existingEntries.map((entry) => ({
+            nickname: entry.title,
+            streakDays: entry.streakDays ?? undefined,
+            sparkKind: entry.streakKind,
+            sparkLabel: entry.streakLabel,
+          })),
+        })
+      }
+      await refresh()
+      setScanTask((previous) => {
+        if (!previous || previous.taskId !== task.taskId) return previous
+        return {
+          ...previous,
+          syncStatus: 'done',
+          batchResult,
+          syncError: null,
+        }
+      })
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? `扫描完成，但刷新官方状态失败：${err.message}`
+          : '扫描完成，但刷新官方状态失败，请重试'
+      setScanTask((previous) => {
+        if (!previous || previous.taskId !== task.taskId) return previous
+        return {
+          ...previous,
+          syncStatus: 'failed',
+          syncError: message,
+        }
+      })
+    }
+  }
+
+  useEffect(() => {
+    if (!scanTask || scanTask.status !== 'completed') return
+    if (scanCompletionHandledRef.current === scanTask.taskId) return
+    scanCompletionHandledRef.current = scanTask.taskId
+    void finalizeScan(scanTask)
+  }, [scanTask?.taskId, scanTask?.status])
+
+  useEffect(() => {
+    if (
+      !scanTask ||
+      !scanDockVisible ||
+      scanTask.status === 'running' ||
+      scanTask.syncStatus !== 'done'
+    ) {
+      return undefined
+    }
+    const timer = window.setTimeout(() => setScanDockVisible(false), 4500)
+    return () => window.clearTimeout(timer)
+  }, [scanTask?.taskId, scanTask?.status, scanTask?.syncStatus, scanDockVisible])
+
   async function handleCreateAccount(input: Parameters<typeof api.createAccount>[0]) {
     await api.createAccount(input)
     setShowCreate(false)
@@ -107,6 +247,25 @@ export default function App() {
       await api.schedulerPause()
     }
     await refresh()
+  }
+
+  async function handleStartScan(accountId: string) {
+    if (scanStarting || scanTask?.status === 'running') return
+    setScanStarting(true)
+    try {
+      const initial = await api.startScanChats(accountId)
+      scanCompletionHandledRef.current = null
+      setScanTask({
+        ...initial,
+        syncStatus: 'pending',
+        batchResult: null,
+        syncError: null,
+        pollError: null,
+      })
+      setScanDockVisible(true)
+    } finally {
+      setScanStarting(false)
+    }
   }
 
   const accounts = summary?.accounts ?? []
@@ -223,16 +382,34 @@ export default function App() {
                   targets={targets}
                   templates={templates}
                   onChanged={() => void refresh()}
+                  scanTask={scanTask}
+                  scanStarting={scanStarting}
+                  onStartScan={handleStartScan}
                 />
               )}
               {page === 'templates' && (
                 <TemplatesPage templates={templates} onChanged={() => void refresh()} />
               )}
               {page === 'jobs' && (
-                <JobsPage summary={summary} onChanged={() => void refresh()} />
+                <JobsPage
+                  summary={summary}
+                  accounts={summary.accounts}
+                  targets={targets}
+                  templates={templates}
+                  onChanged={() => void refresh()}
+                />
               )}
             </main>
           )
+        )}
+
+        {scanTask && scanDockVisible && (
+          <ScanProgressDock
+            task={scanTask}
+            accounts={accounts}
+            onOpen={() => setPage('targets')}
+            onDismiss={() => setScanDockVisible(false)}
+          />
         )}
 
         {!loading && (

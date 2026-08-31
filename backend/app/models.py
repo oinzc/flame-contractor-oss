@@ -156,6 +156,10 @@ class ContractTarget(SQLModel, table=True):
         default=None, foreign_key="message_template.id", ondelete="RESTRICT"
     )
     enabled: bool = Field(default=True, index=True)
+    # 抖音会话列表最近一次扫描到的官方火花状态；仅用于展示，不参与发送决策。
+    spark_kind: str | None = Field(default=None, max_length=16)
+    spark_label: str | None = Field(default=None, max_length=64)
+    spark_scanned_at: datetime | None = None
     streak_days: int = Field(default=0, ge=0)
     last_sent_at: datetime | None = None
     last_confirmed_at: datetime | None = None
