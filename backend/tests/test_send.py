@@ -119,6 +119,33 @@ def test_send_succeeds_and_updates_everything(settings):
         assert updated["lastSuccessAt"] is not None
 
 
+def test_send_accepts_spark_badge_suffix_in_right_title(settings):
+    """火花徽标追加到右侧标题时，仍按主昵称严格确认并允许发送。"""
+    from app.execution.douyin_chat import DouyinChat
+
+    for right_title in ("好友A\n16", "好友A\n重燃中 2/3", "好友A\n4 天后消失"):
+        assert DouyinChat._primary_panel_title(right_title) == "好友A"
+    assert DouyinChat._primary_panel_title("好友A同学\n16") == "好友A同学"
+
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友A",),
+                right_title="好友A\n4 天后消失",
+                editor_present=True,
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        result = client.post(f"/api/accounts/{account['id']}/send")
+        assert result.status_code == 200, result.text
+        assert result.json()["results"][0]["status"] == "succeeded", result.json()
+
+
 def test_send_second_run_same_day_is_duplicate(settings):
     app = make_app(settings, [_page_for_send(), _page_for_send()])
     with TestClient(app) as client:

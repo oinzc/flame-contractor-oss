@@ -281,11 +281,27 @@ class DouyinChat:
         right_title: str | None = None
         while True:
             right_title = await self.right_panel_title()
-            if right_title == name:
+            if self._primary_panel_title(right_title) == name:
                 return ConversationOpen(opened=True, title=right_title, exact=True)
             if loop.time() >= deadline:
                 return ConversationOpen(opened=True, title=right_title, exact=False)
             await self._sleep(0.5)
+
+    @staticmethod
+    def _primary_panel_title(value: str | None) -> str | None:
+        """取右侧标题中的主昵称，忽略官方火花徽标占用的后续行。
+
+        抖音会把「正常天数」「重燃中 X/3」「X 天后消失」等状态追加到
+        右侧标题文本中。主昵称仍必须是首个非空行的严格匹配，不能退化为
+        模糊包含，以维持「宁可不发不错发」的发送安全边界。
+        """
+        if not value:
+            return None
+        for line in value.splitlines():
+            primary = line.strip()
+            if primary:
+                return primary
+        return None
 
     async def _title_of(self, item) -> str | None:
         """按 unmev 的顺序取标题：搜索行名称节点 → 会话标题子元素 → 整行首行兜底。"""
