@@ -412,6 +412,15 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
         raise HTTPException(status_code=404, detail="账号不存在")
     if payload.template_id and session.get(MessageTemplate, payload.template_id) is None:
         raise HTTPException(status_code=404, detail="模板不存在")
+    if payload.platform_user_id:
+        same_platform_user = session.exec(
+            select(ContractTarget).where(
+                ContractTarget.account_id == payload.account_id,
+                ContractTarget.platform_user_id == payload.platform_user_id,
+            )
+        ).first()
+        if same_platform_user is not None:
+            raise HTTPException(status_code=409, detail="该账号下已存在同一抖音用户")
 
     target = ContractTarget.model_validate(payload)
     session.add(target)
@@ -437,15 +446,54 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
     failed: list[str] = []
     for item in payload.items:
         nickname = item.nickname
-        existing = session.exec(
+        platform_user_id = item.platform_user_id.strip() if item.platform_user_id else None
+        existing = (
+            session.exec(
+                select(ContractTarget).where(
+                    ContractTarget.account_id == payload.account_id,
+                    ContractTarget.platform_user_id == platform_user_id,
+                )
+            ).first()
+            if platform_user_id
+            else None
+        )
+        nickname_existing = session.exec(
             select(ContractTarget).where(
                 ContractTarget.account_id == payload.account_id,
                 ContractTarget.nickname_snapshot == nickname,
             )
         ).first()
+        if existing is None:
+            existing = nickname_existing
         if existing is not None:
+            if (
+                platform_user_id
+                and existing.platform_user_id
+                and existing.platform_user_id != platform_user_id
+            ):
+                failed.append(f"{nickname}：稳定身份与已有好友不一致")
+                continue
+            if platform_user_id and existing.platform_user_id is None:
+                existing.platform_user_id = platform_user_id
+            if existing.platform_user_id == platform_user_id and existing.nickname_snapshot != nickname:
+                nickname_conflict = session.exec(
+                    select(ContractTarget).where(
+                        ContractTarget.account_id == payload.account_id,
+                        ContractTarget.nickname_snapshot == nickname,
+                        ContractTarget.id != existing.id,
+                    )
+                ).first()
+                if nickname_conflict is not None:
+                    failed.append(f"{nickname}：昵称已绑定其他好友")
+                    session.rollback()
+                    continue
+                existing.nickname_snapshot = nickname
             # 扫描导入可以刷新已有好友的官方徽标快照；本地累计天数保持不变。
-            if "spark_kind" in item.model_fields_set or "spark_label" in item.model_fields_set:
+            if (
+                platform_user_id
+                or "spark_kind" in item.model_fields_set
+                or "spark_label" in item.model_fields_set
+            ):
                 now = utc_now()
                 existing.spark_kind = item.spark_kind
                 existing.spark_label = item.spark_label
@@ -466,6 +514,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             session.add(
                 ContractTarget(
                     account_id=payload.account_id,
+                    platform_user_id=platform_user_id,
                     nickname_snapshot=nickname,
                     template_id=payload.template_id,
                     # 扫描读到的官方火花天数作为初始值；之后仍走本地累计

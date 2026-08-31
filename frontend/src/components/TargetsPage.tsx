@@ -196,6 +196,7 @@ export default function TargetsPage({
         accountId: selectedAccountId,
         items: [...selectedEntries.values()].map((entry) => ({
           nickname: entry.title,
+          platformUserId: entry.platformUserId,
           streakDays: entry.streakDays ?? undefined,
           // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
           sparkKind: entry.streakKind,

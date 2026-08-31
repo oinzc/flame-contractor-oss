@@ -196,6 +196,14 @@ class TargetCreate(APIBase):
             raise ValueError("昵称不能为空")
         return value
 
+    @field_validator("platform_user_id")
+    @classmethod
+    def _strip_platform_user_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
 
 class TargetPatch(APIBase):
     """局部更新契约对象。开放火花天数校准、启停与换绑模板（None=解绑）。"""
@@ -207,6 +215,8 @@ class TargetPatch(APIBase):
 
 class BatchTargetItem(APIBase):
     nickname: str
+    # 抖音用户 sec_uid（扫描响应可取得时保存）；缺失时仍走昵称严格匹配
+    platform_user_id: str | None = Field(default=None, max_length=128)
     # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
     streak_days: int | None = Field(default=None, ge=0)
     # 扫描读到的抖音官方状态：只作为展示快照，不覆盖本地 streak_days
@@ -230,6 +240,7 @@ class TargetBatchCreate(APIBase):
                 continue
             data: dict[str, object] = {
                 "nickname": item.nickname.strip(),
+                "platform_user_id": item.platform_user_id,
                 "streak_days": item.streak_days,
             }
             # 保留调用方是否真的携带了官方快照字段；旧客户端只传昵称时，
@@ -358,6 +369,7 @@ class ScanChatItem(APIBase):
     文字标记（如「重燃中 1/3」「5 天后消失」）；两者都为空且消息未提及火花 = 无火花。"""
 
     title: str
+    platform_user_id: str | None = None
     preview: str = ""
     streak_days: int | None = None
     streak_kind: str | None = None

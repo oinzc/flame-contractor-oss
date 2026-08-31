@@ -146,6 +146,11 @@ class ContractTarget(SQLModel, table=True):
     __tablename__ = "contract_target"
     __table_args__ = (
         UniqueConstraint("account_id", "nickname_snapshot", name="uq_target_account_nickname"),
+        UniqueConstraint(
+            "account_id",
+            "platform_user_id",
+            name="uq_target_account_platform_user",
+        ),
     )
 
     id: str = Field(default_factory=new_uuid, primary_key=True)

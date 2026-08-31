@@ -731,7 +731,10 @@ class BrowserManager:
                     pass
                 visible_titles = await chat.visible_titles()
                 for target in targets:
-                    opened = await chat.open_conversation(target.nickname_snapshot)
+                    opened = await chat.open_conversation(
+                        target.nickname_snapshot,
+                        target.platform_user_id,
+                    )
                     if not opened.opened:
                         hint = (
                             f"未找到；当前列表可见会话：{', '.join(visible_titles[:12])}"
@@ -753,7 +756,14 @@ class BrowserManager:
                     elif not opened.exact:
                         results.append(
                             DryRunTargetResult(
-                                target.nickname_snapshot, "ambiguous", opened.title, None
+                                target.nickname_snapshot,
+                                "ambiguous",
+                                opened.title,
+                                (
+                                    "已打开会话，但稳定抖音身份无法核对，已阻止发送"
+                                    if target.platform_user_id
+                                    else None
+                                ),
                             )
                         )
                     else:
@@ -1012,6 +1022,7 @@ class BrowserManager:
             sticker_category = template.sticker_category if template_ok else None
             sticker_fallback_index = template.sticker_fallback_index if template_ok else None
             nickname = current.nickname_snapshot
+            platform_user_id = current.platform_user_id
             streak_days = current.streak_days
             pool_item = None
             pool_content = None
@@ -1062,7 +1073,7 @@ class BrowserManager:
                 return {"target": nickname, "status": "duplicate_unknown",
                         "detail": "今日结果未确认，已跳过以防重复", "failure_class": None, "message": message}
 
-        opened = await chat.open_conversation(nickname)
+        opened = await chat.open_conversation(nickname, platform_user_id)
         if not opened.opened:
             screenshot = await self._capture_shot(chat, account.id, "target_not_found")
             self._finalize_send(
@@ -1081,9 +1092,14 @@ class BrowserManager:
                 status=JobStatus.FAILED_TERMINAL, failure=FailureClass.TARGET_UNCERTAIN,
                 confirmed=False,
             )
+            detail = (
+                "已打开会话，但稳定抖音身份无法核对，已阻止发送"
+                if platform_user_id
+                else f"右侧标题为「{opened.title}」，与好友名不一致"
+            )
             return {"target": nickname, "status": "ambiguous",
                     "failure_class": FailureClass.TARGET_UNCERTAIN.value,
-                    "detail": f"右侧标题为「{opened.title}」，与好友名不一致",
+                    "detail": detail,
                     "message": message,
                     "screenshot": screenshot, "page_url": self._page_url(chat)}
 
