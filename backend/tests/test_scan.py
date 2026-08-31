@@ -1,5 +1,6 @@
 """会话列表扫描（好友批量导入候选）与好友换绑模板的测试。"""
 
+import asyncio
 import time
 
 from fastapi.testclient import TestClient
@@ -89,6 +90,57 @@ def test_scan_chats_background_progress_reaches_completion(settings):
         assert snapshot["total"] == 3
         assert snapshot["completed"] == 3
         assert snapshot["entries"][-1]["title"] == "好友C"
+
+
+def test_cancel_scan_preserves_discovered_entries(settings):
+    """取消后台扫描只结束任务，不丢失取消前已经持久化的候选会话。"""
+    app = make_app(settings, [FakePage(logged_in=True)])
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+        manager = app.state.browser_manager
+
+        async def blocked_scan(account_id, progress=None):
+            assert progress is not None
+            manager._update_scan_progress(
+                progress.task_id,
+                stage="滚动读取会话",
+                completed=1,
+                current_item="好友A",
+                round=2,
+                entries=[
+                    {
+                        "title": "好友A",
+                        "preview": "",
+                        "streak_days": 3,
+                        "streak_kind": "normal",
+                        "streak_label": None,
+                        "platform_user_id": "uid-a",
+                    }
+                ],
+            )
+            await asyncio.Event().wait()
+
+        manager._scan_chats_impl = blocked_scan
+        started = client.post(f"/api/accounts/{account['id']}/scan-chats/start")
+        assert started.status_code == 202, started.text
+        task_id = started.json()["taskId"]
+        time.sleep(0.03)
+
+        cancelled = client.post(
+            f"/api/accounts/{account['id']}/scan-chats/cancel",
+            params={"taskId": task_id},
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        payload = cancelled.json()
+        assert payload["status"] == "cancelled"
+        assert payload["completed"] == 1
+        assert payload["entries"][0]["title"] == "好友A"
+        assert "已保留已发现结果" in payload["detail"]
+
+        latest = client.get(f"/api/accounts/{account['id']}/scan-chats/latest")
+        assert latest.status_code == 200, latest.text
+        assert latest.json()["status"] == "cancelled"
+        assert latest.json()["entries"][0]["platformUserId"] == "uid-a"
 
 
 def test_patch_target_template_rebind(client):

@@ -19,6 +19,11 @@ interface Props {
   offset?: boolean
   onRestore: () => void
   restoreLabel: string
+  onCancel?: () => void
+  cancelLabel?: string
+  cancelDisabled?: boolean
+  onRetry?: () => void
+  retryLabel?: string
   onClose?: () => void
   closeLabel?: string
 }
@@ -72,6 +77,11 @@ export default function TaskDock({
   offset = false,
   onRestore,
   restoreLabel,
+  onCancel,
+  cancelLabel = '取消',
+  cancelDisabled = false,
+  onRetry,
+  retryLabel = '重新开始',
   onClose,
   closeLabel = '关闭',
 }: Props) {
@@ -116,6 +126,16 @@ export default function TaskDock({
         <button className="btn small" type="button" onClick={onRestore}>
           {restoreLabel}
         </button>
+        {onCancel && (
+          <button className="btn ghost small" type="button" disabled={cancelDisabled} onClick={onCancel}>
+            {cancelLabel}
+          </button>
+        )}
+        {onRetry && (
+          <button className="btn small" type="button" onClick={onRetry}>
+            {retryLabel}
+          </button>
+        )}
         {onClose && (
           <button className="btn ghost small" type="button" onClick={onClose}>
             {closeLabel}

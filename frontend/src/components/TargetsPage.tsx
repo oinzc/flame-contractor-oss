@@ -70,7 +70,11 @@ export default function TargetsPage({
       setBatchResult(null)
       return
     }
-    if (scanTask.status === 'completed' || scanTask.status === 'interrupted') {
+    if (
+      scanTask.status === 'completed' ||
+      scanTask.status === 'interrupted' ||
+      scanTask.status === 'cancelled'
+    ) {
       setScanEntries(scanTask.entries)
       setBatchResult(scanTask.batchResult)
     } else {
@@ -86,20 +90,24 @@ export default function TargetsPage({
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
+  const visibleScanEntries =
+    selectedScanTask?.status === 'running' ? selectedScanTask.entries : scanEntries
   const scanLoading = scanStarting || scanTask?.status === 'running'
   const displayedScanError =
     scanError ??
-    (selectedScanTask?.status === 'failed' || selectedScanTask?.status === 'interrupted'
+    ((selectedScanTask?.status === 'failed' ||
+      selectedScanTask?.status === 'interrupted' ||
+      selectedScanTask?.status === 'cancelled')
       ? selectedScanTask.detail ?? '扫描未完成，请重新发起'
       : selectedScanTask?.syncError ?? null)
 
   // 抖音官方火花天数就是续火对象的判定信号；火花将熄的（消息提示）也算
   const scanStreakCount =
-    scanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
-  const scanNoStreakCount = (scanEntries?.length ?? 0) - scanStreakCount
+    visibleScanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
+  const scanNoStreakCount = (visibleScanEntries?.length ?? 0) - scanStreakCount
   const scanExistCount =
-    scanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
-  const scanFiltered = (scanEntries ?? []).filter((entry) => {
+    visibleScanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
+  const scanFiltered = (visibleScanEntries ?? []).filter((entry) => {
     if (!showNoStreak && !isStreakTarget(entry)) return false
     const q = scanQuery.trim().toLowerCase()
     if (q && !entry.title.toLowerCase().includes(q)) return false
@@ -419,7 +427,7 @@ export default function TargetsPage({
             </p>
             {selectedScanTask && (
               <section
-                className={`scan-inline-progress${selectedScanTask.status === 'failed' || selectedScanTask.status === 'interrupted' ? ' is-error' : ''}${selectedScanTask.status === 'completed' ? ' is-complete' : ''}`}
+                className={`scan-inline-progress${selectedScanTask.status === 'failed' || selectedScanTask.status === 'interrupted' || selectedScanTask.status === 'cancelled' ? ' is-error' : ''}${selectedScanTask.status === 'completed' ? ' is-complete' : ''}`}
                 aria-live="polite"
               >
                 <div className="scan-inline-head">
@@ -432,7 +440,9 @@ export default function TargetsPage({
                           ? '会话列表扫描完成'
                           : selectedScanTask.status === 'interrupted'
                             ? '扫描已中断，保留部分结果'
-                            : '会话列表扫描未完成'}
+                            : selectedScanTask.status === 'cancelled'
+                              ? '扫描已取消，保留部分结果'
+                              : '会话列表扫描未完成'}
                     </strong>
                     <p>
                       {selectedScanTask.syncStatus === 'pending'
@@ -442,7 +452,11 @@ export default function TargetsPage({
                   </div>
                   <b>
                     {scanProgressPercent(selectedScanTask) === null
-                      ? selectedScanTask.status === 'interrupted' ? '已中断' : '读取中'
+                      ? selectedScanTask.status === 'interrupted'
+                        ? '已中断'
+                        : selectedScanTask.status === 'cancelled'
+                          ? '已取消'
+                          : '读取中'
                       : `${scanProgressPercent(selectedScanTask)}%`}
                   </b>
                 </div>
@@ -453,18 +467,21 @@ export default function TargetsPage({
                     {selectedScanTask.currentItem ??
                       (selectedScanTask.status === 'running'
                         ? '等待下一段列表…'
-                        : selectedScanTask.status === 'interrupted'
+                        : selectedScanTask.status === 'interrupted' || selectedScanTask.status === 'cancelled'
                           ? '已保存已发现的部分会话'
                           : '结果已就绪')}
                   </span>
                 </div>
               </section>
             )}
-            {selectedScanTask?.status === 'interrupted' && scanEntries !== null && (
-              <p className="scan-recovery-note">
-                这是后端重启前保存的部分结果，仅供查看或手动导入；重新扫描可获取完整会话列表。
-              </p>
-            )}
+            {(selectedScanTask?.status === 'interrupted' || selectedScanTask?.status === 'cancelled') &&
+              scanEntries !== null && (
+                <p className="scan-recovery-note">
+                  {selectedScanTask.status === 'cancelled'
+                    ? '这是取消前保存的部分结果，可继续手动导入；重新扫描可获取完整会话列表。'
+                    : '这是后端重启前保存的部分结果，仅供查看或手动导入；重新扫描可获取完整会话列表。'}
+                </p>
+              )}
             <div className="form-grid">
                 {batchResult && (
                   <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
@@ -482,7 +499,7 @@ export default function TargetsPage({
                     )}
                   </div>
                 )}
-                {scanEntries !== null && (
+                {visibleScanEntries !== null && (
                   <div style={{ display: 'grid', gap: 8 }}>
                     <div className="pick-toolbar">
                       <input
@@ -565,7 +582,7 @@ export default function TargetsPage({
                     </div>
                     <div className="pick-foot">
                       <span className="pick-stat">
-                        扫描 {scanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
+                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
                       </span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <select
