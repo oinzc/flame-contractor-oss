@@ -2,7 +2,7 @@
 
 > 你与它立下契约，每日以一言续之，焰不可熄。
 
-本机优先的多账号抖音续火控制台。当前进度：**M1–M8 已完成** —— 控制平面、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复、自动每日调度、图片/原生表情发送、异常通知、selector 热更新、文案池、统计备份与截图扫码登录全部就绪，并在真实账号上验证通过。
+本机优先的多账号抖音续火控制台。当前进度：**M1–M8 已完成** —— 控制平面、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复、自动每日调度、图片/原生表情发送、异常通知、selector 热更新、文案池、统计备份、截图扫码登录，以及带全局任务坞的后台会话扫描全部就绪，并在真实账号上验证通过。
 
 ## 目录结构
 
@@ -11,6 +11,8 @@ backend/    FastAPI + SQLModel + SQLite + Playwright + Alembic + APScheduler
 frontend/   React + TypeScript + Vite 本地控制台
 docs/       PRD、技术设计、API 文档、数据库 Schema
 ```
+
+后续开发与前端 UI 修改请先阅读仓库根目录的 [`AGENTS.md`](AGENTS.md)。其中固化了 Flame Contractor 的安全边界、D1 视觉基线、必须使用的前端设计/React/动效技能，以及真实浏览器验证和提交前检查清单。
 
 ## 启动
 
@@ -146,7 +148,7 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-- 后端 pytest 当前为 **132 passed**；
+- 后端 pytest 当前为 **134 passed**；
 - 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
 ## 当前能力边界

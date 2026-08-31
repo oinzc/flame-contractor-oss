@@ -205,6 +205,8 @@ password, cookie, token, storageState, profilePath
 
 账号不存在、模板不存在返回 404；同账号昵称重复返回 409。
 
+查询契约对象时，响应还包含 `sparkKind`、`sparkLabel`、`sparkScannedAt` 三个官方火花状态快照字段；它们只用于展示最近一次会话扫描结果，不参与发送决策。
+
 ## 6. 模板接口
 
 ### 6.1 查询模板
@@ -415,9 +417,10 @@ password, cookie, token, storageState, profilePath
 ### 好友（/api/targets）
 - `PATCH /api/targets/{id}`：开放 `enabled`（暂停/启用，删除被任务引用时的兜底）与
   `templateId`（换绑模板，`null`=解绑，模板不存在 404）。
-- `POST /api/targets/batch`：批量导入。`items: [{nickname, streakDays?}]`（≤200 条），
-  逐条独立提交：重名进 `duplicates`、单条失败进 `failed` 不中断整批；
-  `streakDays` 为扫描读到的官方火花天数，导入时回填为初始值。
+- `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, streakDays?, sparkKind?, sparkLabel?}]`（≤200 条），
+  逐条独立提交：新好友进 `created`、普通重名进 `duplicates`、单条失败进 `failed`，不中断整批；
+  携带官方状态字段的已有好友更新官方快照并进 `refreshed`，不改写本地 `streakDays`。
+  新好友的 `streakDays` 为扫描读到的官方火花天数，用作本地累计初始值；官方状态原文与扫描时间另存为展示快照。
 
 ### 模板（/api/templates）
 - `PATCH /api/templates/{id}`：局部更新（name/content/imagePath/sticker*/enabled/
@@ -443,3 +446,9 @@ password, cookie, token, storageState, profilePath
   - `streakKind`：`normal`/`couple`/`family`（取自火花图标路径）；
   - 判定续火对象 = 有火花天数 || 有文字徽标 || 最后消息提及「火花」（断火提醒形态）。
   - 登录失效返回 `overall=auth_expired` 并标记账号。
+- `POST /api/accounts/{id}/scan-chats/start`：发起后台扫描，返回 `202` 和 `taskId`；
+  浏览器扫描不绑定前端页面，控制台切换页面后仍可继续观察。
+- `GET /api/accounts/{id}/scan-chats/progress?taskId={taskId}`：读取扫描进度。
+  扫描完成前 `total` 为 `null`，`completed` 表示当前已发现的会话数，另返回真实阶段、
+  当前会话和滚动轮次；完成时 `status=completed`、`total=completed`，并在 `entries` 返回结果。
+  扫描失败时保留 `status=failed` 与 `detail`，不会自动发送或导入新好友。

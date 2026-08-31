@@ -81,11 +81,56 @@ export interface ContractTarget {
   nicknameSnapshot: string
   templateId: string | null
   enabled: boolean
+  /** 抖音会话列表最近一次扫描到的官方展示状态，不参与发送决策 */
+  sparkKind: string | null
+  sparkLabel: string | null
+  sparkScannedAt: string | null
   streakDays: number
   lastSentAt: string | null
   lastConfirmedAt: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface ScanChatEntry {
+  title: string
+  preview: string
+  streakDays: number | null
+  streakKind: string | null
+  streakLabel: string | null
+}
+
+export interface TargetBatchResult {
+  created: string[]
+  refreshed: string[]
+  duplicates: string[]
+  failed: string[]
+}
+
+export interface ScanProgress {
+  taskId: string
+  accountId: string
+  status: 'running' | 'completed' | 'failed'
+  /** 会话列表滚动到底前总数未知；为 null 时只展示已发现计数。 */
+  total: number | null
+  completed: number
+  stage: string
+  currentItem: string | null
+  round: number
+  maxRounds: number
+  overall: 'ok' | 'auth_expired' | 'error' | null
+  detail: string | null
+  entries: ScanChatEntry[]
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface ScanTaskState extends ScanProgress {
+  /** 扫描完成后的本地快照同步状态，不属于后端扫描进度。 */
+  syncStatus: 'pending' | 'done' | 'failed'
+  batchResult: TargetBatchResult | null
+  syncError: string | null
+  pollError: string | null
 }
 
 export interface PoolItem {
@@ -255,4 +300,18 @@ export interface SendRead {
   detail: string | null
   results: SendTargetResult[]
   artifactPath: string | null
+}
+
+export interface SendProgress {
+  accountId: string
+  status: 'idle' | 'running' | 'completed' | 'failed'
+  total: number
+  completed: number
+  currentTarget: string | null
+  stage: string
+  lastResult: string | null
+  overall: SendRead['overall'] | null
+  detail: string | null
+  startedAt: string | null
+  finishedAt: string | null
 }

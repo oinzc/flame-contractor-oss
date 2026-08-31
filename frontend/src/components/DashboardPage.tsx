@@ -8,6 +8,7 @@ import {
   formatTimeHM,
   parseBackendTime,
 } from '../lib/format'
+import SparkBadge from './SparkBadge'
 
 interface Props {
   summary: DashboardSummary
@@ -306,7 +307,14 @@ export default function DashboardPage({
                     style={{ width: `${(target.streakDays / maxStreak) * 100}%` }}
                   />
                 </span>
-                <span className="days">{target.streakDays}天</span>
+                <span className="days">
+                  <SparkBadge
+                    days={target.streakDays}
+                    kind={target.sparkKind}
+                    label={target.sparkLabel}
+                    scannedAt={target.sparkScannedAt}
+                  />
+                </span>
               </div>
             ))}
           </div>
@@ -333,10 +341,18 @@ export default function DashboardPage({
                 job.status === 'failed_retryable' ||
                 job.status === 'failed_terminal' ||
                 job.status === 'unknown_requires_review'
+              const target = targets.find((item) => item.id === job.targetId)
+              const account = summary.accounts.find((item) => item.id === job.accountId)
+              const targetName = target?.nicknameSnapshot ?? '未知好友'
               return (
                 <div className="stream-row" key={job.id}>
                   <span className="ts">{formatTimeHM(job.updatedAt)}</span>
-                  <span className="what">{job.messageSlotId}</span>
+                  <span
+                    className="what"
+                    title={`账号：${account?.displayName ?? '未知账号'} · 好友：${targetName}`}
+                  >
+                    {targetName}
+                  </span>
                   <span className={`st ${ok ? 'ok' : bad ? (job.status === 'unknown_requires_review' ? 'warn' : 'bad') : 'idle'}`}>
                     {job.status === 'succeeded'
                       ? 'OK'

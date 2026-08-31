@@ -697,3 +697,65 @@ def test_batch_create_targets(client):
         "/api/targets/batch", json={"accountId": account["id"], "items": [{"nickname": "  "}]}
     )
     assert empty.status_code == 422
+
+
+def test_batch_target_persists_and_refreshes_official_spark_state(client):
+    """扫描导入保存官方徽标；重新导入已有好友只刷新展示快照，不改本地累计天数。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    existing = client.post(
+        "/api/targets",
+        json={
+            "accountId": account["id"],
+            "nicknameSnapshot": "已有好友",
+            "streakDays": 42,
+        },
+    ).json()
+
+    imported = client.post(
+        "/api/targets/batch",
+        json={
+            "accountId": account["id"],
+            "items": [
+                {
+                    "nickname": "重燃好友",
+                    "sparkKind": "normal",
+                    "sparkLabel": "重燃中 1/3",
+                }
+            ],
+        },
+    )
+    assert imported.status_code == 201, imported.text
+    assert imported.json()["created"] == ["重燃好友"]
+    assert imported.json()["refreshed"] == []
+
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    rekindle = next(item for item in listing if item["nicknameSnapshot"] == "重燃好友")
+    assert rekindle["streakDays"] == 0
+    assert rekindle["sparkKind"] == "normal"
+    assert rekindle["sparkLabel"] == "重燃中 1/3"
+    assert rekindle["sparkScannedAt"] is not None
+
+    refreshed = client.post(
+        "/api/targets/batch",
+        json={
+            "accountId": account["id"],
+            "items": [
+                {
+                    "nickname": "已有好友",
+                    "streakDays": 999,
+                    "sparkKind": "normal",
+                    "sparkLabel": "6 天后消失",
+                }
+            ],
+        },
+    )
+    assert refreshed.status_code == 201, refreshed.text
+    assert refreshed.json()["created"] == []
+    assert refreshed.json()["refreshed"] == ["已有好友"]
+    assert refreshed.json()["duplicates"] == []
+
+    updated = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    existing_after = next(item for item in updated if item["id"] == existing["id"])
+    assert existing_after["streakDays"] == 42
+    assert existing_after["sparkLabel"] == "6 天后消失"
+    assert existing_after["sparkScannedAt"] is not None

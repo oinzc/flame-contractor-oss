@@ -25,6 +25,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const [sendAccount, setSendAccount] = useState<Account | null>(null)
+  const [sendMinimized, setSendMinimized] = useState(false)
   const timersRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
@@ -421,7 +422,10 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     <button
                       className="btn small"
                       type="button"
-                      onClick={() => setSendAccount(account)}
+                      onClick={() => {
+                        setSendAccount(account)
+                        setSendMinimized(false)
+                      }}
                     >
                       立即发送
                     </button>
@@ -460,7 +464,13 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
       {sendAccount && (
         <SendModal
           account={sendAccount}
-          onClose={() => setSendAccount(null)}
+          minimized={sendMinimized}
+          onClose={() => {
+            setSendAccount(null)
+            setSendMinimized(false)
+          }}
+          onMinimize={() => setSendMinimized(true)}
+          onRestore={() => setSendMinimized(false)}
           onChanged={() => void onChanged()}
         />
       )}

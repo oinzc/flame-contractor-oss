@@ -1,11 +1,13 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-08-31 | 功能基线：CRUD 补齐 + 会话扫描导入 + 火花识别 + 火花徽标标题兼容 + 暂停状态持久化（见 git log）
+> 最近更新：2026-08-31 | 功能基线：CRUD 补齐 + 会话扫描导入 + 后台扫描进度/全局任务坞 + 火花识别/官方状态快照 + 火花徽标标题兼容 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录）全部落地。后端 pytest **132 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录）全部落地。后端 pytest **134 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
 
 **2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
+
+**2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容。
 
 **2026-08-31 发送定位修复**：抖音右侧标题会在主昵称后追加官方火花状态；确认逻辑现在只对首个非空行做严格等值匹配，保留完整标题用于诊断，不放宽为模糊匹配。真实 Dry Run 14 个对象中 10 个 `found`、4 个 `not_found`，未发送消息。
 
@@ -14,6 +16,7 @@
 - unknown 任务人工处理闭环（`7d652e8`）：任务页「确认已发送/放行重试」，SendAttempt 审计留痕
 - 好友批量导入（`055f512`）→ **扫描会话列表勾选导入**（`b8a00fd`，对齐 ScriptCat「好友批选」）
 - **抖音官方火花 DOM 识别续火对象**（`88346c6` + `7a75f28`）：扫描读取名字旁火花徽标（`.commonStreakstreakContainer`），支持三种形态——正常天数（🔥N，normal/couple/family 三色）、**重燃中 X/3**、**N 天后消失**，以及「N天后火花将消失」消息提示兜底；**默认只显示续火对象**，导入自动回填官方天数
+- 官方火花状态快照已持久化（迁移 `b8c4d2e6f901`）：总览/好友页按抖音原文展示「重燃中 X/3」「N 天后消失」等徽标；重新勾选已有好友可刷新快照，不改写本地累计天数
 - 好友列表默认隐藏暂停项（`41a65f5`）、批量区常显仅保留扫描入口（`4457985`/`226ac50`）
 - 真机修复两个基础 bug：调度行误拦账号删除（`4ff5616`）、前端 204 无 body 解析崩溃（`72a42c7`）
 - 端到端脚本 `scripts/e2e_crud_test.py`（隔离实例 29 项断言）；真机 43 会话识别 16 续火对象与用户指认一致
@@ -22,7 +25,7 @@
 
 **M5 剩余项**：无——原生表情发送也已实机验证完成。通知补渠道（钉钉/邮件）经评估决定不扩，保持仅 Bark。
 
-**火花天数说明（2026-08-30 修订）**：早期结论「网页版无火花 DOM」**已被推翻**——会话列表名字旁有官方火花徽标（`.commonStreakstreakContainer > .commonStreaknormalText`），扫描已接入（见上）。产品内 `streak_days` 仍以本地累计（发送成功 +1）为准、扫描导入时用官方天数初始化，之后不发不涨；避免依赖 DOM 天数做发送决策，发送链路的「宁可不发不错发」边界不变。
+**火花天数说明（2026-08-30 修订）**：早期结论「网页版无火花 DOM」**已被推翻**——会话列表名字旁有官方火花徽标（`.commonStreakstreakContainer > .commonStreaknormalText`），扫描已接入（见上）。产品内 `streak_days` 仍以本地累计（发送成功 +1）为准、扫描导入新好友时用官方天数初始化；已有好友刷新扫描只更新官方状态快照，不覆盖本地累计值。官方页只提供天级文字时，界面展示原文和扫描时间，不推算小时倒计时；发送链路的「宁可不发不错发」边界不变。
 
 ## 已完成内容（按里程碑）
 
@@ -104,7 +107,7 @@ backend/app/
   scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
@@ -117,7 +120,7 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **132 passed**（含火花徽标标题定位回归、调度暂停状态持久化与启动恢复回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **134 passed**（含会话扫描后台进度、火花徽标标题定位回归、官方状态快照持久化、调度暂停状态持久化与启动恢复回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | 真实 Dry Run（2026-08-31） | `overall=ok`；14 个对象中 10 个 `found`（含三种火花徽标后缀），4 个 `not_found`；只读，未发送消息 |
@@ -135,6 +138,7 @@ frontend/src/
 - 调度默认每 60s 轮询一次，到点判定依赖 `scheduled_at`；若进程在窗口内长时间挂起，重启后可能补发当日计划（幂等兜底）。
 - **headless 下登录检测波动（已修复，HEAD `4aa851b`）**：原 `run_send`/Dry Run 用 headless 打开持久 profile 后立即 `is_logged_in()` 单次查询会话列表，页面加载早期列表未渲染完易返回 False，被误判 auth_expired 并跳过发送。已改为 `DouyinChat.wait_logged_in(timeout, poll_interval)` 轮询：会话列表一旦出现即算已登录、超时才判失效；run_send / run_dry_run / 扫码登录三处统一走它，并新增 `login_check_timeout` 构造参数（默认 8s）。真机验证 `wait_logged_in=True`，截图经视觉桥确认会话列表完整渲染（实机复现偶发单次 False 不总是发生，但轮询逻辑已由单测覆盖「延迟渲染→True / 永不渲染→False」）。
 - **selector bundle 依赖 JSON 有效性**：`selectors_bundle.json` 语法错误或字段缺失时，`_Bundle` 会保留内存中的默认/上一版值继续运行（安全方向、不误发），但需人工修正并按需 `POST /api/selectors/reload`（或进程内惰性 mtime）才会刷新。
+- **会话扫描进度是进程内内存态**：应用内切换页面不会影响后台扫描；若整页刷新或后端进程重启，任务快照会丢失，需要重新发起扫描。扫描总数在滚动到底前未知，界面不会用滚动轮次伪造百分比。
 
 ## 尝试过但失败的方案
 - **早期全量直读火花 DOM（已放弃）**：曾尝试把会话页火花 DOM 直接作为发送依据，但提示文案随状态变化、不是每个好友都有且类名会串读。当前仅在扫描阶段识别官方徽标用于初始化/展示，发送决策仍坚持本地累计 + 手动调整，避免读错天数。
