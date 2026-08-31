@@ -1362,6 +1362,87 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   to { transform: translateX(310%); }
 }
 
+/* 统一任务坞：扫描与发送共享同一信息层级和状态色，避免跨页面后变成两套控件。 */
+.task-dock {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 55;
+  width: min(380px, calc(100vw - 32px));
+  padding: 14px 16px 15px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--flame);
+  animation: task-dock-in 220ms var(--ease-out) both;
+}
+.task-dock.is-offset { bottom: 236px; }
+.task-dock.is-error { border-left-color: var(--red); }
+.task-dock.is-complete { border-left-color: var(--green); }
+.task-dock-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.task-dock-identity { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.task-dock-mark {
+  width: 25px;
+  height: 25px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--flame-deep);
+  color: var(--flame);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.task-dock-identity > div { min-width: 0; display: grid; gap: 2px; }
+.task-dock-identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.task-dock-kicker { color: var(--text-3); font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em; }
+.task-dock-state { flex: none; color: var(--flame); font-family: var(--mono); font-size: 10px; }
+.task-dock.is-error .task-dock-state { color: var(--red); }
+.task-dock.is-complete .task-dock-state { color: var(--green); }
+.task-dock-progress { display: grid; gap: 6px; margin-top: 16px; }
+.task-progress-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--text-2); font-family: var(--mono); font-size: 10.5px; }
+.task-progress-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-progress-meta b { color: var(--flame); font-weight: 600; }
+.task-dock.is-complete .task-progress-meta b { color: var(--green); }
+.task-progress-track {
+  height: 8px;
+  overflow: hidden;
+  background: #2a221a;
+  border: 1px solid var(--seam);
+}
+.task-progress-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--flame-deep), var(--flame));
+  transition: transform 220ms var(--ease-out);
+}
+.task-dock.is-complete .task-progress-fill { background: linear-gradient(90deg, #379e5a, var(--green)); }
+.task-dock.is-error .task-progress-fill { background: linear-gradient(90deg, #a93d35, var(--red)); }
+.task-progress-track.is-indeterminate .task-progress-fill {
+  width: 36%;
+  transform: translateX(-120%);
+  animation: task-progress-sweep 1.2s linear infinite;
+}
+.task-dock-current { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--seam); }
+.task-dock-current > div { min-width: 0; display: grid; gap: 1px; }
+.task-dock-current span:not(.task-live-dot) { overflow: hidden; color: var(--text-2); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-dock-current strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.task-live-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--flame); }
+.task-dock.is-error .task-live-dot { background: var(--red); }
+.task-dock.is-complete .task-live-dot { background: var(--green); }
+.task-dock-note { margin: 12px 0 0; color: var(--text-2); font-size: 10.5px; line-height: 1.45; }
+.task-dock-actions { display: flex; gap: 8px; margin-top: 12px; }
+.scan-recovery-note { margin: -4px 0 12px; color: var(--amber); font-size: 11px; line-height: 1.45; }
+
+@keyframes task-dock-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes task-progress-sweep {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(310%); }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .send-live-dot:not(.failed):not(.complete) { animation: lamp-breathe-amber 1.4s ease-in-out infinite; }
   .scan-live-dot:not(.failed):not(.complete) { animation: lamp-breathe-amber 1.4s ease-in-out infinite; }
@@ -1502,8 +1583,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   .send-modal-footer .form-actions .btn { flex: 1; }
   .send-live-panel { min-height: 300px; padding: 16px; }
   .send-live-percent { font-size: 30px; }
-  .send-dock { right: 10px; bottom: 10px; left: 10px; width: auto; }
-  .scan-dock { right: 10px; bottom: 10px; left: 10px; width: auto; }
+  .task-dock { right: 10px; bottom: 10px; left: 10px; width: auto; }
+  .task-dock.is-offset { bottom: 230px; }
   .scan-inline-head { gap: 10px; }
   .scan-inline-head > b { font-size: 18px; }
   .jobs-card-head { display: grid; gap: 8px; }
@@ -1523,4 +1604,9 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition-duration: 0.01ms !important; }
+  .task-progress-track.is-indeterminate .task-progress-fill,
+  .scan-progress-track.is-indeterminate .scan-progress-fill {
+    transform: translateX(0) !important;
+    opacity: 0.55;
+  }
 }

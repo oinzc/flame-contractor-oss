@@ -1,4 +1,5 @@
 import type { Account, ScanTaskState } from '../types'
+import TaskDock from './TaskDock'
 
 interface ProgressBarProps {
   task: ScanTaskState
@@ -36,7 +37,13 @@ export function ScanProgressBar({ task, compact = false }: ProgressBarProps) {
     >
       <span
         className="scan-progress-fill"
-        style={percent === null ? undefined : { transform: `scaleX(${percent / 100})` }}
+        style={
+          percent === null
+            ? task.status === 'running'
+              ? undefined
+              : { transform: 'scaleX(0)' }
+            : { transform: `scaleX(${percent / 100})` }
+        }
       />
     </div>
   )
@@ -47,6 +54,7 @@ interface ScanDockProps {
   accounts: Account[]
   onOpen: () => void
   onDismiss: () => void
+  offset?: boolean
 }
 
 function elapsed(startedAt: string | null, finishedAt: string | null): string | null {
@@ -60,12 +68,13 @@ function elapsed(startedAt: string | null, finishedAt: string | null): string | 
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-export default function ScanProgressDock({ task, accounts, onOpen, onDismiss }: ScanDockProps) {
+export default function ScanProgressDock({ task, accounts, onOpen, onDismiss, offset = false }: ScanDockProps) {
   const account = accounts.find((item) => item.id === task.accountId)
   const percent = scanProgressPercent(task)
   const running = task.status === 'running'
+  const interrupted = task.status === 'interrupted'
   const syncing = task.status === 'completed' && task.syncStatus === 'pending'
-  const failed = task.status === 'failed' || Boolean(task.syncError)
+  const failed = task.status === 'failed' || interrupted || Boolean(task.syncError)
   const complete = task.status === 'completed' && !syncing
   const elapsedLabel = elapsed(task.startedAt, task.finishedAt)
   const stage = task.pollError ?? task.syncError ?? (syncing ? '正在保存官方状态快照' : task.stage)
@@ -76,71 +85,46 @@ export default function ScanProgressDock({ task, accounts, onOpen, onDismiss }: 
     ? percent === null
       ? '读取中'
       : `${percent}%`
-    : failed
-      ? '需处理'
-      : complete
-        ? '100%'
-        : '收尾中'
+    : interrupted
+      ? '已中断'
+      : failed
+        ? '需处理'
+        : complete
+          ? '100%'
+          : '收尾中'
+  const note = task.pollError
+    ? '进度连接暂时中断，扫描仍在后台运行，正在自动重连。'
+    : task.syncError
+      ? task.syncError
+      : syncing
+        ? '扫描已到 100%，正在把已存在好友的官方状态写回本地。'
+        : running
+          ? '可切换页面；扫描由后端继续执行，不会因页面收起而中断。'
+          : interrupted
+            ? '后端曾重启，扫描已安全收束；已发现结果已保留，请重新发起完整扫描。'
+            : complete
+              ? `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
+              : '扫描未完成，请重新发起。'
 
   return (
-    <aside
-      className={`scan-dock${failed ? ' is-error' : ''}${complete ? ' is-complete' : ''}`}
-      aria-label={`会话扫描任务 · ${account?.displayName ?? '当前账号'}`}
-      aria-live="polite"
-    >
-      <div className="scan-dock-head">
-        <div className="scan-dock-identity">
-          <span className="scan-dock-mark" aria-hidden="true">
-            ↘
-          </span>
-          <div>
-            <span className="scan-dock-kicker">{complete ? 'SCAN COMPLETE' : 'BACKGROUND SCAN'}</span>
-            <strong>{account?.displayName ?? '当前账号'}</strong>
-          </div>
-        </div>
-        <span className="scan-dock-state">{stateLabel}</span>
-      </div>
-
-      <div className="scan-dock-progress">
-        <div className="scan-progress-meta">
-          <span>{scanProgressCount(task)}</span>
-          <b>{percent === null ? '—' : `${percent}%`}</b>
-        </div>
-        <ScanProgressBar task={task} compact />
-      </div>
-
-      <div className="scan-dock-current">
-        <span className={`scan-live-dot${failed ? ' failed' : complete ? ' complete' : ''}`} aria-hidden="true" />
-        <div>
-          <span>{stage}</span>
-          <strong title={currentItem}>{currentItem}</strong>
-        </div>
-      </div>
-
-      <p className="scan-dock-note">
-        {task.pollError
-          ? '进度连接暂时中断，扫描仍在后台运行，正在自动重连。'
-          : task.syncError
-            ? task.syncError
-            : syncing
-              ? '扫描已到 100%，正在把已存在好友的官方状态写回本地。'
-              : running
-                ? '可切换页面；扫描由后端继续执行，不会因页面收起而中断。'
-                : complete
-                  ? `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
-                  : '扫描未完成，请回到好友页重新发起。'}
-      </p>
-
-      <div className="scan-dock-actions">
-        <button className="btn small" type="button" onClick={onOpen}>
-          查看好友页
-        </button>
-        {!running && !syncing && (
-          <button className="btn ghost small" type="button" onClick={onDismiss}>
-            关闭
-          </button>
-        )}
-      </div>
-    </aside>
+    <TaskDock
+      kind="scan"
+      account={account}
+      mark="↘"
+      kicker={complete ? 'SCAN COMPLETE' : interrupted ? 'SCAN INTERRUPTED' : 'BACKGROUND SCAN'}
+      statusLabel={stateLabel}
+      percent={percent}
+      progressLabel={scanProgressCount(task)}
+      stage={stage}
+      currentItem={currentItem}
+      note={note}
+      failed={failed}
+      complete={complete}
+      indeterminate={running}
+      offset={offset}
+      onRestore={onOpen}
+      restoreLabel="查看好友页"
+      onClose={!running && !syncing ? onDismiss : undefined}
+    />
   )
 }

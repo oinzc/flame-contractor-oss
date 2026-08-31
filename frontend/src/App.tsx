@@ -18,6 +18,7 @@ import TargetsPage from './components/TargetsPage'
 import TemplatesPage from './components/TemplatesPage'
 import JobsPage from './components/JobsPage'
 import ScanProgressDock from './components/ScanProgress'
+import SendModal from './components/SendModal'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
 
@@ -59,6 +60,11 @@ export default function App() {
   const [scanStarting, setScanStarting] = useState(false)
   const [scanDockVisible, setScanDockVisible] = useState(false)
   const scanCompletionHandledRef = useRef<string | null>(null)
+  const scanRecoveryStartedRef = useRef(false)
+  const [sendAccount, setSendAccount] = useState<Account | null>(null)
+  const [sendMinimized, setSendMinimized] = useState(false)
+
+  const accounts = summary?.accounts ?? []
 
   const refresh = useCallback(async () => {
     try {
@@ -155,6 +161,51 @@ export default function App() {
       if (timer !== null) window.clearTimeout(timer)
     }
   }, [scanTaskId, scanTaskStatus])
+
+  // 页面首次加载时从 SQLite 接管最近一次扫描；running 任务已由后端收束为 interrupted。
+  useEffect(() => {
+    if (scanRecoveryStartedRef.current || accounts.length === 0 || scanTask !== null) {
+      return undefined
+    }
+    scanRecoveryStartedRef.current = true
+    let cancelled = false
+
+    async function recoverLatestScan() {
+      const snapshots = await Promise.all(
+        accounts.map(async (account) => {
+          try {
+            return await api.latestScanChats(account.id)
+          } catch {
+            return null
+          }
+        }),
+      )
+      if (cancelled) return
+      const candidate = snapshots
+        .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null)
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.finishedAt ?? left.startedAt ?? '') || 0
+          const rightTime = Date.parse(right.finishedAt ?? right.startedAt ?? '') || 0
+          return rightTime - leftTime
+        })[0]
+      if (!candidate) return
+
+      scanCompletionHandledRef.current = null
+      setScanTask({
+        ...candidate,
+        syncStatus: candidate.status === 'completed' ? 'pending' : 'done',
+        batchResult: null,
+        syncError: null,
+        pollError: null,
+      })
+      setScanDockVisible(true)
+    }
+
+    void recoverLatestScan()
+    return () => {
+      cancelled = true
+    }
+  }, [accounts, scanTask])
 
   async function finalizeScan(task: ScanTaskState) {
     const accountTargets = targets.filter((target) => target.accountId === task.accountId)
@@ -271,7 +322,11 @@ export default function App() {
     }
   }
 
-  const accounts = summary?.accounts ?? []
+  function handleOpenSend(account: Account) {
+    setSendAccount(account)
+    setSendMinimized(false)
+  }
+
   const loading = health === null && error === null
 
   return (
@@ -377,6 +432,7 @@ export default function App() {
                   accounts={summary.accounts}
                   onChanged={() => void refresh()}
                   onCreateAccount={() => setShowCreate(true)}
+                  onOpenSend={handleOpenSend}
                 />
               )}
               {page === 'targets' && (
@@ -412,6 +468,22 @@ export default function App() {
             accounts={accounts}
             onOpen={() => setPage('targets')}
             onDismiss={() => setScanDockVisible(false)}
+            offset={Boolean(sendAccount && sendMinimized)}
+          />
+        )}
+
+        {sendAccount && (
+          <SendModal
+            account={sendAccount}
+            minimized={sendMinimized}
+            offset={Boolean(scanTask && scanDockVisible && sendMinimized)}
+            onClose={() => {
+              setSendAccount(null)
+              setSendMinimized(false)
+            }}
+            onMinimize={() => setSendMinimized(true)}
+            onRestore={() => setSendMinimized(false)}
+            onChanged={() => void refresh()}
           />
         )}
 
