@@ -104,7 +104,7 @@ class ScanProgress:
     account_id: str
     total: int | None = None
     completed: int = 0
-    status: str = "running"  # running | completed | failed | interrupted
+    status: str = "running"  # running | completed | failed | interrupted | cancelled
     stage: str = "准备扫描"
     current_item: str | None = None
     round: int = 0
@@ -418,6 +418,53 @@ class BrowserManager:
             if task is None or task.account_id != account_id:
                 raise HTTPException(status_code=404, detail="扫描任务不存在")
             return self._scan_progress_view_from_record(task)
+
+    async def cancel_scan_chats(self, account_id: str, task_id: str) -> dict:
+        """取消后台扫描并保留已经发现的会话；重复取消是幂等的。"""
+        progress = self._scan_progress.get(task_id)
+        if progress is None:
+            with Session(self._engine) as session:
+                task = session.get(ScanTask, task_id)
+                if task is None or task.account_id != account_id:
+                    raise HTTPException(status_code=404, detail="扫描任务不存在")
+                if task.status == ScanTaskStatus.RUNNING:
+                    now = _utcnow()
+                    task.status = ScanTaskStatus.CANCELLED
+                    task.stage = "已取消扫描"
+                    task.current_item = None
+                    task.detail = "用户取消扫描；已保留已发现结果"
+                    task.finished_at = now
+                    task.updated_at = now
+                    session.add(task)
+                    session.commit()
+                return self._scan_progress_view_from_record(task)
+
+        if progress.account_id != account_id:
+            raise HTTPException(status_code=404, detail="扫描任务不存在")
+        if progress.status != "running":
+            return self._scan_progress_view(progress)
+
+        task = self._scan_tasks.get(task_id)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        # 任务可能恰好在取消请求抵达前完成；此时尊重真实终态，不覆盖完成/失败结果。
+        if progress.status == "running":
+            self._update_scan_progress(
+                task_id,
+                status="cancelled",
+                stage="已取消扫描",
+                current_item=None,
+                overall=None,
+                detail="用户取消扫描；已保留已发现结果",
+                entries=progress.entries or [],
+                finished_at=_utcnow(),
+            )
+        return self._scan_progress_view(progress)
 
     def latest_scan_chats(self, account_id: str) -> dict | None:
         """读取账号最近一次扫描；用于前端刷新或新后端进程恢复任务坞。"""

@@ -96,6 +96,11 @@ export const api = {
     request<import('./types').ScanProgress>(
       `/api/accounts/${accountId}/scan-chats/progress?taskId=${encodeURIComponent(taskId)}`,
     ),
+  cancelScanChats: (accountId: string, taskId: string) =>
+    request<import('./types').ScanProgress>(
+      `/api/accounts/${accountId}/scan-chats/cancel?taskId=${encodeURIComponent(taskId)}`,
+      { method: 'POST' },
+    ),
   latestScanChats: (accountId: string) =>
     request<import('./types').ScanProgress | null>(`/api/accounts/${accountId}/scan-chats/latest`),
   sendPreview: (id: string) =>

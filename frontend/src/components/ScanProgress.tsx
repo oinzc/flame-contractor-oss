@@ -54,6 +54,10 @@ interface ScanDockProps {
   accounts: Account[]
   onOpen: () => void
   onDismiss: () => void
+  onCancel?: () => void
+  onRetry?: () => void
+  cancelLabel?: string
+  cancelDisabled?: boolean
   offset?: boolean
 }
 
@@ -68,30 +72,50 @@ function elapsed(startedAt: string | null, finishedAt: string | null): string | 
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
-export default function ScanProgressDock({ task, accounts, onOpen, onDismiss, offset = false }: ScanDockProps) {
+export default function ScanProgressDock({
+  task,
+  accounts,
+  onOpen,
+  onDismiss,
+  onCancel,
+  onRetry,
+  cancelLabel,
+  cancelDisabled = false,
+  offset = false,
+}: ScanDockProps) {
   const account = accounts.find((item) => item.id === task.accountId)
   const percent = scanProgressPercent(task)
   const running = task.status === 'running'
   const interrupted = task.status === 'interrupted'
+  const cancelled = task.status === 'cancelled'
   const syncing = task.status === 'completed' && task.syncStatus === 'pending'
-  const failed = task.status === 'failed' || interrupted || Boolean(task.syncError)
+  const failed = task.status === 'failed' || interrupted || cancelled || Boolean(task.syncError)
   const complete = task.status === 'completed' && !syncing
+  const retryable = !running && !syncing && !complete && Boolean(onRetry)
   const elapsedLabel = elapsed(task.startedAt, task.finishedAt)
   const stage = task.pollError ?? task.syncError ?? (syncing ? '正在保存官方状态快照' : task.stage)
-  const currentItem =
-    task.currentItem ??
-    (running ? '继续读取下一段会话列表…' : complete ? '扫描结果已就绪' : '请重新发起扫描')
+  const currentItem = task.currentItem ?? (
+    running
+      ? '继续读取下一段会话列表…'
+      : complete
+        ? '扫描结果已就绪'
+        : cancelled
+          ? '已保存已发现的部分会话'
+          : '请重新发起扫描'
+  )
   const stateLabel = running
     ? percent === null
       ? '读取中'
       : `${percent}%`
-    : interrupted
-      ? '已中断'
-      : failed
-        ? '需处理'
-        : complete
-          ? '100%'
-          : '收尾中'
+    : cancelled
+      ? '已取消'
+      : interrupted
+        ? '已中断'
+        : failed
+          ? '需处理'
+          : complete
+            ? '100%'
+            : '收尾中'
   const note = task.pollError
     ? '进度连接暂时中断，扫描仍在后台运行，正在自动重连。'
     : task.syncError
@@ -102,16 +126,28 @@ export default function ScanProgressDock({ task, accounts, onOpen, onDismiss, of
           ? '可切换页面；扫描由后端继续执行，不会因页面收起而中断。'
           : interrupted
             ? '后端曾重启，扫描已安全收束；已发现结果已保留，请重新发起完整扫描。'
-            : complete
-              ? `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
-              : '扫描未完成，请重新发起。'
+            : cancelled
+              ? '扫描已取消；已发现结果仍可在好友页查看或手动导入。'
+              : complete
+                ? `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
+                : '扫描未完成，请重新发起。'
 
   return (
     <TaskDock
       kind="scan"
       account={account}
       mark="↘"
-      kicker={complete ? 'SCAN COMPLETE' : interrupted ? 'SCAN INTERRUPTED' : 'BACKGROUND SCAN'}
+      kicker={
+        complete
+          ? 'SCAN COMPLETE'
+          : interrupted
+            ? 'SCAN INTERRUPTED'
+            : cancelled
+              ? 'SCAN CANCELLED'
+              : failed
+                ? 'SCAN FAILED'
+                : 'BACKGROUND SCAN'
+      }
       statusLabel={stateLabel}
       percent={percent}
       progressLabel={scanProgressCount(task)}
@@ -124,6 +160,11 @@ export default function ScanProgressDock({ task, accounts, onOpen, onDismiss, of
       offset={offset}
       onRestore={onOpen}
       restoreLabel="查看好友页"
+      onCancel={running ? onCancel : undefined}
+      cancelLabel={cancelLabel ?? '取消扫描'}
+      cancelDisabled={cancelDisabled}
+      onRetry={retryable ? onRetry : undefined}
+      retryLabel="重新扫描"
       onClose={!running && !syncing ? onDismiss : undefined}
     />
   )

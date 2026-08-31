@@ -67,6 +67,7 @@ class ScanTaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
 
 
 class FailureClass(str, Enum):

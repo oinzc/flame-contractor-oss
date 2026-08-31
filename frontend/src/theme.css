@@ -1431,7 +1431,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .task-dock.is-error .task-live-dot { background: var(--red); }
 .task-dock.is-complete .task-live-dot { background: var(--green); }
 .task-dock-note { margin: 12px 0 0; color: var(--text-2); font-size: 10.5px; line-height: 1.45; }
-.task-dock-actions { display: flex; gap: 8px; margin-top: 12px; }
+.task-dock-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .scan-recovery-note { margin: -4px 0 12px; color: var(--amber); font-size: 11px; line-height: 1.45; }
 
 @keyframes task-dock-in {

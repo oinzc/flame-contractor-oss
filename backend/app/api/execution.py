@@ -85,6 +85,19 @@ def read_scan_chats_progress(
     return manager.scan_chats_progress(account_id, task_id)
 
 
+@router.post("/scan-chats/cancel", response_model=ScanProgressRead)
+async def cancel_scan_chats(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+    task_id: str = Query(..., alias="taskId"),
+) -> dict:
+    """取消后台会话扫描；保留已发现结果，供查看或手动导入。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.cancel_scan_chats(account_id, task_id)
+
+
 @router.get("/scan-chats/latest", response_model=ScanProgressRead | None)
 def read_latest_scan_chats(
     account_id: str,

@@ -58,6 +58,7 @@ export default function App() {
   const [now, setNow] = useState(() => new Date())
   const [scanTask, setScanTask] = useState<ScanTaskState | null>(null)
   const [scanStarting, setScanStarting] = useState(false)
+  const [scanCancelling, setScanCancelling] = useState(false)
   const [scanDockVisible, setScanDockVisible] = useState(false)
   const scanCompletionHandledRef = useRef<string | null>(null)
   const scanRecoveryStartedRef = useRef(false)
@@ -304,7 +305,7 @@ export default function App() {
   }
 
   async function handleStartScan(accountId: string) {
-    if (scanStarting || scanTask?.status === 'running') return
+    if (scanStarting || scanCancelling || scanTask?.status === 'running') return
     setScanStarting(true)
     try {
       const initial = await api.startScanChats(accountId)
@@ -319,6 +320,53 @@ export default function App() {
       setScanDockVisible(true)
     } finally {
       setScanStarting(false)
+    }
+  }
+
+  async function handleCancelScan() {
+    if (!scanTask || scanTask.status !== 'running' || scanCancelling) return
+    setScanCancelling(true)
+    try {
+      const next = await api.cancelScanChats(scanTask.accountId, scanTask.taskId)
+      setScanTask((previous) =>
+        previous && previous.taskId === next.taskId
+              ? {
+                  ...previous,
+                  ...next,
+                  syncStatus: next.status === 'completed' ? 'pending' : 'done',
+                  batchResult: null,
+                  syncError: null,
+                  pollError: null,
+            }
+          : previous,
+      )
+      setScanDockVisible(true)
+    } catch (err) {
+      setScanTask((previous) =>
+        previous
+          ? {
+              ...previous,
+              pollError: err instanceof ApiError ? `取消失败：${err.message}` : '取消失败，正在重新读取进度…',
+            }
+          : previous,
+      )
+    } finally {
+      setScanCancelling(false)
+    }
+  }
+
+  async function handleRetryScan(accountId: string) {
+    try {
+      await handleStartScan(accountId)
+    } catch (err) {
+      setScanTask((previous) =>
+        previous
+          ? {
+              ...previous,
+              pollError: err instanceof ApiError ? `重新扫描失败：${err.message}` : '重新扫描失败，请重试',
+            }
+          : previous,
+      )
     }
   }
 
@@ -468,6 +516,10 @@ export default function App() {
             accounts={accounts}
             onOpen={() => setPage('targets')}
             onDismiss={() => setScanDockVisible(false)}
+            onCancel={() => void handleCancelScan()}
+            onRetry={() => void handleRetryScan(scanTask.accountId)}
+            cancelLabel={scanCancelling ? '正在取消…' : '取消扫描'}
+            cancelDisabled={scanCancelling}
             offset={Boolean(sendAccount && sendMinimized)}
           />
         )}

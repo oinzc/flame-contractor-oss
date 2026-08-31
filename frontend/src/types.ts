@@ -111,7 +111,7 @@ export interface TargetBatchResult {
 export interface ScanProgress {
   taskId: string
   accountId: string
-  status: 'running' | 'completed' | 'failed' | 'interrupted'
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
   /** 会话列表滚动到底前总数未知；为 null 时只展示已发现计数。 */
   total: number | null
   completed: number
