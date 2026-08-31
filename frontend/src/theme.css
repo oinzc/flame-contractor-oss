@@ -38,6 +38,18 @@
 
 html, body { margin: 0; padding: 0; }
 
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) var(--bg);
+}
+html::-webkit-scrollbar { width: 10px; height: 10px; }
+html::-webkit-scrollbar-track { background: var(--bg); }
+html::-webkit-scrollbar-thumb {
+  background: var(--seam);
+  border: 2px solid var(--bg);
+}
+html::-webkit-scrollbar-thumb:hover { background: var(--edge); }
+
 body {
   background: var(--bg);
   color: var(--ink);
@@ -58,7 +70,7 @@ body {
 
 .app {
   display: grid;
-  grid-template-columns: 208px 1fr;
+  grid-template-columns: 208px minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -309,6 +321,11 @@ body {
   transition: background-color 200ms ease;
 }
 
+.mod-flame {
+  display: flex;
+  flex-direction: column;
+}
+
 .mod:hover { background: var(--panel-raise); }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -337,7 +354,14 @@ body {
 .mod-title { font-size: 12.5px; font-weight: 600; margin: 0 0 10px; color: var(--ink); }
 
 /* MOD·01 今日之焰 */
-.flame-core { display: flex; flex-direction: column; height: 100%; gap: 6px; }
+.flame-core {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: auto;
+  min-height: 0;
+  gap: 6px;
+}
 
 .flame-mark { font-size: 30px; line-height: 1; }
 
@@ -528,16 +552,84 @@ body {
 
 /* ------------------------------------------------------------ 旧类名兼容层 */
 
-.main-col { display: grid; gap: 14px; padding: 18px; }
+.main-col { display: grid; gap: 14px; padding: 18px; min-width: 0; }
 
 .page-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
 .page-head h1 { margin: 0; font-size: 19px; letter-spacing: 0.04em; }
 .page-head .sub { margin: 3px 0 0; color: var(--text-2); font-size: 12px; }
 
-.card { background: var(--panel); border: 1px solid var(--seam); padding: 16px; }
+.card { background: var(--panel); border: 1px solid var(--seam); padding: 16px; min-width: 0; }
 
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .card-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.06em; }
+
+.target-list-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.target-list-title { min-width: 0; }
+.target-list-title h2 { margin: 0; font-size: 13px; letter-spacing: 0.06em; }
+.target-paused-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 7px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--edge);
+  background: #17120e;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.target-paused-toggle:hover,
+.target-paused-toggle.is-active {
+  border-color: var(--flame-deep);
+  background: var(--flame-dim);
+  color: var(--flame);
+}
+.target-paused-toggle:focus-within {
+  outline: 1px solid var(--flame);
+  outline-offset: 2px;
+}
+.target-paused-toggle input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--edge);
+  background: transparent;
+  cursor: pointer;
+  transition: none;
+}
+.target-paused-toggle input[type='checkbox']:checked {
+  border-color: var(--flame);
+  background: var(--flame);
+}
+.target-paused-toggle input[type='checkbox']:checked::after {
+  content: '✓';
+  position: absolute;
+  inset: 0;
+  color: #1c1208;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+.target-paused-label,
+.target-paused-count { flex: none; }
+.target-paused-count { font-family: var(--mono); color: inherit; }
 
 .link-btn {
   background: transparent;
@@ -569,6 +661,32 @@ body {
 }
 .table td { padding: 7px 8px 7px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.035); }
 .table tr:hover td { background: rgba(255, 255, 255, 0.015); }
+
+.target-table-wrap {
+  min-width: 0;
+  max-height: min(640px, max(360px, calc(100vh - 280px)));
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge) var(--panel);
+  background: transparent;
+}
+.target-table-wrap::-webkit-scrollbar { width: 10px; height: 10px; }
+.target-table-wrap::-webkit-scrollbar-track { background: var(--panel); }
+.target-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--seam);
+  border: 2px solid var(--panel);
+}
+.target-table-wrap::-webkit-scrollbar-thumb:hover { background: var(--edge); }
+.target-table-wrap .table { min-width: 780px; }
+.target-table-wrap .table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  box-shadow: 0 1px 0 var(--line);
+}
 
 .progress-meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-2); margin-bottom: 5px; }
 .progress-meta b { color: var(--flame); }
@@ -846,7 +964,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 }
 
 @media (max-width: 860px) {
-  .app { grid-template-columns: 64px 1fr; }
+  .app { grid-template-columns: 64px minmax(0, 1fr); }
   .side-brand .name,
   .side-brand .sub-name,
   .side-section-label,
@@ -860,6 +978,14 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   }
   .stat-group { grid-template-columns: repeat(2, 1fr); }
   .field-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .target-list-head {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .target-paused-toggle { justify-self: start; }
 }
 
 /* ------------------------------------------------------------ 可访问性 */
