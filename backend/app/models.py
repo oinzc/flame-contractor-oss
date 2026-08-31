@@ -92,6 +92,16 @@ class Account(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class AppSetting(SQLModel, table=True):
+    """进程级应用设置；值使用字符串保存，便于后续扩展而无需改表结构。"""
+
+    __tablename__ = "app_setting"
+
+    key: str = Field(primary_key=True, max_length=64)
+    value: str = Field(max_length=255)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class MessageTemplate(SQLModel, table=True):
     __tablename__ = "message_template"
 

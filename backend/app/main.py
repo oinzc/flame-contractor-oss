@@ -48,6 +48,9 @@ def create_app(
                 failure_streak_limit=settings.failure_streak_limit,
             )
             sched.start()
+        else:
+            # 注入测试/自定义调度器时也恢复数据库中的全局暂停状态。
+            sched.load_persisted_state()
         app.state.scheduler = sched
         yield
         if sched is not None:

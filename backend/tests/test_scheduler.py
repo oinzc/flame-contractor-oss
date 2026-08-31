@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from app.models import (
     Account,
     AccountStatus,
+    AppSetting,
     JobStatus,
     ScheduleStatus,
     SendJob,
@@ -248,6 +249,31 @@ def test_paused_stops_dispatch(engine):
     result = asyncio.run(sched.tick())
     assert calls == []
     assert result == {"dispatched": 0}
+
+
+def test_paused_state_persists_across_scheduler_instances(engine):
+    first = Scheduler(engine, settings=None, loop_interval=0)
+    assert first.paused is False
+
+    first.pause()
+    with Session(engine) as session:
+        setting = session.get(AppSetting, "scheduler.paused")
+        assert setting is not None
+        assert setting.value == "1"
+
+    second = Scheduler(engine, settings=None, loop_interval=0)
+
+    async def start_and_stop() -> None:
+        second.start()
+        assert second.paused is True
+        await second.stop()
+
+    asyncio.run(start_and_stop())
+
+    second.resume()
+    third = Scheduler(engine, settings=None, loop_interval=0)
+    third.load_persisted_state()
+    assert third.paused is False
 
 
 # ---------------------------------------------------------------- 端到端（真实路由调用 run_send）

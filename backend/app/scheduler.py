@@ -27,6 +27,7 @@ from .core.config import Settings
 from .models import (
     Account,
     AccountStatus,
+    AppSetting,
     ScheduleStatus,
     SendJob,
     SendSchedule,
@@ -48,6 +49,8 @@ NETWORK_DEFERRAL_BACKOFF = 60.0
 NETWORK_MAX_DEFERRALS = 5
 # 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰）；dispatch=到点即发（旧行为）
 WINDOW_EXPIRY_POLICY_DEFAULT = "skip"
+# 全局自动调度暂停状态的持久化键；值为 "1" 表示暂停，"0" 表示运行。
+SCHEDULER_PAUSED_SETTING_KEY = "scheduler.paused"
 
 # 可继续调度/重排的状态
 _RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
@@ -123,10 +126,34 @@ class Scheduler:
     def running_accounts(self) -> set[str]:
         return set(self._running)
 
+    def load_persisted_state(self) -> None:
+        """从数据库恢复全局调度开关；应在数据库迁移完成后调用。"""
+        with Session(self._engine) as session:
+            setting = session.get(AppSetting, SCHEDULER_PAUSED_SETTING_KEY)
+            self._paused = setting is not None and setting.value == "1"
+
+    def _persist_paused(self, paused: bool) -> None:
+        with Session(self._engine) as session:
+            setting = session.get(AppSetting, SCHEDULER_PAUSED_SETTING_KEY)
+            if setting is None:
+                setting = AppSetting(
+                    key=SCHEDULER_PAUSED_SETTING_KEY,
+                    value="1" if paused else "0",
+                )
+            else:
+                setting.value = "1" if paused else "0"
+                setting.updated_at = utc_now()
+            session.add(setting)
+            session.commit()
+
     def pause(self) -> None:
         self._paused = True
+        # 暂停失败时保持内存中的“暂停”状态，避免故障时继续自动发送。
+        self._persist_paused(True)
 
     def resume(self) -> None:
+        # 先写库，只有持久化成功后才恢复发送；失败时保持暂停以确保安全。
+        self._persist_paused(False)
         self._paused = False
 
     # ---------------------------------------------------------------- 窗口换算
@@ -601,6 +628,7 @@ class Scheduler:
     def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
+        self.load_persisted_state()
         self._stopping = False
         self._task = asyncio.create_task(self._loop())
 
