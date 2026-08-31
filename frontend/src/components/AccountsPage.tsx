@@ -3,7 +3,6 @@ import { api, ApiError } from '../api'
 import type { Account, DryRunRead, LoginStatus } from '../types'
 import { ACCOUNT_STATUS_LABELS, ACCOUNT_STATUS_TONES, formatDateTime } from '../lib/format'
 import StatusBadge from './StatusBadge'
-import SendModal from './SendModal'
 
 const DRY_RUN_LABELS: Record<string, string> = {
   found: '已定位 · 未发送',
@@ -15,17 +14,16 @@ interface Props {
   accounts: Account[]
   onChanged: () => void
   onCreateAccount: () => void
+  onOpenSend: (account: Account) => void
 }
 
-export default function AccountsPage({ accounts, onChanged, onCreateAccount }: Props) {
+export default function AccountsPage({ accounts, onChanged, onCreateAccount, onOpenSend }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [loginStates, setLoginStates] = useState<Record<string, LoginStatus>>({})
   const [qrStates, setQrStates] = useState<Record<string, LoginStatus>>({})
   const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
-  const [sendAccount, setSendAccount] = useState<Account | null>(null)
-  const [sendMinimized, setSendMinimized] = useState(false)
   const timersRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
@@ -422,10 +420,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
                     <button
                       className="btn small"
                       type="button"
-                      onClick={() => {
-                        setSendAccount(account)
-                        setSendMinimized(false)
-                      }}
+                      onClick={() => onOpenSend(account)}
                     >
                       立即发送
                     </button>
@@ -461,19 +456,6 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount }: P
         </div>
       )}
 
-      {sendAccount && (
-        <SendModal
-          account={sendAccount}
-          minimized={sendMinimized}
-          onClose={() => {
-            setSendAccount(null)
-            setSendMinimized(false)
-          }}
-          onMinimize={() => setSendMinimized(true)}
-          onRestore={() => setSendMinimized(false)}
-          onChanged={() => void onChanged()}
-        />
-      )}
     </div>
   )
 }

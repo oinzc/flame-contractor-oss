@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type { Account, SendPreviewRead, SendProgress, SendRead } from '../types'
+import TaskDock from './TaskDock'
 
 const PROGRESS_POLL_INTERVAL = 800
 
@@ -31,6 +32,7 @@ const RESULT_TONES: Record<string, string> = {
 interface Props {
   account: Account
   minimized: boolean
+  offset?: boolean
   onClose: () => void
   onMinimize: () => void
   onRestore: () => void
@@ -112,6 +114,7 @@ interface SendDockProps {
   sending: boolean
   result: SendRead | null
   error: string | null
+  offset?: boolean
   onRestore: () => void
   onClose: () => void
 }
@@ -123,6 +126,7 @@ function SendDock({
   sending,
   result,
   error,
+  offset = false,
   onRestore,
   onClose,
 }: SendDockProps) {
@@ -134,62 +138,38 @@ function SendDock({
   const statusLabel = completed ? '100%' : failed ? '需查看' : '进行中'
 
   return (
-    <aside
-      className={`send-dock${failed ? ' is-error' : ''}${completed ? ' is-complete' : ''}`}
-      aria-label={`发送任务${account.displayName}`}
-    >
-      <div className="send-dock-head">
-        <div className="send-dock-identity">
-          <span className="send-dock-mark" aria-hidden="true">
-            ↗
-          </span>
-          <div>
-            <span className="send-dock-kicker">{completed ? 'SEND COMPLETE' : 'BACKGROUND SEND'}</span>
-            <strong>{account.displayName}</strong>
-          </div>
-        </div>
-        <span className="send-dock-state">{statusLabel}</span>
-      </div>
-
-      <div className="send-dock-progress">
-        <div className="send-progress-meta">
-          <span>
-            已处理 <b>{snapshot.completed}</b> / {snapshot.total || fallbackTotal}
-          </span>
-          <b>{percent}%</b>
-        </div>
-        <ProgressBar progress={snapshot} fallbackTotal={fallbackTotal} compact />
-      </div>
-
-      <div className="send-dock-current">
-        <span className={`send-live-dot${failed ? ' failed' : completed ? ' complete' : ''}`} aria-hidden="true" />
-        <div>
-          <span>{error ?? snapshot.stage}</span>
-          <strong title={currentTarget}>{currentTarget}</strong>
-        </div>
-      </div>
-
-      <p className="send-dock-note">
-        {sending ? '大面板可以安全收起，发送仍由后端继续执行。' : result ? resultSummary(result.overall) : '任务已停止，可打开详情重试。'}
-      </p>
-
-      <div className="send-dock-actions">
-        <button className="btn small" type="button" onClick={onRestore}>
-          查看详情
-        </button>
-        {!sending && failed && (
-          <button className="btn ghost small" type="button" onClick={onClose}>
-            关闭任务
-          </button>
-        )}
-      </div>
-    </aside>
+    <TaskDock
+      kind="send"
+      account={account}
+      mark="↗"
+      kicker={completed ? 'SEND COMPLETE' : 'BACKGROUND SEND'}
+      statusLabel={statusLabel}
+      percent={percent}
+      progressLabel={`已处理 ${snapshot.completed} / ${snapshot.total || fallbackTotal} 位好友`}
+      stage={error ?? snapshot.stage}
+      currentItem={currentTarget}
+      note={
+        sending
+          ? '大面板可以安全收起，发送仍由后端继续执行。'
+          : result
+            ? resultSummary(result.overall)
+            : '任务已停止，可打开详情重试。'
+      }
+      failed={failed}
+      complete={completed}
+      offset={offset}
+      onRestore={onRestore}
+      restoreLabel="查看详情"
+      onClose={!sending ? onClose : undefined}
+      closeLabel="关闭任务"
+    />
   )
 }
 
 export default function SendModal({
   account,
   minimized,
+  offset = false,
   onClose,
   onMinimize,
   onRestore,
@@ -349,6 +329,7 @@ export default function SendModal({
         sending={sending}
         result={result}
         error={error}
+        offset={offset}
         onRestore={handleRestore}
         onClose={onClose}
       />

@@ -70,7 +70,7 @@ export default function TargetsPage({
       setBatchResult(null)
       return
     }
-    if (scanTask.status === 'completed') {
+    if (scanTask.status === 'completed' || scanTask.status === 'interrupted') {
       setScanEntries(scanTask.entries)
       setBatchResult(scanTask.batchResult)
     } else {
@@ -89,8 +89,8 @@ export default function TargetsPage({
   const scanLoading = scanStarting || scanTask?.status === 'running'
   const displayedScanError =
     scanError ??
-    (selectedScanTask?.status === 'failed'
-      ? selectedScanTask.detail ?? '扫描失败，请重新发起'
+    (selectedScanTask?.status === 'failed' || selectedScanTask?.status === 'interrupted'
+      ? selectedScanTask.detail ?? '扫描未完成，请重新发起'
       : selectedScanTask?.syncError ?? null)
 
   // 抖音官方火花天数就是续火对象的判定信号；火花将熄的（消息提示）也算
@@ -419,7 +419,7 @@ export default function TargetsPage({
             </p>
             {selectedScanTask && (
               <section
-                className={`scan-inline-progress${selectedScanTask.status === 'failed' ? ' is-error' : ''}${selectedScanTask.status === 'completed' ? ' is-complete' : ''}`}
+                className={`scan-inline-progress${selectedScanTask.status === 'failed' || selectedScanTask.status === 'interrupted' ? ' is-error' : ''}${selectedScanTask.status === 'completed' ? ' is-complete' : ''}`}
                 aria-live="polite"
               >
                 <div className="scan-inline-head">
@@ -430,7 +430,9 @@ export default function TargetsPage({
                         ? '正在读取会话列表'
                         : selectedScanTask.status === 'completed'
                           ? '会话列表扫描完成'
-                          : '会话列表扫描未完成'}
+                          : selectedScanTask.status === 'interrupted'
+                            ? '扫描已中断，保留部分结果'
+                            : '会话列表扫描未完成'}
                     </strong>
                     <p>
                       {selectedScanTask.syncStatus === 'pending'
@@ -440,7 +442,7 @@ export default function TargetsPage({
                   </div>
                   <b>
                     {scanProgressPercent(selectedScanTask) === null
-                      ? '读取中'
+                      ? selectedScanTask.status === 'interrupted' ? '已中断' : '读取中'
                       : `${scanProgressPercent(selectedScanTask)}%`}
                   </b>
                 </div>
@@ -449,10 +451,19 @@ export default function TargetsPage({
                   <span>{scanProgressCount(selectedScanTask)}</span>
                   <span>
                     {selectedScanTask.currentItem ??
-                      (selectedScanTask.status === 'running' ? '等待下一段列表…' : '结果已就绪')}
+                      (selectedScanTask.status === 'running'
+                        ? '等待下一段列表…'
+                        : selectedScanTask.status === 'interrupted'
+                          ? '已保存已发现的部分会话'
+                          : '结果已就绪')}
                   </span>
                 </div>
               </section>
+            )}
+            {selectedScanTask?.status === 'interrupted' && scanEntries !== null && (
+              <p className="scan-recovery-note">
+                这是后端重启前保存的部分结果，仅供查看或手动导入；重新扫描可获取完整会话列表。
+              </p>
             )}
             <div className="form-grid">
                 {batchResult && (
