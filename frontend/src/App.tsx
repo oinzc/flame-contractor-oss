@@ -216,10 +216,17 @@ export default function App() {
         .map((target) => target.platformUserId)
         .filter((platformUserId): platformUserId is string => Boolean(platformUserId)),
     )
+    const existingConversationIds = new Set(
+      accountTargets
+        .map((target) => target.platformConversationId)
+        .filter((conversationId): conversationId is string => Boolean(conversationId)),
+    )
     const existingEntries = task.entries.filter(
       (entry) =>
         existingNicknames.has(entry.title) ||
-        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)),
+        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)) ||
+        (entry.platformConversationId != null &&
+          existingConversationIds.has(entry.platformConversationId)),
     )
     let batchResult: TargetBatchResult = {
       created: [],
@@ -229,6 +236,9 @@ export default function App() {
       identityBound: [],
       identityUnresolved: [],
       identityAmbiguous: [],
+      conversationBound: [],
+      conversationUnresolved: [],
+      conversationAmbiguous: [],
     }
 
     try {
@@ -240,7 +250,10 @@ export default function App() {
             nickname: entry.title,
             platformUserId: entry.platformUserId,
             platformHandle: entry.platformHandle,
+            platformConversationId: entry.platformConversationId,
+            conversationType: entry.conversationType,
             identityStatus: entry.identityStatus,
+            conversationStatus: entry.conversationStatus,
             streakDays: entry.streakDays ?? undefined,
             sparkKind: entry.streakKind,
             sparkLabel: entry.streakLabel,

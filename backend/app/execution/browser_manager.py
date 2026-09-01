@@ -905,6 +905,7 @@ class BrowserManager:
                     opened = await chat.open_conversation(
                         target.nickname_snapshot,
                         target.platform_user_id,
+                        target.platform_conversation_id,
                     )
                     if not opened.opened:
                         hint = (
@@ -932,7 +933,7 @@ class BrowserManager:
                                 opened.title,
                                 (
                                     "已打开会话，但稳定抖音身份无法核对，已阻止发送"
-                                    if target.platform_user_id
+                                    if target.platform_user_id or target.platform_conversation_id
                                     else None
                                 ),
                             )
@@ -1194,6 +1195,7 @@ class BrowserManager:
             sticker_fallback_index = template.sticker_fallback_index if template_ok else None
             nickname = current.nickname_snapshot
             platform_user_id = current.platform_user_id
+            platform_conversation_id = current.platform_conversation_id
             streak_days = current.streak_days
             pool_item = None
             pool_content = None
@@ -1244,7 +1246,11 @@ class BrowserManager:
                 return {"target": nickname, "status": "duplicate_unknown",
                         "detail": "今日结果未确认，已跳过以防重复", "failure_class": None, "message": message}
 
-        opened = await chat.open_conversation(nickname, platform_user_id)
+        opened = await chat.open_conversation(
+            nickname,
+            platform_user_id,
+            platform_conversation_id,
+        )
         if not opened.opened:
             screenshot = await self._capture_shot(chat, account.id, "target_not_found")
             self._finalize_send(
@@ -1265,7 +1271,7 @@ class BrowserManager:
             )
             detail = (
                 "已打开会话，但稳定抖音身份无法核对，已阻止发送"
-                if platform_user_id
+                if platform_user_id or platform_conversation_id
                 else f"右侧标题为「{opened.title}」，与好友名不一致"
             )
             return {"target": nickname, "status": "ambiguous",

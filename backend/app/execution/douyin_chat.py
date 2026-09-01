@@ -24,6 +24,11 @@ IDENTITY_RESPONSE_PATHS = (
     "/aweme/v1/web/user/profile/other",
     "/aweme/v1/web/user/profile/scene",
 )
+# 会话列表的丰富数据由 imapi 以 protobuf 返回；其中每个群会话对象同时带有
+# conversation_id、会话类型和展示名称。只监听初始化响应，不保存完整响应体。
+CONVERSATION_RESPONSE_PATHS = (
+    "/v1/message/get_message_by_init",
+)
 IDENTITY_LABEL_FIELDS = ("remark_name", "nickname", "unique_id", "short_id")
 IDENTITY_ID_FIELDS = ("sec_uid", "sec_user_id", "uid", "user_id")
 
@@ -44,6 +49,8 @@ class ConversationOpen:
     exact: bool
     platform_user_id: str | None = None
     identity_verified: bool = False
+    platform_conversation_id: str | None = None
+    conversation_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,159 @@ class IdentityMatch:
             "identity_candidate_count": self.candidate_count,
             "identity_detail": self.detail,
         }
+
+
+@dataclass(frozen=True)
+class ConversationRecord:
+    """抖音会话初始化响应中的群会话身份。"""
+
+    platform_conversation_id: str
+    title: str
+    conversation_type: str = "group"
+
+
+@dataclass(frozen=True)
+class ConversationMatch:
+    """会话标题与群会话唯一 ID 的安全匹配结果。"""
+
+    status: str
+    platform_conversation_id: str | None = None
+    conversation_type: str | None = None
+    candidate_count: int = 0
+    detail: str | None = None
+
+    def as_entry_fields(self) -> dict[str, object]:
+        return {
+            "platform_conversation_id": self.platform_conversation_id,
+            "conversation_type": self.conversation_type,
+            "conversation_status": self.status,
+            "conversation_candidate_count": self.candidate_count,
+            "conversation_detail": self.detail,
+        }
+
+
+def _read_proto_varint(data: bytes, offset: int) -> tuple[int, int] | None:
+    """读取一个 protobuf varint；畸形数据返回 None，扫描按未知处理。"""
+    value = 0
+    shift = 0
+    while offset < len(data) and shift < 70:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            return value, offset
+        shift += 7
+    return None
+
+
+def _decode_proto_fields(data: bytes) -> list[tuple[int, int, int | bytes]] | None:
+    """解码当前 protobuf 消息的一层字段，不依赖抖音私有生成代码。"""
+    fields: list[tuple[int, int, int | bytes]] = []
+    offset = 0
+    while offset < len(data):
+        key_result = _read_proto_varint(data, offset)
+        if key_result is None:
+            return None
+        key, offset = key_result
+        field_number, wire_type = key >> 3, key & 0x07
+        if field_number <= 0:
+            return None
+        if wire_type == 0:
+            value_result = _read_proto_varint(data, offset)
+            if value_result is None:
+                return None
+            value, offset = value_result
+        elif wire_type == 1:
+            if offset + 8 > len(data):
+                return None
+            value = data[offset : offset + 8]
+            offset += 8
+        elif wire_type == 2:
+            length_result = _read_proto_varint(data, offset)
+            if length_result is None:
+                return None
+            length, offset = length_result
+            if length > len(data) - offset:
+                return None
+            value = data[offset : offset + length]
+            offset += length
+        elif wire_type == 5:
+            if offset + 4 > len(data):
+                return None
+            value = data[offset : offset + 4]
+            offset += 4
+        else:
+            # 当前响应没有使用 group wire type；遇到未知结构宁可不绑定。
+            return None
+        fields.append((field_number, wire_type, value))
+    return fields
+
+
+def _iter_proto_messages(data: bytes, depth: int = 0):
+    """遍历可完整解码的嵌套消息；只用于提取已知形状，失败即跳过。"""
+    fields = _decode_proto_fields(data)
+    if fields is None:
+        return
+    yield fields
+    if depth >= 10:
+        return
+    for _field_number, wire_type, value in fields:
+        if wire_type == 2 and isinstance(value, bytes) and 1 < len(value) <= 4_000_000:
+            yield from _iter_proto_messages(value, depth + 1)
+
+
+def _proto_text(value: int | bytes) -> str | None:
+    if not isinstance(value, bytes):
+        return None
+    try:
+        text = value.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    if not text or len(text) > 80 or any(ord(char) < 32 for char in text):
+        return None
+    return text
+
+
+def parse_group_conversations(data: bytes) -> list[ConversationRecord]:
+    """从 get_message_by_init protobuf 中提取群会话 ID/名称。
+
+    当前响应的群会话对象具有稳定形状：field 1 是数字字符串 ID，field 2
+    是同一 ID 的 varint，field 3 为 2（群会话），field 5 为展示名称。
+    同时校验 field 1/2，避免把消息中的普通数字或用户 ID 猜成会话 ID。
+    """
+    records: list[ConversationRecord] = []
+    seen: set[tuple[str, str]] = set()
+    for fields in _iter_proto_messages(data):
+        field_1 = [value for number, wire, value in fields if number == 1 and wire == 2]
+        field_2 = [value for number, wire, value in fields if number == 2 and wire == 0]
+        field_3 = [value for number, wire, value in fields if number == 3 and wire == 0]
+        field_5 = [value for number, wire, value in fields if number == 5 and wire == 2]
+        conversation_id = next(
+            (
+                value.decode("ascii")
+                for value in field_1
+                if isinstance(value, bytes)
+                and 15 <= len(value) <= 25
+                and value.isdigit()
+            ),
+            None,
+        )
+        if conversation_id is None or int(conversation_id) not in field_2 or 2 not in field_3:
+            continue
+        title = next((text for value in field_5 if (text := _proto_text(value))), None)
+        if title is None:
+            continue
+        key = conversation_id, title
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append(
+            ConversationRecord(
+                platform_conversation_id=conversation_id,
+                title=title,
+            )
+        )
+    return records
 
 
 @dataclass
@@ -120,6 +280,11 @@ class DouyinChat:
         self._identity_ids_by_label: dict[str, set[str]] = {}
         self._identity_records_by_id: dict[str, IdentityRecord] = {}
         self._identity_tasks: set[asyncio.Task] = set()
+        # 群聊的唯一会话 ID 在 imapi protobuf 中；同名群聊也必须保留集合，
+        # 不能为了方便把一个 ID 猜给另一个同名会话。
+        self._conversation_ids_by_label: dict[str, set[str]] = {}
+        self._conversation_records_by_id: dict[str, ConversationRecord] = {}
+        self._conversation_tasks: set[asyncio.Task] = set()
         on_response = getattr(page, "on", None)
         if callable(on_response):
             try:
@@ -129,16 +294,26 @@ class DouyinChat:
                 pass
 
     def _on_response(self, response) -> None:
-        """异步接收抖音用户信息响应，不把凭据或完整响应保存到本地。"""
+        """异步接收身份响应；只提取必要字段，不把完整响应保存到本地。"""
         url = getattr(response, "url", None)
-        if not isinstance(url, str) or not any(path in url for path in IDENTITY_RESPONSE_PATHS):
+        if not isinstance(url, str):
+            return
+        is_identity_response = any(path in url for path in IDENTITY_RESPONSE_PATHS)
+        is_conversation_response = any(path in url for path in CONVERSATION_RESPONSE_PATHS)
+        if not is_identity_response and not is_conversation_response:
             return
         try:
-            task = asyncio.create_task(self._capture_identity_response(response))
+            capture = (
+                self._capture_identity_response
+                if is_identity_response
+                else self._capture_conversation_response
+            )
+            task = asyncio.create_task(capture(response))
         except RuntimeError:
             return
-        self._identity_tasks.add(task)
-        task.add_done_callback(self._identity_tasks.discard)
+        tasks = self._identity_tasks if is_identity_response else self._conversation_tasks
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     async def _capture_identity_response(self, response) -> None:
         try:
@@ -189,6 +364,23 @@ class DouyinChat:
                 if label is not None:
                     key = self._normalize_identity_label(label)
                     self._identity_ids_by_label.setdefault(key, set()).add(platform_user_id)
+
+    async def _capture_conversation_response(self, response) -> None:
+        try:
+            body = await response.body()
+        except Exception:
+            return
+        if not isinstance(body, bytes):
+            return
+        for record in parse_group_conversations(body):
+            previous = self._conversation_records_by_id.get(record.platform_conversation_id)
+            if previous is not None and previous.title == record.title:
+                continue
+            self._conversation_records_by_id[record.platform_conversation_id] = record
+            key = self._normalize_identity_label(record.title)
+            self._conversation_ids_by_label.setdefault(key, set()).add(
+                record.platform_conversation_id
+            )
 
     @classmethod
     def _iter_identity_records(cls, value):
@@ -286,9 +478,49 @@ class DouyinChat:
         match = self.identity_match_for_label(label)
         return match.platform_user_id if match.status == "bound" else None
 
+    def _conversation_ids_for_label(self, label: str | None) -> set[str]:
+        if not label:
+            return set()
+        return self._conversation_ids_by_label.get(self._normalize_identity_label(label), set())
+
+    def conversation_match_for_label(self, label: str | None) -> ConversationMatch:
+        """按会话展示名返回群聊唯一 ID；同名群聊保持未绑定。"""
+        normalized = self._normalize_identity_label(label) if label else ""
+        ids = self._conversation_ids_for_label(normalized)
+        if not ids:
+            return ConversationMatch(
+                status="not_observed",
+                detail="本次扫描未观察到带唯一 ID 的群会话数据，未猜测绑定",
+            )
+        if len(ids) > 1:
+            return ConversationMatch(
+                status="ambiguous",
+                candidate_count=len(ids),
+                detail="同名对应多个群会话，已阻止自动绑定",
+            )
+        platform_conversation_id = next(iter(ids))
+        record = self._conversation_records_by_id.get(platform_conversation_id)
+        return ConversationMatch(
+            status="bound",
+            platform_conversation_id=platform_conversation_id,
+            conversation_type=record.conversation_type if record else "group",
+            candidate_count=1,
+            detail="通过抖音会话 protobuf 唯一匹配群聊",
+        )
+
+    def platform_conversation_id_for_label(self, label: str | None) -> str | None:
+        """返回唯一可确认的群会话 ID；同名冲突或未采集到时返回 None。"""
+        match = self.conversation_match_for_label(label)
+        return (
+            match.platform_conversation_id
+            if match.status == "bound"
+            else None
+        )
+
     async def _wait_for_identity_updates(self) -> None:
-        while self._identity_tasks:
-            await asyncio.gather(*tuple(self._identity_tasks), return_exceptions=True)
+        while self._identity_tasks or self._conversation_tasks:
+            tasks = tuple(self._identity_tasks | self._conversation_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def _opened_identity_matches(
         self,
@@ -302,6 +534,21 @@ class DouyinChat:
         ids = self._identity_ids_for_label(label)
         if ids == {expected_platform_user_id}:
             return True, expected_platform_user_id
+        if len(ids) == 1:
+            return False, next(iter(ids))
+        return False, None
+
+    def _opened_conversation_matches(
+        self,
+        requested_name: str,
+        right_title: str | None,
+        expected_platform_conversation_id: str,
+    ) -> tuple[bool, str | None]:
+        primary = self._primary_panel_title(right_title)
+        label = requested_name if primary == requested_name else primary
+        ids = self._conversation_ids_for_label(label)
+        if ids == {expected_platform_conversation_id}:
+            return True, expected_platform_conversation_id
         if len(ids) == 1:
             return False, next(iter(ids))
         return False, None
@@ -375,6 +622,7 @@ class DouyinChat:
         self,
         name: str,
         platform_user_id: str | None = None,
+        platform_conversation_id: str | None = None,
     ) -> ConversationOpen:
         # 0) 预热：先滚动列表，让懒加载数据与搜索索引就绪
         try:
@@ -384,7 +632,11 @@ class DouyinChat:
         # 1) 搜索优先：直接搜索昵称，从结果中精确匹配
         try:
             await self.search(name)
-            result = await self._search_and_open(name, platform_user_id)
+            result = await self._search_and_open(
+                name,
+                platform_user_id,
+                platform_conversation_id,
+            )
             if result is not None:
                 return result
         except Exception:
@@ -396,7 +648,11 @@ class DouyinChat:
         except Exception:
             pass
         for _ in range(MAX_LIST_SCROLLS):
-            result = await self._scan_items(name, platform_user_id)
+            result = await self._scan_items(
+                name,
+                platform_user_id,
+                platform_conversation_id,
+            )
             if result.opened:
                 return result
             scroll_element = await self.page.query_selector(_s.CONVERSATION_LIST)
@@ -485,25 +741,35 @@ class DouyinChat:
         self,
         name: str,
         platform_user_id: str | None = None,
+        platform_conversation_id: str | None = None,
     ) -> ConversationOpen | None:
         """搜索后轮询等待结果渲染（首次加载时结果可能晚于固定等待时间）。"""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.search_timeout
         while True:
-            result = await self._scan_items(name, platform_user_id)
+            result = await self._scan_items(
+                name,
+                platform_user_id,
+                platform_conversation_id,
+            )
             if result.opened:
                 return result
             if loop.time() >= deadline:
                 break
             await self._sleep(1.0)
         if await self._try_click_exact_by_text(name):
-            return await self._confirm_opened(name, platform_user_id)
+            return await self._confirm_opened(
+                name,
+                platform_user_id,
+                platform_conversation_id,
+            )
         return None
 
     async def _scan_items(
         self,
         name: str,
         platform_user_id: str | None = None,
+        platform_conversation_id: str | None = None,
     ) -> ConversationOpen:
         identity_mismatch: ConversationOpen | None = None
         for selector in _item_selectors():
@@ -519,8 +785,15 @@ class DouyinChat:
                     await target.click(timeout=2500)
                 except Exception:
                     continue  # 隐藏缓存行等不可点目标，跳过继续扫描
-                opened = await self._confirm_opened(name, platform_user_id)
-                if platform_user_id is None or opened.identity_verified:
+                opened = await self._confirm_opened(
+                    name,
+                    platform_user_id,
+                    platform_conversation_id,
+                )
+                if (
+                    platform_user_id is None
+                    and platform_conversation_id is None
+                ) or opened.identity_verified:
                     return opened
                 # 同名结果可能不止一个：继续核验其它候选，最终仍以稳定 ID 为准。
                 identity_mismatch = opened
@@ -530,6 +803,7 @@ class DouyinChat:
         self,
         name: str,
         platform_user_id: str | None = None,
+        platform_conversation_id: str | None = None,
     ) -> ConversationOpen:
         """点击后轮询右侧标题确认（SPA 切换有延迟，同 unmev 的 _confirm_opened）。"""
         loop = asyncio.get_running_loop()
@@ -560,6 +834,30 @@ class DouyinChat:
                         exact=False,
                         platform_user_id=observed,
                     )
+            elif platform_conversation_id is not None:
+                await self._wait_for_identity_updates()
+                matched, observed = self._opened_conversation_matches(
+                    name,
+                    right_title,
+                    platform_conversation_id,
+                )
+                if matched:
+                    return ConversationOpen(
+                        opened=True,
+                        title=right_title,
+                        exact=True,
+                        platform_conversation_id=observed,
+                        conversation_type="group",
+                        identity_verified=True,
+                    )
+                if observed is not None:
+                    return ConversationOpen(
+                        opened=True,
+                        title=right_title,
+                        exact=False,
+                        platform_conversation_id=observed,
+                        conversation_type="group",
+                    )
             elif primary == name:
                 return ConversationOpen(opened=True, title=right_title, exact=True)
             if loop.time() >= deadline:
@@ -568,6 +866,12 @@ class DouyinChat:
                     title=right_title,
                     exact=False,
                     platform_user_id=self.platform_user_id_for_label(primary),
+                    platform_conversation_id=self.platform_conversation_id_for_label(primary),
+                    conversation_type=(
+                        "group"
+                        if self.platform_conversation_id_for_label(primary)
+                        else None
+                    ),
                 )
             await self._sleep(0.5)
 
@@ -660,7 +964,9 @@ class DouyinChat:
                 title_element = await item.query_selector(_s.CONVERSATION_TITLE)
                 if title_element is None:
                     continue
-                title = ((await title_element.inner_text()) or "").strip()
+                title = self._first_non_empty_line(
+                    (await title_element.inner_text()) or ""
+                )
                 if not title or title in seen:
                     continue
                 seen.add(title)
@@ -715,6 +1021,7 @@ class DouyinChat:
         await self._wait_for_identity_updates()
         for entry in entries:
             entry.update(self.identity_match_for_label(entry["title"]).as_entry_fields())
+            entry.update(self.conversation_match_for_label(entry["title"]).as_entry_fields())
         if progress_callback is not None:
             await progress_callback(len(entries), last_round, None, list(entries))
         return entries

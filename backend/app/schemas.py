@@ -181,12 +181,18 @@ class TemplateRead(APIBase):
 
 # ---------------------------------------------------------------- target
 
+ConversationType = Literal["user", "group"]
+IdentityStatus = Literal["bound", "ambiguous", "not_observed"]
+
 class TargetCreate(APIBase):
     account_id: str
     nickname_snapshot: str = Field(min_length=1, max_length=80)
     platform_user_id: str | None = Field(default=None, max_length=128)
     # 抖音公开展示号（unique_id/short_id），仅用于界面显示，不参与发送核对。
     platform_handle: str | None = Field(default=None, max_length=128)
+    # 群聊使用会话唯一 ID；不与用户 sec_uid 混用。
+    platform_conversation_id: str | None = Field(default=None, max_length=128)
+    conversation_type: ConversationType | None = None
     template_id: str | None = None
     streak_days: int = Field(default=0, ge=0)
 
@@ -206,13 +212,27 @@ class TargetCreate(APIBase):
         value = value.strip()
         return value or None
 
-    @field_validator("platform_handle")
+    @field_validator("platform_handle", "platform_conversation_id")
     @classmethod
-    def _strip_platform_handle(cls, value: str | None) -> str | None:
+    def _strip_platform_identity_value(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
         return value or None
+
+    @model_validator(mode="after")
+    def _validate_identity_kind(self):
+        if self.platform_user_id and self.platform_conversation_id:
+            raise ValueError("platformUserId 与 platformConversationId 不能同时填写")
+        if self.conversation_type == "group" and self.platform_user_id:
+            raise ValueError("群聊只能填写 platformConversationId，不能填写 platformUserId")
+        if self.conversation_type == "user" and self.platform_conversation_id:
+            raise ValueError("用户会话不能填写 platformConversationId")
+        if self.platform_conversation_id and self.conversation_type is None:
+            self.conversation_type = "group"
+        elif self.platform_user_id and self.conversation_type is None:
+            self.conversation_type = "user"
+        return self
 
 
 class TargetPatch(APIBase):
@@ -229,21 +249,39 @@ class BatchTargetItem(APIBase):
     platform_user_id: str | None = Field(default=None, max_length=128)
     # unique_id/short_id 等可读平台号；不作为发送安全核对键。
     platform_handle: str | None = Field(default=None, max_length=128)
+    # 群聊会话唯一 ID；与 platform_user_id 二选一，由扫描自动填充。
+    platform_conversation_id: str | None = Field(default=None, max_length=128)
+    conversation_type: ConversationType | None = None
     # 扫描身份诊断：仅用于让导入结果解释「为何没有写入稳定身份」。
-    identity_status: Literal["bound", "ambiguous", "not_observed"] | None = None
+    identity_status: IdentityStatus | None = None
+    conversation_status: IdentityStatus | None = None
     # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
     streak_days: int | None = Field(default=None, ge=0)
     # 扫描读到的抖音官方状态：只作为展示快照，不覆盖本地 streak_days
     spark_kind: str | None = Field(default=None, max_length=16)
     spark_label: str | None = Field(default=None, max_length=64)
 
-    @field_validator("platform_user_id", "platform_handle")
+    @field_validator("platform_user_id", "platform_handle", "platform_conversation_id")
     @classmethod
     def _strip_platform_identity(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
         return value or None
+
+    @model_validator(mode="after")
+    def _validate_identity_kind(self):
+        if self.platform_user_id and self.platform_conversation_id:
+            raise ValueError("platformUserId 与 platformConversationId 不能同时填写")
+        if self.conversation_type == "group" and self.platform_user_id:
+            raise ValueError("群聊只能填写 platformConversationId，不能填写 platformUserId")
+        if self.conversation_type == "user" and self.platform_conversation_id:
+            raise ValueError("用户会话不能填写 platformConversationId")
+        if self.platform_conversation_id and self.conversation_type is None:
+            self.conversation_type = "group"
+        elif self.platform_user_id and self.conversation_type is None:
+            self.conversation_type = "user"
+        return self
 
 
 class TargetBatchCreate(APIBase):
@@ -264,11 +302,18 @@ class TargetBatchCreate(APIBase):
                 "nickname": item.nickname.strip(),
                 "platform_user_id": item.platform_user_id,
                 "platform_handle": item.platform_handle,
+                "platform_conversation_id": item.platform_conversation_id,
+                "conversation_type": item.conversation_type,
                 "streak_days": item.streak_days,
             }
             # 保留调用方是否真的携带了官方快照字段；旧客户端只传昵称时，
             # 不能被误判成「清空已有官方状态」的刷新请求。
-            for field in ("spark_kind", "spark_label", "identity_status"):
+            for field in (
+                "spark_kind",
+                "spark_label",
+                "identity_status",
+                "conversation_status",
+            ):
                 if field in item.model_fields_set:
                     data[field] = getattr(item, field)
             stripped.append(BatchTargetItem(**data))
@@ -288,6 +333,9 @@ class TargetBatchRead(APIBase):
     identity_bound: list[str] = []
     identity_unresolved: list[str] = []
     identity_ambiguous: list[str] = []
+    conversation_bound: list[str] = []
+    conversation_unresolved: list[str] = []
+    conversation_ambiguous: list[str] = []
 
 
 class TargetRead(APIBase):
@@ -295,6 +343,8 @@ class TargetRead(APIBase):
     account_id: str
     platform_user_id: str | None
     platform_handle: str | None
+    platform_conversation_id: str | None
+    conversation_type: ConversationType | None
     nickname_snapshot: str
     template_id: str | None
     enabled: bool
@@ -398,10 +448,15 @@ class ScanChatItem(APIBase):
     title: str
     platform_user_id: str | None = None
     platform_handle: str | None = None
-    identity_status: Literal["bound", "ambiguous", "not_observed"] = "not_observed"
+    platform_conversation_id: str | None = None
+    conversation_type: ConversationType | None = None
+    identity_status: IdentityStatus = "not_observed"
     identity_source: Literal["remark_name", "nickname", "unique_id", "short_id"] | None = None
     identity_candidate_count: int = Field(default=0, ge=0)
     identity_detail: str | None = None
+    conversation_status: IdentityStatus = "not_observed"
+    conversation_candidate_count: int = Field(default=0, ge=0)
+    conversation_detail: str | None = None
     preview: str = ""
     streak_days: int | None = None
     streak_kind: str | None = None

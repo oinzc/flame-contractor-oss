@@ -49,6 +49,9 @@ erDiagram
     string id PK
     string account_id FK
     string platform_user_id
+    string platform_handle
+    string platform_conversation_id
+    string conversation_type
     string nickname_snapshot
     string template_id FK
     boolean enabled
@@ -138,6 +141,8 @@ erDiagram
 - 外键 `template_id → message_template.id`，可空；
 - 展示名称回退唯一：`(account_id, nickname_snapshot)`；
 - 稳定身份唯一：`(account_id, platform_user_id)`；SQLite 允许同账号存在多个 `NULL` 稳定 ID，非空 ID 不可重复；
+- 群会话稳定身份唯一：`(account_id, platform_conversation_id)`；群聊使用抖音会话 protobuf 的 ID，不能与用户 `platform_user_id` 混用；
+- `conversation_type` 取值为 `user`/`group`（历史用户记录可为空）；同名群聊只有在会话 ID 唯一时才自动绑定，同名冲突保留为空；
 - `streak_days >= 0` 由 API 和数据库 Check 共同限制。
 
 ### message_template

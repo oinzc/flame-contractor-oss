@@ -966,6 +966,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .field label { font-size: 10.5px; letter-spacing: 0.1em; color: var(--text-2); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .form-grid { display: grid; gap: 12px; }
+.form-grid > * { min-width: 0; }
 .form-actions { display: flex; gap: 8px; }
 .form-error { border: 1px solid var(--red); background: rgba(255, 83, 70, 0.08); color: var(--red); padding: 8px 10px; font-size: 12px; }
 
@@ -1471,6 +1472,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 }
 
 /* 扫描勾选列表（好友批量导入候选） */
+.scan-pick-results { min-width: 0; grid-template-columns: minmax(0, 1fr); }
 .pick-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .pick-toolbar .pick-search { flex: 1; min-width: 160px; width: auto; }
 .pick-switch {
@@ -1485,6 +1487,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .pick-switch input[type='checkbox'] { width: auto; margin: 0; accent-color: var(--flame); }
 
 .pick-list {
+  width: 100%;
+  min-width: 0;
   max-height: 320px;
   overflow-y: auto;
   border: 1px solid var(--seam);
@@ -1494,6 +1498,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .pick-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
+  min-width: 0;
   gap: 10px;
   align-items: center;
   padding: 6px 10px;
@@ -1506,6 +1511,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .pick-row.occupied { opacity: 0.5; cursor: default; }
 .pick-row.occupied:hover { background: transparent; }
 .pick-row input[type='checkbox'] { width: auto; margin: 0; accent-color: var(--flame); }
+.pick-row .pick-name,
+.pick-row .pick-meta { min-width: 0; }
 .pick-row .pick-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1624,6 +1631,37 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
     align-items: start;
   }
   .target-list-actions { justify-content: flex-start; }
+  .pick-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+  .pick-row .pick-meta {
+    grid-column: 2;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    overflow: hidden;
+  }
+  .pick-row .identity-badge { max-width: 100%; }
+  .pick-foot {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .pick-foot .pick-stat {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+  .pick-foot > span:last-child {
+    flex: 1 1 100%;
+    min-width: 0;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .pick-foot .btn {
+    max-width: 100%;
+    white-space: normal;
+  }
   .streak-row {
     grid-template-columns: minmax(0, 1fr) minmax(52px, 0.7fr) minmax(78px, auto);
     gap: 6px;
