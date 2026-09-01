@@ -58,6 +58,12 @@ _DEFAULTS: dict[str, object] = {
         '[class*="SearchPanelitem_name"]',
         '[class*="SearchPanelitem-name"]',
     ),
+    # 搜索结果中只包含实际会话名的高亮节点；不要把未读数/动作文本并入名称。
+    "SEARCH_NAME_EXACT_SELECTORS": (
+        '[class*="SearchPanelitemsearch_highlight"]',
+        '[class*="SearchPanelitemsearch-highlight"]',
+        '[class*="SearchPanelitemsearchHighlight"]',
+    ),
     # 搜索结果的「发消息」按钮
     "SEARCH_CHAT_BTN": 'div[class*="SearchPanelitemchat_btn"]',
     # 右侧会话面板标题，用于打开会话后的二次核对

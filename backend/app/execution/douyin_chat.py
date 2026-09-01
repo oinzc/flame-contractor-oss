@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -23,6 +24,8 @@ IDENTITY_RESPONSE_PATHS = (
     "/aweme/v1/web/user/profile/other",
     "/aweme/v1/web/user/profile/scene",
 )
+IDENTITY_LABEL_FIELDS = ("remark_name", "nickname", "unique_id", "short_id")
+IDENTITY_ID_FIELDS = ("sec_uid", "sec_user_id", "uid", "user_id")
 
 
 def _item_selectors() -> tuple:
@@ -41,6 +44,40 @@ class ConversationOpen:
     exact: bool
     platform_user_id: str | None = None
     identity_verified: bool = False
+
+
+@dataclass(frozen=True)
+class IdentityRecord:
+    """抖音用户信息响应中可用于展示/核对的一条身份快照。"""
+
+    platform_user_id: str
+    platform_handle: str | None = None
+    platform_handle_source: str | None = None
+    nickname: str | None = None
+    remark_name: str | None = None
+
+
+@dataclass(frozen=True)
+class IdentityMatch:
+    """会话标题与平台身份的安全匹配结果。"""
+
+    status: str
+    platform_user_id: str | None = None
+    platform_handle: str | None = None
+    platform_nickname: str | None = None
+    source: str | None = None
+    candidate_count: int = 0
+    detail: str | None = None
+
+    def as_entry_fields(self) -> dict[str, object]:
+        return {
+            "platform_user_id": self.platform_user_id,
+            "platform_handle": self.platform_handle,
+            "identity_status": self.status,
+            "identity_source": self.source,
+            "identity_candidate_count": self.candidate_count,
+            "identity_detail": self.detail,
+        }
 
 
 @dataclass
@@ -81,6 +118,7 @@ class DouyinChat:
         # 抖音会话列表 DOM 当前不暴露用户 ID；页面加载/打开会话时的用户信息
         # 响应会带 sec_uid。一个显示名可能对应多人，因此保留集合，冲突时返回未知。
         self._identity_ids_by_label: dict[str, set[str]] = {}
+        self._identity_records_by_id: dict[str, IdentityRecord] = {}
         self._identity_tasks: set[asyncio.Task] = set()
         on_response = getattr(page, "on", None)
         if callable(on_response):
@@ -109,21 +147,56 @@ class DouyinChat:
             return
         for record in self._iter_identity_records(payload):
             platform_user_id = self._first_non_empty(
-                record.get("sec_uid"),
-                record.get("sec_user_id"),
-                record.get("uid"),
+                self._field_value(record, "sec_uid", "sec_user_id", "secUid", "secUserId"),
+                self._field_value(record, "uid", "user_id", "userId"),
             )
             if platform_user_id is None:
                 continue
-            for field in ("remark_name", "nickname", "unique_id"):
-                label = self._first_non_empty(record.get(field))
+            identity = IdentityRecord(
+                platform_user_id=platform_user_id,
+                platform_handle=(
+                    self._first_non_empty(self._field_value(record, "unique_id", "uniqueId"))
+                    or self._first_non_empty(self._field_value(record, "short_id", "shortId"))
+                ),
+                platform_handle_source=(
+                    "unique_id"
+                    if self._first_non_empty(self._field_value(record, "unique_id", "uniqueId"))
+                    else "short_id"
+                    if self._first_non_empty(self._field_value(record, "short_id", "shortId"))
+                    else None
+                ),
+                nickname=self._first_non_empty(
+                    self._field_value(record, "nickname", "nickName"),
+                ),
+                remark_name=self._first_non_empty(
+                    self._field_value(record, "remark_name", "remarkName"),
+                ),
+            )
+            previous = self._identity_records_by_id.get(platform_user_id)
+            if previous is not None:
+                identity = IdentityRecord(
+                    platform_user_id=platform_user_id,
+                    platform_handle=identity.platform_handle or previous.platform_handle,
+                    platform_handle_source=identity.platform_handle_source or previous.platform_handle_source,
+                    nickname=identity.nickname or previous.nickname,
+                    remark_name=identity.remark_name or previous.remark_name,
+                )
+            self._identity_records_by_id[platform_user_id] = identity
+            for field in IDENTITY_LABEL_FIELDS:
+                label = self._first_non_empty(
+                    self._field_value(record, field, self._camelize_identity_field(field)),
+                )
                 if label is not None:
-                    self._identity_ids_by_label.setdefault(label, set()).add(platform_user_id)
+                    key = self._normalize_identity_label(label)
+                    self._identity_ids_by_label.setdefault(key, set()).add(platform_user_id)
 
     @classmethod
     def _iter_identity_records(cls, value):
         if isinstance(value, dict):
-            if any(cls._first_non_empty(value.get(field)) for field in ("nickname", "remark_name")):
+            if any(
+                cls._field_value(value, field, cls._camelize_identity_field(field))
+                for field in (*IDENTITY_LABEL_FIELDS, *IDENTITY_ID_FIELDS)
+            ):
                 yield value
             for child in value.values():
                 yield from cls._iter_identity_records(child)
@@ -140,15 +213,78 @@ class DouyinChat:
                     return text
         return None
 
+    @staticmethod
+    def _camelize_identity_field(field: str) -> str:
+        head, *tail = field.split("_")
+        return head + "".join(part.capitalize() for part in tail)
+
+    @classmethod
+    def _field_value(cls, value: dict, *fields: str):
+        for field in fields:
+            if field in value:
+                return value.get(field)
+        return None
+
+    @staticmethod
+    def _normalize_identity_label(label: str) -> str:
+        return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", label)).strip()
+
     def _identity_ids_for_label(self, label: str | None) -> set[str]:
         if not label:
             return set()
-        return self._identity_ids_by_label.get(label.strip(), set())
+        return self._identity_ids_by_label.get(self._normalize_identity_label(label), set())
+
+    def identity_match_for_label(self, label: str | None) -> IdentityMatch:
+        """按显示名返回身份匹配诊断；无法唯一确认时明确保持未绑定。"""
+        normalized = self._normalize_identity_label(label) if label else ""
+        ids = self._identity_ids_for_label(normalized)
+        if not ids:
+            return IdentityMatch(
+                status="not_observed",
+                detail="本次扫描未观察到带此名称的用户身份数据，未写入稳定身份",
+            )
+        if len(ids) > 1:
+            return IdentityMatch(
+                status="ambiguous",
+                candidate_count=len(ids),
+                detail="同名对应多个平台用户，已阻止自动绑定",
+            )
+
+        platform_user_id = next(iter(ids))
+        record = self._identity_records_by_id.get(platform_user_id)
+        source = None
+        if record is not None:
+            for field, value in (
+                ("remark_name", record.remark_name),
+                ("nickname", record.nickname),
+                (record.platform_handle_source, record.platform_handle),
+            ):
+                if value and self._normalize_identity_label(value) == normalized:
+                    source = field
+                    break
+        return IdentityMatch(
+            status="bound",
+            platform_user_id=platform_user_id,
+            platform_handle=record.platform_handle if record else None,
+            platform_nickname=record.nickname if record else None,
+            source=source,
+            candidate_count=1,
+            detail=(f"通过{self._identity_source_label(source)}唯一匹配" if source else "已唯一匹配平台身份"),
+        )
+
+    @staticmethod
+    def _identity_source_label(source: str | None) -> str:
+        return {
+            "remark_name": "备注名",
+            "nickname": "平台昵称",
+            "unique_id": "抖音号",
+            "short_id": "抖音号",
+        }.get(source or "", "平台身份")
 
     def platform_user_id_for_label(self, label: str | None) -> str | None:
         """返回唯一可确认的用户 ID；同名冲突或未采集到时返回 None。"""
-        ids = self._identity_ids_for_label(label)
-        return next(iter(ids)) if len(ids) == 1 else None
+        match = self.identity_match_for_label(label)
+        return match.platform_user_id if match.status == "bound" else None
 
     async def _wait_for_identity_updates(self) -> None:
         while self._identity_tasks:
@@ -453,22 +589,31 @@ class DouyinChat:
 
     async def _title_of(self, item) -> str | None:
         """按 unmev 的顺序取标题：搜索行名称节点 → 会话标题子元素 → 整行首行兜底。"""
-        for selector in _s.SEARCH_NAME_SELECTORS:
+        # 搜索结果的完整 title 节点还包含「(未读数)」后缀；优先取抖音实际
+        # 高亮名称节点，避免「老龙帮\n(9)」无法与请求名严格相等。
+        for selector in (*_s.SEARCH_NAME_EXACT_SELECTORS, *_s.SEARCH_NAME_SELECTORS):
             element = await item.query_selector(selector)
             if element is not None:
                 text = await element.inner_text()
                 if text and text.strip():
-                    return text.strip()
+                    return self._first_non_empty_line(text)
         title_element = await item.query_selector(_s.CONVERSATION_TITLE)
         if title_element is not None:
             text = await title_element.inner_text()
             if text and text.strip():
-                return text.strip()
+                return self._first_non_empty_line(text)
         text = await item.inner_text()
         if not text:
             return None
-        first_line = text.splitlines()[0].strip()
-        return first_line or None
+        return self._first_non_empty_line(text)
+
+    @staticmethod
+    def _first_non_empty_line(text: str) -> str | None:
+        for line in text.splitlines():
+            value = line.strip()
+            if value:
+                return value
+        return None
 
     async def visible_titles(self, limit: int = 40) -> list[str]:
         titles: list[str] = []
@@ -479,7 +624,7 @@ class DouyinChat:
                 title_element = await item.query_selector(_s.CONVERSATION_TITLE)
                 if title_element is None:
                     continue
-                title = ((await title_element.inner_text()) or "").strip()
+                title = self._first_non_empty_line((await title_element.inner_text()) or "")
                 if title and title not in seen:
                     seen.add(title)
                     titles.append(title)
@@ -569,7 +714,7 @@ class DouyinChat:
             await self._sleep(0.8)
         await self._wait_for_identity_updates()
         for entry in entries:
-            entry["platform_user_id"] = self.platform_user_id_for_label(entry["title"])
+            entry.update(self.identity_match_for_label(entry["title"]).as_entry_fields())
         if progress_callback is not None:
             await progress_callback(len(entries), last_round, None, list(entries))
         return entries

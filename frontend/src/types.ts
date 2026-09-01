@@ -78,6 +78,8 @@ export interface ContractTarget {
   id: string
   accountId: string
   platformUserId: string | null
+  /** 抖音公开展示号；稳定 sec_uid 只用于安全核对，不直接展示。 */
+  platformHandle: string | null
   nicknameSnapshot: string
   templateId: string | null
   enabled: boolean
@@ -95,6 +97,11 @@ export interface ContractTarget {
 export interface ScanChatEntry {
   title: string
   platformUserId: string | null
+  platformHandle: string | null
+  identityStatus: 'bound' | 'ambiguous' | 'not_observed'
+  identitySource: 'remark_name' | 'nickname' | 'unique_id' | 'short_id' | null
+  identityCandidateCount: number
+  identityDetail: string | null
   preview: string
   streakDays: number | null
   streakKind: string | null
@@ -106,6 +113,9 @@ export interface TargetBatchResult {
   refreshed: string[]
   duplicates: string[]
   failed: string[]
+  identityBound: string[]
+  identityUnresolved: string[]
+  identityAmbiguous: string[]
 }
 
 export interface ScanProgress {
@@ -256,6 +266,7 @@ export interface TargetCreateInput {
   accountId: string
   nicknameSnapshot: string
   platformUserId?: string
+  platformHandle?: string
   templateId?: string
   streakDays: number
 }

@@ -185,6 +185,8 @@ class TargetCreate(APIBase):
     account_id: str
     nickname_snapshot: str = Field(min_length=1, max_length=80)
     platform_user_id: str | None = Field(default=None, max_length=128)
+    # 抖音公开展示号（unique_id/short_id），仅用于界面显示，不参与发送核对。
+    platform_handle: str | None = Field(default=None, max_length=128)
     template_id: str | None = None
     streak_days: int = Field(default=0, ge=0)
 
@@ -204,6 +206,14 @@ class TargetCreate(APIBase):
         value = value.strip()
         return value or None
 
+    @field_validator("platform_handle")
+    @classmethod
+    def _strip_platform_handle(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
 
 class TargetPatch(APIBase):
     """局部更新契约对象。开放火花天数校准、启停与换绑模板（None=解绑）。"""
@@ -215,13 +225,25 @@ class TargetPatch(APIBase):
 
 class BatchTargetItem(APIBase):
     nickname: str
-    # 抖音用户 sec_uid（扫描响应可取得时保存）；缺失时仍走昵称严格匹配
+    # 抖音用户 sec_uid（扫描响应可取得时保存）；缺失时仍走昵称严格匹配。
     platform_user_id: str | None = Field(default=None, max_length=128)
+    # unique_id/short_id 等可读平台号；不作为发送安全核对键。
+    platform_handle: str | None = Field(default=None, max_length=128)
+    # 扫描身份诊断：仅用于让导入结果解释「为何没有写入稳定身份」。
+    identity_status: Literal["bound", "ambiguous", "not_observed"] | None = None
     # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
     streak_days: int | None = Field(default=None, ge=0)
     # 扫描读到的抖音官方状态：只作为展示快照，不覆盖本地 streak_days
     spark_kind: str | None = Field(default=None, max_length=16)
     spark_label: str | None = Field(default=None, max_length=64)
+
+    @field_validator("platform_user_id", "platform_handle")
+    @classmethod
+    def _strip_platform_identity(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
 
 class TargetBatchCreate(APIBase):
@@ -241,11 +263,12 @@ class TargetBatchCreate(APIBase):
             data: dict[str, object] = {
                 "nickname": item.nickname.strip(),
                 "platform_user_id": item.platform_user_id,
+                "platform_handle": item.platform_handle,
                 "streak_days": item.streak_days,
             }
             # 保留调用方是否真的携带了官方快照字段；旧客户端只传昵称时，
             # 不能被误判成「清空已有官方状态」的刷新请求。
-            for field in ("spark_kind", "spark_label"):
+            for field in ("spark_kind", "spark_label", "identity_status"):
                 if field in item.model_fields_set:
                     data[field] = getattr(item, field)
             stripped.append(BatchTargetItem(**data))
@@ -262,12 +285,16 @@ class TargetBatchRead(APIBase):
     refreshed: list[str] = []
     duplicates: list[str] = []
     failed: list[str] = []
+    identity_bound: list[str] = []
+    identity_unresolved: list[str] = []
+    identity_ambiguous: list[str] = []
 
 
 class TargetRead(APIBase):
     id: str
     account_id: str
     platform_user_id: str | None
+    platform_handle: str | None
     nickname_snapshot: str
     template_id: str | None
     enabled: bool
@@ -370,6 +397,11 @@ class ScanChatItem(APIBase):
 
     title: str
     platform_user_id: str | None = None
+    platform_handle: str | None = None
+    identity_status: Literal["bound", "ambiguous", "not_observed"] = "not_observed"
+    identity_source: Literal["remark_name", "nickname", "unique_id", "short_id"] | None = None
+    identity_candidate_count: int = Field(default=0, ge=0)
+    identity_detail: str | None = None
     preview: str = ""
     streak_days: int | None = None
     streak_kind: str | None = None

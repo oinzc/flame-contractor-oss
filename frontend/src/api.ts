@@ -73,6 +73,8 @@ export const api = {
     items: {
       nickname: string
       platformUserId?: string | null
+      platformHandle?: string | null
+      identityStatus?: 'bound' | 'ambiguous' | 'not_observed'
       streakDays?: number
       sparkKind?: string | null
       sparkLabel?: string | null

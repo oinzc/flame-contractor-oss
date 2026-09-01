@@ -22,6 +22,19 @@ interface Props {
   onStartScan: (accountId: string) => Promise<void>
 }
 
+function compactStableId(value: string): string {
+  if (value.length <= 18) return value
+  return `${value.slice(0, 8)}…${value.slice(-6)}`
+}
+
+function identityStatusLabel(entry: ScanChatEntry): string {
+  if (entry.identityStatus === 'bound') {
+    return entry.platformHandle ? `已识别 · ${entry.platformHandle}` : '稳定身份已识别'
+  }
+  if (entry.identityStatus === 'ambiguous') return `同名冲突 · ${entry.identityCandidateCount} 个候选`
+  return '本次未识别'
+}
+
 export default function TargetsPage({
   accounts,
   targets,
@@ -87,6 +100,11 @@ export default function TargetsPage({
   // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
   const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
+  const existingPlatformIds = new Set(
+    accountTargets
+      .map((target) => target.platformUserId)
+      .filter((platformUserId): platformUserId is string => Boolean(platformUserId)),
+  )
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
@@ -106,7 +124,15 @@ export default function TargetsPage({
     visibleScanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
   const scanNoStreakCount = (visibleScanEntries?.length ?? 0) - scanStreakCount
   const scanExistCount =
-    visibleScanEntries?.filter((entry) => existingNicknames.has(entry.title)).length ?? 0
+    visibleScanEntries?.filter(
+      (entry) =>
+        existingNicknames.has(entry.title) ||
+        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)),
+    ).length ?? 0
+  const scanIdentityCount =
+    visibleScanEntries?.filter((entry) => entry.identityStatus === 'bound').length ?? 0
+  const scanIdentityPendingCount =
+    visibleScanEntries?.filter((entry) => entry.identityStatus !== 'bound').length ?? 0
   const scanFiltered = (visibleScanEntries ?? []).filter((entry) => {
     if (!showNoStreak && !isStreakTarget(entry)) return false
     const q = scanQuery.trim().toLowerCase()
@@ -205,6 +231,8 @@ export default function TargetsPage({
         items: [...selectedEntries.values()].map((entry) => ({
           nickname: entry.title,
           platformUserId: entry.platformUserId,
+          platformHandle: entry.platformHandle,
+          identityStatus: entry.identityStatus,
           streakDays: entry.streakDays ?? undefined,
           // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
           sparkKind: entry.streakKind,
@@ -337,7 +365,7 @@ export default function TargetsPage({
                   <thead>
                     <tr>
                       <th>昵称</th>
-                      <th>抖音号</th>
+                      <th>平台身份</th>
                       <th>模板</th>
                       <th>火花状态</th>
                       <th>上次确认发送</th>
@@ -355,7 +383,21 @@ export default function TargetsPage({
                             </span>
                           )}
                         </td>
-                        <td className="mono">{target.platformUserId ?? '—'}</td>
+                        <td>
+                          <div className="identity-cell">
+                            <strong title={target.platformHandle ?? undefined}>
+                              {target.platformHandle ?? (target.platformUserId ? '稳定身份已绑定' : '未识别')}
+                            </strong>
+                            {target.platformUserId && (
+                              <span
+                                className="identity-stable-id"
+                                title={`稳定身份：${target.platformUserId}`}
+                              >
+                                {compactStableId(target.platformUserId)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
                         <td>
                           <select
                             value={target.templateId ?? ''}
@@ -423,7 +465,7 @@ export default function TargetsPage({
               <h2>会话扫描与批量添加</h2>
             </div>
             <p className="scan-helper">
-              扫描完成后，已在列表的好友会自动刷新官方火花状态；新好友仍需在下方勾选后导入。
+              扫描只读取会话列表，不会发送消息。已识别的平台身份才会写入稳定 ID；未识别或同名冲突的会话不会猜测绑定。
             </p>
             {selectedScanTask && (
               <section
@@ -497,6 +539,15 @@ export default function TargetsPage({
                     {batchResult.failed.length > 0 && (
                       <div>⚠️ 失败 {batchResult.failed.length} 个：{batchResult.failed.join('、')}</div>
                     )}
+                    {batchResult.identityBound.length > 0 && (
+                      <div>🔐 已绑定稳定身份 {batchResult.identityBound.length} 个：{batchResult.identityBound.join('、')}</div>
+                    )}
+                    {batchResult.identityUnresolved.length > 0 && (
+                      <div>🔎 未观察到身份数据 {batchResult.identityUnresolved.length} 个：{batchResult.identityUnresolved.join('、')}</div>
+                    )}
+                    {batchResult.identityAmbiguous.length > 0 && (
+                      <div>🛑 同名冲突，未绑定 {batchResult.identityAmbiguous.length} 个：{batchResult.identityAmbiguous.join('、')}</div>
+                    )}
                   </div>
                 )}
                 {visibleScanEntries !== null && (
@@ -529,7 +580,9 @@ export default function TargetsPage({
                         </div>
                       ) : (
                         scanFiltered.map((entry) => {
-                          const exists = existingNicknames.has(entry.title)
+                          const exists =
+                            existingNicknames.has(entry.title) ||
+                            (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId))
                           const checked = selectedEntries.has(entry.title)
                           const group = looksLikeGroup(entry.title, entry.preview)
                           return (
@@ -569,6 +622,12 @@ export default function TargetsPage({
                                   <span className="badge gold">🔥?</span>
                                 )}
                                 {group && <span className="badge">群</span>}
+                                <span
+                                  className={`badge identity-badge identity-${entry.identityStatus}`}
+                                  title={entry.identityDetail ?? undefined}
+                                >
+                                  {identityStatusLabel(entry)}
+                                </span>
                                 {exists && (
                                   <span className="badge">
                                     {checked ? '将刷新官方状态' : '已在列表'}
@@ -582,7 +641,7 @@ export default function TargetsPage({
                     </div>
                     <div className="pick-foot">
                       <span className="pick-stat">
-                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 无火花 {scanNoStreakCount}（已隐藏）· 已在列表 {scanExistCount}
+                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 身份已识别 {scanIdentityCount} · 待识别 {scanIdentityPendingCount} · 已在列表 {scanExistCount}
                       </span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <select
@@ -633,12 +692,12 @@ export default function TargetsPage({
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="target-uid">抖音号（选填）</label>
+                  <label htmlFor="target-uid">稳定身份 ID（选填）</label>
                   <input
                     id="target-uid"
                     value={platformUserId}
                     onChange={(event) => setPlatformUserId(event.target.value)}
-                    placeholder="获得后优先用于匹配"
+                    placeholder="通常由扫描自动写入；仅供高级手动绑定"
                     maxLength={128}
                   />
                 </div>
