@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -11,11 +12,13 @@ from . import selectors as _s
 
 # 抖音输入框发送后会残留零宽字符，普通 strip() 判不清空
 _BLANK_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff]+")
+_UNREAD_COUNT_SUFFIX_RE = re.compile(r"\(\d+\)$")
 
 MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
 SEARCH_RESULTS_TIMEOUT = 12.0
 OPEN_CONFIRM_TIMEOUT = 8.0
+EDITOR_READY_TIMEOUT = 8.0
 # 全量扫描会话列表：滚动轮数上限 + 连续无新增即判定到底
 SCAN_MAX_ROUNDS = 80
 SCAN_IDLE_ROUNDS = 3
@@ -38,8 +41,35 @@ def _item_selectors() -> tuple:
     return (_s.CONVERSATION_ITEM, _s.SEARCH_RESULT_ITEM)
 
 
+def _chat_editor_selectors() -> tuple[str, ...]:
+    """返回运行期编辑器选择器，首选 bundle 配置并保留兼容回退。"""
+    configured = getattr(_s, "CHAT_EDITOR_SELECTORS", (_s.CHAT_EDITOR,))
+    if isinstance(configured, str):
+        configured = (configured,)
+    return tuple(dict.fromkeys((_s.CHAT_EDITOR, *configured)))
+
+
 class DomChangedError(RuntimeError):
     """关键页面结构不存在，说明抖音页面已改版。"""
+
+
+class SendOutcomeUnknownError(RuntimeError):
+    """已触发不可逆发送动作，但页面未给出足够证据确认结果。"""
+
+
+def _has_new_media_bubble(
+    before: tuple[str, ...] | list[str] | None,
+    current: tuple[str, ...] | list[str] | None,
+) -> bool:
+    """判断消息列表是否出现了发送前不存在的媒体气泡。
+
+    不能只比较总图片数：抖音的虚拟列表可能在插入新消息时回收旧节点，
+    导致数量不变。用签名的多重集合比较，既能识别新增消息，也不会把
+    「旧节点被回收」误报成成功。
+    """
+    if before is None or current is None:
+        return False
+    return bool(Counter(current) - Counter(before))
 
 
 @dataclass
@@ -904,16 +934,16 @@ class DouyinChat:
     def _primary_panel_title(value: str | None) -> str | None:
         """取右侧标题中的主昵称，忽略官方火花徽标占用的后续行。
 
-        抖音会把「正常天数」「重燃中 X/3」「X 天后消失」等状态追加到
-        右侧标题文本中。主昵称仍必须是首个非空行的严格匹配，不能退化为
-        模糊包含，以维持「宁可不发不错发」的发送安全边界。
+        抖音会把未读数渲染成「名称(9)」，再把「正常天数」「重燃中 X/3」
+        等火花状态追加到右侧标题文本中。这里只移除明确的数字未读后缀，
+        主昵称仍必须是首个非空行的严格匹配，不能退化为模糊包含。
         """
         if not value:
             return None
         for line in value.splitlines():
             primary = line.strip()
             if primary:
-                return primary
+                return _UNREAD_COUNT_SUFFIX_RE.sub("", primary).strip()
         return None
 
     async def _title_of(self, item) -> str | None:
@@ -1051,11 +1081,48 @@ class DouyinChat:
             await progress_callback(len(entries), last_round, None, list(entries))
         return entries
 
-    async def _type_text(self, text: str) -> None:
+    async def _is_visible(self, element) -> bool:
+        checker = getattr(element, "is_visible", None)
+        if not callable(checker):
+            return True
+        try:
+            return await checker()
+        except Exception:
+            return True
+
+    async def _wait_for_chat_editor(
+        self,
+        timeout: float = EDITOR_READY_TIMEOUT,
+    ) -> tuple[str | None, object | None]:
+        """等待当前会话的可见编辑器完成异步渲染并返回命中的选择器。"""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(timeout, 0.0)
+        while True:
+            for selector in _chat_editor_selectors():
+                elements = []
+                try:
+                    elements = await self.page.query_selector_all(selector)
+                except Exception:
+                    pass
+                if not elements:
+                    try:
+                        element = await self.page.query_selector(selector)
+                    except Exception:
+                        element = None
+                    if element is not None:
+                        elements = [element]
+                for element in elements:
+                    if await self._is_visible(element):
+                        return selector, element
+            if loop.time() >= deadline:
+                return None, None
+            await self._sleep(0.2)
+
+    async def _type_text(self, text: str, selector: str | None = None) -> None:
         """输入文本：真实页面走 IME 安全的 insert_text；测试协议方法兜底。"""
         page = self.page
         if hasattr(page, "type_text"):
-            await page.type_text(_s.CHAT_EDITOR, text)
+            await page.type_text(selector or _s.CHAT_EDITOR, text)
         elif hasattr(page, "keyboard"):
             await page.keyboard.insert_text(text)
         else:
@@ -1076,19 +1143,19 @@ class DouyinChat:
         if hasattr(page, "wait_for_function"):
             try:
                 await page.wait_for_function(
-                    """(expected) => {
-                        const editors = [
-                          ...document.querySelectorAll('[class*="messageEditor"] [contenteditable=true], .messageEditorinputArea, div[data-slate-editor="true"][contenteditable="true"]'),
-                        ];
+                    """({expected, selectors}) => {
+                        const editors = selectors.flatMap((selector) => [
+                          ...document.querySelectorAll(selector),
+                        ]);
                         return editors.some((e) => (e.innerText || '').includes(expected));
                     }""",
-                    arg=content,
+                    arg={"expected": content, "selectors": list(_chat_editor_selectors())},
                     timeout=5000,
                 )
                 return True
             except Exception:
                 return False
-        editor = await self.page.query_selector(_s.CHAT_EDITOR)
+        _selector, editor = await self._wait_for_chat_editor(timeout=0)
         if editor is None:
             return False
         text = await editor.inner_text()
@@ -1110,14 +1177,14 @@ class DouyinChat:
 
     async def send_text(self, text: str) -> None:
         self.last_bubble_seen = False
-        editor = await self.page.query_selector(_s.CHAT_EDITOR)
+        editor_selector, editor = await self._wait_for_chat_editor()
         if editor is None:
             raise DomChangedError("未找到消息输入框")
         await editor.click()
         lines = text.split("\n")
         for index, line in enumerate(lines):
             if line:
-                await self._type_text(line)
+                await self._type_text(line, editor_selector)
             if index < len(lines) - 1:
                 await self._press_key("Shift+Enter")
 
@@ -1150,7 +1217,7 @@ class DouyinChat:
                 self.last_bubble_seen = False
 
     async def editor_is_cleared(self) -> bool:
-        element = await self.page.query_selector(_s.CHAT_EDITOR)
+        _selector, element = await self._wait_for_chat_editor(timeout=0)
         if element is None:
             return True
         text = await element.inner_text()
@@ -1178,6 +1245,7 @@ class DouyinChat:
         """
         self.last_bubble_seen = False
         self._image_before_count = await self._count_non_avatar_images()
+        self._media_before_snapshot = await self._media_bubble_snapshot()
         if not hasattr(self.page, "expect_file_chooser"):
             raise DomChangedError("页面对象不支持文件选择器")
         try:
@@ -1239,6 +1307,50 @@ class DouyinChat:
         # FakePage
         return 1 if bool(getattr(self.page, "image_bubble_render", False)) else 0
 
+    async def _media_bubble_snapshot(self) -> tuple[str, ...] | None:
+        """读取当前已渲染的「从我的」媒体消息签名。
+
+        抖音消息列表是虚拟列表，新消息插入时旧节点可能被回收，单纯比较
+        图片数量会把真实发送误判为未发送。签名只保留消息时间、非头像图片
+        的稳定 URL 路径和气泡文本，不保存完整 DOM 或图片内容。
+        """
+        if not hasattr(self.page, "evaluate"):
+            return None
+        try:
+            result = await self.page.evaluate(
+                """({boxSelector, contentSelector, timeSelector}) => {
+                    const normalize = (value) => (value || '')
+                        .replace(/[\\s\\u200B\\u200C\\u200D\\uFEFF]+/g, ' ')
+                        .trim();
+                    return [...document.querySelectorAll(boxSelector)]
+                        .map((box) => {
+                            const content = [...box.querySelectorAll(contentSelector)]
+                                .find((node) => String(node.className || '').includes('isFromMe'));
+                            if (!content) return null;
+                            const images = [...content.querySelectorAll('img')]
+                                .filter((img) => !(img.src || '').toLowerCase().includes('avatar'));
+                            if (!images.length) return null;
+                            const imageKey = images.map((img) => {
+                                const src = (img.currentSrc || img.src || '').split(/[?#]/, 1)[0];
+                                return `${String(img.className || '')}:${src}`;
+                            }).join('|');
+                            const time = box.querySelector(timeSelector)?.textContent || '';
+                            return `${normalize(time)}\\u001f${imageKey}\\u001f${normalize(content.innerText)}`;
+                        })
+                        .filter((value) => value !== null);
+                }""",
+                {
+                    "boxSelector": _s.MEDIA_MESSAGE_BOXES,
+                    "contentSelector": _s.MEDIA_MESSAGE_CONTENT,
+                    "timeSelector": _s.MESSAGE_TIME,
+                },
+            )
+            if isinstance(result, list):
+                return tuple(str(value) for value in result)
+        except Exception:
+            return None
+        return None
+
     async def _trigger_send(self) -> None:
         """优先点发布按钮，Enter 兜底（与文本发送一致）。"""
         if hasattr(self.page, "locator"):
@@ -1258,47 +1370,42 @@ class DouyinChat:
         正确性要求（unmev 思路 + 本机 DOM 核实）：
         - 只统计「从我的」消息盒（isFromMe），排除对方消息；
         - 只把「非头像 img」（src 不含 avatar）当作图片气泡，头像会被误判；
-        - 以发送前的盒子数为锚，要求新出现一条 isFromMe 且含非头像 img。
+        - 优先比较发送前后的媒体消息签名，兼容虚拟列表回收旧节点；
+        - 没有签名能力时才回退到发送前后的图片数量。
         满足才置 last_bubble_seen=True；否则视为图片未真正发出，交给 manager 判 unknown。
         """
-        before_count = int(getattr(self, "_image_before_count", 0))
-        if hasattr(self.page, "wait_for_function"):
-            try:
-                await self.page.wait_for_function(
-                    """([before]) => {
-                        const boxes = [...document.querySelectorAll('[class*="messageMessageBoxcontentBox"][class*="isFromMe"]')];
-                        if (boxes.length <= before) return false;
-                        const latest = boxes[boxes.length - 1];
-                        const hasRealImage = [...latest.querySelectorAll('img')].some(
-                            (img) => !(img.src || '').includes('avatar')
-                        );
-                        return hasRealImage;
-                    }""",
-                    arg=[before_count],
-                    timeout=int(timeout * 1000),
-                )
-                self.last_bubble_seen = True
-            except Exception:
-                self.last_bubble_seen = False
-            return
-        # FakePage：由测试注入图片已出现的标记
-        if bool(getattr(self.page, "image_bubble_render", False)):
-            self.last_bubble_seen = True
-        else:
-            self.last_bubble_seen = False
+        self.last_bubble_seen = await self._wait_media_bubble(timeout)
+
+    async def _wait_media_bubble(self, timeout: float) -> bool:
+        """轮询直到发现新增媒体气泡；测试假页面直接使用注入标记。"""
+        if hasattr(self.page, "image_bubble_render"):
+            return bool(self.page.image_bubble_render)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            if await self.image_bubble_confirmed():
+                return True
+            await self._sleep(0.5)
+        return False
 
     async def image_bubble_confirmed(self, before_count: int | None = None) -> bool:
-        """检测「从我的」消息里是否出现了非头像图片气泡（真实图）。
+        """检测「从我的」消息里是否出现了本次新增的非头像媒体气泡。
 
-        与 _wait_image_bubble 不同：这里是主动查询（供 manager 轮询），
-        用与实机一致的 selector（contentBox + isFromMe），只认非头像 img。
-        before_count 提供时要求「新增一条」；None 则只要出现非头像图即算。
+        优先用消息签名识别新增媒体消息，避免虚拟列表维持固定图片数量时
+        把真实发送误报为未发送；无法读取签名时回退到原有数量锚定逻辑。
         """
         # FakePage：以 image_bubble_render 标记为准（真实 Playwright page 无此属性）
         if hasattr(self.page, "image_bubble_render"):
             return bool(self.page.image_bubble_render)
         if hasattr(self.page, "evaluate"):
             try:
+                before_snapshot = getattr(self, "_media_before_snapshot", None)
+                if before_snapshot is not None:
+                    current_snapshot = await self._media_bubble_snapshot()
+                    if _has_new_media_bubble(before_snapshot, current_snapshot):
+                        return True
+                    if current_snapshot is not None:
+                        return False
                 before = int(before_count if before_count is not None else getattr(self, "_image_before_count", 0))
                 cur = int(
                     await self.page.evaluate(
@@ -1340,6 +1447,7 @@ class DouyinChat:
         """
         self.last_bubble_seen = False
         self._image_before_count = await self._count_non_avatar_images()
+        self._media_before_snapshot = await self._media_bubble_snapshot()
         if not hasattr(self.page, "locator"):
             raise DomChangedError("页面对象不支持表情选择器")
         try:
@@ -1375,6 +1483,8 @@ class DouyinChat:
                 if await desc.count() and (await desc.first.inner_text()).strip() == name:
                     await self._click_sticker(candidate)
                     return
+        except SendOutcomeUnknownError:
+            raise
         except Exception:
             pass
         # 兜底：role/aria-label/title/alt
@@ -1391,6 +1501,8 @@ class DouyinChat:
                 if await candidate.count() and await candidate.is_visible():
                     await self._click_sticker(candidate)
                     return
+            except SendOutcomeUnknownError:
+                raise
             except Exception:
                 continue
         # 兜底索引：面板内第 fallback_index 个可点元素
@@ -1400,6 +1512,8 @@ class DouyinChat:
                 if await slots.count() > sticker.fallback_index:
                     await self._click_sticker(slots.nth(sticker.fallback_index))
                     return
+            except SendOutcomeUnknownError:
+                raise
             except Exception:
                 pass
         raise DomChangedError(f"表情面板中找不到表情: {sticker.name}")
@@ -1410,12 +1524,31 @@ class DouyinChat:
         if await self._wait_sticker_bubble(timeout=15.0):
             self.last_bubble_seen = True
             return
-        # 表情可能没有一点即发（发布按钮仍在）→ 点发布按钮兜底再确认
-        await self._trigger_send()
-        if await self._wait_sticker_bubble(timeout=15.0):
-            self.last_bubble_seen = True
-            return
-        raise DomChangedError("表情已点击但未能确认进入会话")
+        # 少数页面版本会把表情暂存在编辑器，只有发送按钮明确可用时才兜底；
+        # 不再无条件按 Enter，避免「点击其实已发送但确认漏检」造成重复发送。
+        if await self._trigger_pending_send():
+            if await self._wait_sticker_bubble(timeout=15.0):
+                self.last_bubble_seen = True
+                return
+        raise SendOutcomeUnknownError("表情已点击，但未能确认进入会话；已阻止自动重试")
+
+    async def _trigger_pending_send(self) -> bool:
+        """仅在发布按钮明确可用时发送待发布表情，避免无条件重复触发。"""
+        if not hasattr(self.page, "locator"):
+            return False
+        for selector in _s.SEND_BUTTONS:
+            locator = self.page.locator(selector).first
+            try:
+                if not await locator.count() or not await locator.is_visible():
+                    continue
+                is_enabled = getattr(locator, "is_enabled", None)
+                if callable(is_enabled) and not await is_enabled():
+                    continue
+                await locator.click()
+                return True
+            except Exception:
+                continue
+        return False
 
     async def _restore_composer(self) -> None:
         """关闭表情面板并把焦点点回聊天输入框（unmev issue #4 的经验）。"""
@@ -1426,7 +1559,7 @@ class DouyinChat:
             except Exception:
                 pass
         try:
-            editor = await page.query_selector(_s.CHAT_EDITOR)
+            _selector, editor = await self._wait_for_chat_editor(timeout=1.0)
             if editor is not None and hasattr(editor, "click"):
                 await editor.click()
         except Exception:
@@ -1451,13 +1584,7 @@ class DouyinChat:
         messageMessageBoxcontentBox，表情气泡未必匹配；改用 image_bubble_confirmed
         主动查询（contentBox + isFromMe + 非头像 img，cur>before），真机已验证能命中。
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            if await self.image_bubble_confirmed():
-                return True
-            await self._sleep(0.5)
-        return False
+        return await self._wait_media_bubble(timeout)
 
 
 async def read_self_nickname(page) -> str | None:

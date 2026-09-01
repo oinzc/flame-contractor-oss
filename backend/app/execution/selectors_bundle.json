@@ -29,6 +29,11 @@
     "input[placeholder=\"搜索\"]"
   ],
   "CHAT_EDITOR": "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
+  "CHAT_EDITOR_SELECTORS": [
+    "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
+    "[class*=\"messageEditor\"] [contenteditable=\"true\"]",
+    ".messageEditorinputArea[contenteditable=\"true\"]"
+  ],
   "IMAGE_INPUTS": [
     "input[type=\"file\"][accept*=\"image\"]",
     "input[type=\"file\"]"
@@ -53,6 +58,9 @@
     "button[aria-label*=\"发送\"]",
     "[role=\"button\"][aria-label*=\"发送\"]"
   ],
+  "MEDIA_MESSAGE_BOXES": "[class*=\"messageMessageBoxmessageBox\"]",
+  "MEDIA_MESSAGE_CONTENT": "[class*=\"contentBox\"]",
+  "MESSAGE_TIME": "[class*=\"timeLayout\"]",
   "STICKER_BUTTONS": [
     "svg.messageMsgInputiconAction",
     "button[aria-label*=\"表情\"]",

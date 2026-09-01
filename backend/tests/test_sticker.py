@@ -5,9 +5,12 @@ send_sticker 参考 unmev/douyin-auto-fire 的 send_douyin_sticker()：
 终态边界与图片一致：宁可不发不错发，未确认到真实气泡绝不判成功。
 """
 
+import asyncio
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.execution.douyin_chat import DouyinChat, _has_new_media_bubble
 from app.models import JobStatus, SendJob
 from tests.fakes import FakePage, create_account, make_app
 
@@ -100,7 +103,44 @@ def test_send_sticker_no_bubble_not_success(settings):
     with TestClient(app) as client:
         account = _create_sticker_send(client, name="比心")
         result = client.post(f"/api/accounts/{account['id']}/send").json()
-        assert result["results"][0]["status"] != "succeeded", result
+        assert result["results"][0]["status"] == "unknown_requires_review", result
+        assert page.keys == []  # 未确认已发送时不能再无条件按 Enter，避免重复
         with Session(app.state.engine) as session:
             job = session.exec(select(SendJob)).one()
-            assert job.status != JobStatus.SUCCEEDED
+            assert job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW
+
+
+def test_media_snapshot_detects_new_bubble_when_virtual_list_count_is_unchanged():
+    """虚拟列表回收旧节点、总数量不变时仍能识别新增媒体消息。"""
+    before = ("46分钟前\u001femoji:/old-image\u001f", "昨天\u001fshare:/old-share\u001f")
+    current = ("刚刚\u001femoji:/new-image\u001f", "46分钟前\u001femoji:/old-image\u001f")
+
+    assert _has_new_media_bubble(before, current) is True
+    assert _has_new_media_bubble(
+        before,
+        ("46分钟前\u001femoji:/old-image\u001f",),
+    ) is False
+
+
+def test_image_confirmation_uses_media_snapshot_before_count_fallback():
+    """媒体数量不变时，终态确认优先使用消息签名而不是旧数量。"""
+
+    class SnapshotPage:
+        async def evaluate(self, _expression, target=None, *args, **kwargs):
+            if isinstance(target, dict) and "boxSelector" in target:
+                return [
+                    "刚刚\u001femoji:/new-image\u001f",
+                    "46分钟前\u001femoji:/old-image\u001f",
+                ]
+            return 6  # 模拟虚拟列表回收节点后图片总数仍保持不变
+
+    async def scenario():
+        chat = DouyinChat(SnapshotPage())
+        chat._media_before_snapshot = (
+            "46分钟前\u001femoji:/old-image\u001f",
+            "昨天\u001fshare:/old-share\u001f",
+        )
+        chat._image_before_count = 6
+        return await chat.image_bubble_confirmed()
+
+    assert asyncio.run(scenario()) is True
