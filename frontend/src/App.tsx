@@ -6,6 +6,7 @@ import type {
   ContractTarget,
   DashboardSummary,
   Health,
+  IdentityHydrationTaskState,
   MessageTemplate,
   ScanTaskState,
   SchedulerStatus,
@@ -19,6 +20,7 @@ import TemplatesPage from './components/TemplatesPage'
 import JobsPage from './components/JobsPage'
 import ScanProgressDock from './components/ScanProgress'
 import SendModal from './components/SendModal'
+import IdentityHydrationProgress from './components/IdentityHydrationProgress'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
 
@@ -62,6 +64,12 @@ export default function App() {
   const [scanDockVisible, setScanDockVisible] = useState(false)
   const scanCompletionHandledRef = useRef<string | null>(null)
   const scanRecoveryStartedRef = useRef(false)
+  const [identityTask, setIdentityTask] = useState<IdentityHydrationTaskState | null>(null)
+  const [identityStarting, setIdentityStarting] = useState(false)
+  const [identityCancelling, setIdentityCancelling] = useState(false)
+  const [identityDockVisible, setIdentityDockVisible] = useState(false)
+  const identityRecoveryStartedRef = useRef(false)
+  const identityCompletionHandledRef = useRef<string | null>(null)
   const [sendAccount, setSendAccount] = useState<Account | null>(null)
   const [sendMinimized, setSendMinimized] = useState(false)
 
@@ -109,6 +117,8 @@ export default function App() {
 
   const scanTaskId = scanTask?.taskId ?? null
   const scanTaskStatus = scanTask?.status ?? null
+  const identityTaskId = identityTask?.taskId ?? null
+  const identityTaskStatus = identityTask?.status ?? null
 
   // 扫描任务属于 App 生命周期：好友页卸载、切到总览或任务页时，轮询不会中断。
   useEffect(() => {
@@ -163,6 +173,58 @@ export default function App() {
     }
   }, [scanTaskId, scanTaskStatus])
 
+  // 身份补采也属于 App 生命周期，离开好友页后继续由后端执行并持久化进度。
+  useEffect(() => {
+    if (!identityTaskId || identityTaskStatus !== 'running' || !identityTask) return undefined
+
+    let cancelled = false
+    let timer: number | null = null
+    const accountId = identityTask.accountId
+
+    const poll = async () => {
+      try {
+        const next = await api.identityHydrationProgress(accountId, identityTaskId)
+        if (cancelled) return
+        setIdentityTask((previous) =>
+          previous?.taskId === identityTaskId
+            ? { ...previous, ...next, pollError: null }
+            : previous,
+        )
+        if (next.status === 'running') timer = window.setTimeout(() => void poll(), 800)
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setIdentityTask((previous) =>
+            previous?.taskId === identityTaskId
+              ? {
+                  ...previous,
+                  status: 'failed',
+                  stage: '身份补采任务失效',
+                  overall: 'error',
+                  detail: '后端任务已失效，请重新发起补采',
+                  currentItem: null,
+                  pollError: null,
+                }
+              : previous,
+          )
+          return
+        }
+        setIdentityTask((previous) =>
+          previous?.taskId === identityTaskId
+            ? { ...previous, pollError: '进度读取暂时失败，正在自动重连…' }
+            : previous,
+        )
+        timer = window.setTimeout(() => void poll(), 1200)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [identityTaskId, identityTaskStatus])
+
   // 页面首次加载时从 SQLite 接管最近一次扫描；running 任务已由后端收束为 interrupted。
   useEffect(() => {
     if (scanRecoveryStartedRef.current || accounts.length === 0 || scanTask !== null) {
@@ -207,6 +269,46 @@ export default function App() {
       cancelled = true
     }
   }, [accounts, scanTask])
+
+  useEffect(() => {
+    if (
+      identityRecoveryStartedRef.current ||
+      accounts.length === 0 ||
+      identityTask !== null
+    ) {
+      return undefined
+    }
+    identityRecoveryStartedRef.current = true
+    let cancelled = false
+
+    async function recoverLatestIdentityHydration() {
+      const snapshots = await Promise.all(
+        accounts.map(async (account) => {
+          try {
+            return await api.latestIdentityHydration(account.id)
+          } catch {
+            return null
+          }
+        }),
+      )
+      if (cancelled) return
+      const candidate = snapshots
+        .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null)
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.finishedAt ?? left.startedAt ?? '') || 0
+          const rightTime = Date.parse(right.finishedAt ?? right.startedAt ?? '') || 0
+          return rightTime - leftTime
+        })[0]
+      if (!candidate) return
+      setIdentityTask({ ...candidate, pollError: null })
+      setIdentityDockVisible(true)
+    }
+
+    void recoverLatestIdentityHydration()
+    return () => {
+      cancelled = true
+    }
+  }, [accounts, identityTask])
 
   async function finalizeScan(task: ScanTaskState) {
     const accountTargets = targets.filter((target) => target.accountId === task.accountId)
@@ -306,6 +408,17 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [scanTask?.taskId, scanTask?.status, scanTask?.syncStatus, scanDockVisible])
 
+  useEffect(() => {
+    if (!identityTask || identityTask.status === 'running') return
+    if (identityCompletionHandledRef.current !== identityTask.taskId) {
+      identityCompletionHandledRef.current = identityTask.taskId
+      void refresh()
+    }
+    if (!identityDockVisible || identityTask.status !== 'completed') return
+    const timer = window.setTimeout(() => setIdentityDockVisible(false), 4500)
+    return () => window.clearTimeout(timer)
+  }, [identityTask?.taskId, identityTask?.status, identityDockVisible, refresh])
+
   async function handleCreateAccount(input: Parameters<typeof api.createAccount>[0]) {
     await api.createAccount(input)
     setShowCreate(false)
@@ -382,6 +495,62 @@ export default function App() {
           ? {
               ...previous,
               pollError: err instanceof ApiError ? `重新扫描失败：${err.message}` : '重新扫描失败，请重试',
+            }
+          : previous,
+      )
+    }
+  }
+
+  async function handleStartIdentityHydration(accountId: string, targetIds: string[]) {
+    if (identityStarting || identityCancelling || identityTask?.status === 'running') return
+    setIdentityStarting(true)
+    try {
+      const initial = await api.startIdentityHydration(accountId, targetIds)
+      identityCompletionHandledRef.current = null
+      setIdentityTask({ ...initial, pollError: null })
+      setIdentityDockVisible(true)
+    } finally {
+      setIdentityStarting(false)
+    }
+  }
+
+  async function handleCancelIdentityHydration() {
+    if (!identityTask || identityTask.status !== 'running' || identityCancelling) return
+    setIdentityCancelling(true)
+    try {
+      const next = await api.cancelIdentityHydration(identityTask.accountId, identityTask.taskId)
+      setIdentityTask((previous) =>
+        previous?.taskId === next.taskId ? { ...next, pollError: null } : previous,
+      )
+      setIdentityDockVisible(true)
+    } catch (err) {
+      setIdentityTask((previous) =>
+        previous
+          ? {
+              ...previous,
+              pollError: err instanceof ApiError ? `取消失败：${err.message}` : '取消失败，正在重新读取进度…',
+            }
+          : previous,
+      )
+    } finally {
+      setIdentityCancelling(false)
+    }
+  }
+
+  async function handleRetryIdentityHydration() {
+    if (!identityTask) return
+    const targetIds = identityTask.results
+      .filter((result) => result.status !== 'bound')
+      .map((result) => result.targetId)
+    if (targetIds.length === 0) return
+    try {
+      await handleStartIdentityHydration(identityTask.accountId, targetIds)
+    } catch (err) {
+      setIdentityTask((previous) =>
+        previous
+          ? {
+              ...previous,
+              pollError: err instanceof ApiError ? `重新补采失败：${err.message}` : '重新补采失败，请重试',
             }
           : previous,
       )
@@ -510,6 +679,9 @@ export default function App() {
                   scanTask={scanTask}
                   scanStarting={scanStarting}
                   onStartScan={handleStartScan}
+                  identityTask={identityTask}
+                  identityStarting={identityStarting}
+                  onStartIdentityHydration={handleStartIdentityHydration}
                 />
               )}
               {page === 'templates' && (
@@ -538,7 +710,7 @@ export default function App() {
             onRetry={() => void handleRetryScan(scanTask.accountId)}
             cancelLabel={scanCancelling ? '正在取消…' : '取消扫描'}
             cancelDisabled={scanCancelling}
-            offset={Boolean(sendAccount && sendMinimized)}
+            offset={Boolean(sendAccount && sendMinimized) || Boolean(identityTask && identityDockVisible)}
           />
         )}
 
@@ -546,7 +718,10 @@ export default function App() {
           <SendModal
             account={sendAccount}
             minimized={sendMinimized}
-            offset={Boolean(scanTask && scanDockVisible && sendMinimized)}
+            offset={
+              sendMinimized &&
+              (Boolean(scanTask && scanDockVisible) || Boolean(identityTask && identityDockVisible))
+            }
             onClose={() => {
               setSendAccount(null)
               setSendMinimized(false)
@@ -554,6 +729,20 @@ export default function App() {
             onMinimize={() => setSendMinimized(true)}
             onRestore={() => setSendMinimized(false)}
             onChanged={() => void refresh()}
+          />
+        )}
+
+        {identityTask && identityDockVisible && (
+          <IdentityHydrationProgress
+            task={identityTask}
+            accounts={accounts}
+            onOpen={() => setPage('targets')}
+            onDismiss={() => setIdentityDockVisible(false)}
+            onCancel={() => void handleCancelIdentityHydration()}
+            onRetry={() => void handleRetryIdentityHydration()}
+            cancelLabel={identityCancelling ? '正在取消…' : '取消补采'}
+            cancelDisabled={identityCancelling}
+            offset={Boolean(sendAccount && sendMinimized) || Boolean(scanTask && scanDockVisible)}
           />
         )}
 

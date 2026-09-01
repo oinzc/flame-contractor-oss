@@ -475,3 +475,15 @@ password, cookie, token, storageState, profilePath
   `running`/`completed`/`failed`/`interrupted`/`cancelled`。
 - `failed` 保留 `detail`；`cancelled` 表示用户主动取消；`interrupted` 表示后端停止或重启。
   这些状态都不会自动发送或自动导入新好友，用户可查看保留结果并显式重试/手动导入。
+
+### 普通好友身份补采（/api/accounts/{id}/identity-hydration）
+- `POST /api/accounts/{id}/identity-hydration/start`：为已有好友中未绑定稳定用户身份的普通好友启动后台补采。
+  请求体为 `{targetIds: string[]}`（1–50 个目标 ID）；群聊、已绑定目标和不存在的目标不会进入任务。补采逐个打开精确好友会话，
+  只等待本次打开触发的官方用户信息响应，不发送消息；可能将会话标记为已读。
+- `GET /api/accounts/{id}/identity-hydration/progress?taskId={taskId}`：读取任务进度和逐项结果。
+  响应字段为 `{taskId, accountId, status, total, completed, stage, currentItem, overall, detail, results, startedAt, finishedAt}`；
+  `results[].status` 为 `bound`、`not_observed`、`ambiguous` 或 `conflict`，其中后 3 种都不会写入稳定身份。
+- `GET /api/accounts/{id}/identity-hydration/latest`：读取该账号最近一次补采快照，用于刷新页面、前端重连或后端重启后恢复任务坞。
+  后端重启会把遗留 `running` 收束为 `interrupted`，不自动续跑。
+- `POST /api/accounts/{id}/identity-hydration/cancel?taskId={taskId}`：取消正在执行的补采并保留已完成结果；不撤销已经安全写入的身份绑定。
+- 补采仅接受好友列表中已存在的普通好友 ID，不从扫描结果猜测目标，不处理群聊；成功绑定时同时保存内部稳定核对键 `platformUserId` 和可读平台号 `platformHandle`（若响应提供）。

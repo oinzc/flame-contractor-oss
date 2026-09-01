@@ -7,6 +7,8 @@ from ..core.database import SessionDep
 from ..models import Account
 from ..schemas import (
     DryRunRead,
+    IdentityHydrationProgressRead,
+    IdentityHydrationStart,
     LoginStatusRead,
     ScanChatsRead,
     ScanProgressRead,
@@ -108,6 +110,70 @@ def read_latest_scan_chats(
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
     return manager.latest_scan_chats(account_id)
+
+
+@router.post(
+    "/identity-hydration/start",
+    response_model=IdentityHydrationProgressRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_identity_hydration(
+    account_id: str,
+    payload: IdentityHydrationStart,
+    request: Request,
+    session: SessionDep,
+) -> dict:
+    """为已存在的普通好友补采稳定身份；只打开会话，不发送消息。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.start_identity_hydration(account_id, payload.target_ids)
+
+
+@router.get(
+    "/identity-hydration/progress",
+    response_model=IdentityHydrationProgressRead,
+)
+def read_identity_hydration_progress(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+    task_id: str = Query(..., alias="taskId"),
+) -> dict:
+    """读取身份补采进度；切换页面或刷新后仍可继续查看。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return manager.identity_hydration_progress(account_id, task_id)
+
+
+@router.post(
+    "/identity-hydration/cancel",
+    response_model=IdentityHydrationProgressRead,
+)
+async def cancel_identity_hydration(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+    task_id: str = Query(..., alias="taskId"),
+) -> dict:
+    """取消身份补采；已完成的安全回填保留。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.cancel_identity_hydration(account_id, task_id)
+
+
+@router.get(
+    "/identity-hydration/latest",
+    response_model=IdentityHydrationProgressRead | None,
+)
+def read_latest_identity_hydration(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+) -> dict | None:
+    """读取最近一次身份补采快照；用于前端刷新后恢复任务坞。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return manager.latest_identity_hydration(account_id)
 
 
 @router.get("/send/preview", response_model=SendPreviewRead)

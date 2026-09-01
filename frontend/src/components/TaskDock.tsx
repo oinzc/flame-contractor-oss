@@ -1,6 +1,12 @@
 import type { Account } from '../types'
 
-export type TaskDockKind = 'scan' | 'send'
+export type TaskDockKind = 'scan' | 'send' | 'identity'
+
+const TASK_LABELS: Record<TaskDockKind, string> = {
+  scan: '会话扫描',
+  send: '发送',
+  identity: '身份补采',
+}
 
 interface Props {
   kind: TaskDockKind
@@ -40,7 +46,7 @@ function ProgressBar({
     <div
       className={`task-progress-track task-progress-${kind}${isIndeterminate ? ' is-indeterminate' : ''}`}
       role="progressbar"
-      aria-label={kind === 'scan' ? '会话扫描进度' : '发送进度'}
+      aria-label={`${TASK_LABELS[kind]}进度`}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={boundedPercent ?? undefined}
@@ -88,7 +94,7 @@ export default function TaskDock({
   return (
     <aside
       className={`task-dock task-dock-${kind}${failed ? ' is-error' : ''}${complete ? ' is-complete' : ''}${offset ? ' is-offset' : ''}`}
-      aria-label={`${kind === 'scan' ? '会话扫描' : '发送'}任务 · ${account?.displayName ?? '当前账号'}`}
+      aria-label={`${TASK_LABELS[kind]}任务 · ${account?.displayName ?? '当前账号'}`}
       aria-live="polite"
     >
       <div className="task-dock-head">
