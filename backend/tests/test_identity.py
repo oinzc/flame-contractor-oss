@@ -266,7 +266,7 @@ def test_open_conversation_requires_matching_group_conversation_id():
         page = _EventPage(
             logged_in=True,
             conversation_titles=("老龙帮",),
-            right_title="老龙帮",
+            right_title="老龙帮(9)\n861",
         )
         chat = DouyinChat(page, sleep=lambda _: asyncio.sleep(0), confirm_timeout=0.1)
         await page.emit_response(

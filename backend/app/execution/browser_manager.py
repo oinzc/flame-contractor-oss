@@ -32,6 +32,7 @@ from .douyin_chat import (
     SCAN_MAX_ROUNDS,
     DomChangedError,
     DouyinChat,
+    SendOutcomeUnknownError,
     Sticker,
     read_qr_data_url,
     read_self_nickname,
@@ -1751,7 +1752,21 @@ class BrowserManager:
                 )
             else:
                 await chat.send_text(message)
-        except DomChangedError:
+        except SendOutcomeUnknownError as exc:
+            screenshot = await self._capture_shot(chat, account.id, "unknown_outcome")
+            self._finalize_send(
+                job.id, target.id, account.id,
+                status=JobStatus.UNKNOWN_REQUIRES_REVIEW,
+                failure=FailureClass.UNKNOWN_OUTCOME,
+                confirmed=False,
+                attempt_no=attempt_no,
+            )
+            return {"target": nickname, "status": "unknown_requires_review",
+                    "failure_class": FailureClass.UNKNOWN_OUTCOME.value,
+                    "detail": str(exc) or "已触发发送但结果未确认，已阻止自动重试",
+                    "message": message,
+                    "screenshot": screenshot, "page_url": self._page_url(chat)}
+        except DomChangedError as exc:
             screenshot = await self._capture_shot(chat, account.id, "dom_changed")
             self._finalize_send(
                 job.id, target.id, account.id,
@@ -1760,7 +1775,7 @@ class BrowserManager:
             )
             return {"target": nickname, "status": "failed_retryable",
                     "failure_class": FailureClass.DOM_CHANGED.value,
-                    "detail": "页面结构变化，未找到输入框", "message": message,
+                    "detail": str(exc) or "页面结构变化", "message": message,
                     "screenshot": screenshot, "page_url": self._page_url(chat)}
         except Exception as exc:
             screenshot = await self._capture_shot(chat, account.id, "send_error")

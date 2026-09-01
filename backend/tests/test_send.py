@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.execution.message_renderer import render_message
+from app.execution.selectors import CHAT_EDITOR
 from app.models import JobStatus, SendAttempt, SendJob
 from tests.fakes import FakePage, create_account, make_app
 
@@ -140,6 +141,39 @@ def test_send_accepts_spark_badge_suffix_in_right_title(settings):
                 logged_in=True,
                 conversation_titles=("好友A",),
                 right_title="好友A\n4 天后消失",
+                editor_present=True,
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        result = client.post(f"/api/accounts/{account['id']}/send")
+        assert result.status_code == 200, result.text
+        assert result.json()["results"][0]["status"] == "succeeded", result.json()
+
+
+def test_send_waits_for_editor_to_render_after_open(settings):
+    """会话切换后编辑器异步出现时，发送应等待而不是误报 DOM 改版。"""
+
+    class DelayedEditorPage(FakePage):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self._editor_misses = 3
+
+        async def query_selector(self, selector):
+            if selector == CHAT_EDITOR and self._editor_misses:
+                self._editor_misses -= 1
+                return None
+            return await super().query_selector(selector)
+
+    app = make_app(
+        settings,
+        [
+            DelayedEditorPage(
+                logged_in=True,
+                conversation_titles=("好友A",),
+                right_title="好友A",
                 editor_present=True,
             )
         ],

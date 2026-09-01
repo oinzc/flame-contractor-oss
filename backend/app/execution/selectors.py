@@ -74,8 +74,13 @@ _DEFAULTS: dict[str, object] = {
         'input.semi-input[placeholder="搜索"][type="text"]',
         'input[placeholder="搜索"]',
     ),
-    # 消息编辑器
+    # 消息编辑器：CHAT_EDITOR 保留为首选值；列表用于兼容编辑器异步渲染和已知 DOM 变体
     "CHAT_EDITOR": 'div[data-slate-editor="true"][contenteditable="true"]',
+    "CHAT_EDITOR_SELECTORS": (
+        'div[data-slate-editor="true"][contenteditable="true"]',
+        '[class*="messageEditor"] [contenteditable="true"]',
+        '.messageEditorinputArea[contenteditable="true"]',
+    ),
     # 图片上传控件
     "IMAGE_INPUTS": (
         'input[type="file"][accept*="image"]',
@@ -105,6 +110,10 @@ _DEFAULTS: dict[str, object] = {
         'button[aria-label*="发送"]',
         '[role="button"][aria-label*="发送"]',
     ),
+    # 媒体消息确认：以真实消息盒为边界，避免统计头像和引用卡片外层图片
+    "MEDIA_MESSAGE_BOXES": '[class*="messageMessageBoxmessageBox"]',
+    "MEDIA_MESSAGE_CONTENT": '[class*="contentBox"]',
+    "MESSAGE_TIME": '[class*="timeLayout"]',
     # 表情(sticker)发送：打开表情面板的按钮 / 表情面板容器 / 表情项及其名称节点
     # （概念与类名参考 unmev/douyin-auto-fire；真机 E2E 前必须核对并尽量走 bundle 热更）
     "STICKER_BUTTONS": (
