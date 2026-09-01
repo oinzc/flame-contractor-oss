@@ -165,6 +165,8 @@ class ContractTarget(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
     platform_user_id: str | None = Field(default=None, max_length=128, index=True)
+    # 抖音公开展示号（unique_id/short_id），仅作可读展示；发送核对仍使用 platform_user_id。
+    platform_handle: str | None = Field(default=None, max_length=128)
     nickname_snapshot: str = Field(min_length=1, max_length=80, index=True)
     template_id: str | None = Field(
         default=None, foreign_key="message_template.id", ondelete="RESTRICT"

@@ -40,6 +40,7 @@ def test_scan_collects_sec_uid_from_user_info_response():
                         {
                             "nickname": "平台昵称",
                             "remark_name": "好友展示名",
+                            "unique_id": "friend_handle",
                             "sec_uid": "sec-user-1",
                         }
                     ]
@@ -57,6 +58,11 @@ def test_scan_collects_sec_uid_from_user_info_response():
                 "streak_kind": None,
                 "streak_label": None,
                 "platform_user_id": "sec-user-1",
+                "platform_handle": "friend_handle",
+                "identity_status": "bound",
+                "identity_source": "remark_name",
+                "identity_candidate_count": 1,
+                "identity_detail": "通过备注名唯一匹配",
             }
         ]
 
@@ -81,6 +87,48 @@ def test_same_label_with_two_platform_ids_is_not_auto_bound():
         entries = await chat.scan_all_chats()
 
         assert entries[0]["platform_user_id"] is None
+        assert entries[0]["identity_status"] == "ambiguous"
+        assert entries[0]["identity_candidate_count"] == 2
+
+    asyncio.run(scenario())
+
+
+def test_scan_marks_identity_not_observed_without_guessing():
+    async def scenario():
+        page = _EventPage(logged_in=True, conversation_titles=("未返回身份的好友",))
+        chat = DouyinChat(page, sleep=lambda _: asyncio.sleep(0))
+
+        entries = await chat.scan_all_chats()
+
+        assert entries[0]["platform_user_id"] is None
+        assert entries[0]["identity_status"] == "not_observed"
+        assert "未观察到" in entries[0]["identity_detail"]
+
+    asyncio.run(scenario())
+
+
+def test_search_title_ignores_unread_count_suffix():
+    class SearchItem:
+        async def query_selector(self, selector):
+            if "search_highlight" in selector:
+                return _TextElement("老龙帮")
+            if "SearchPanelitemtitle" in selector:
+                return _TextElement("老龙帮\n(9)")
+            return None
+
+        async def inner_text(self):
+            return "老龙帮\n(9)\n861\n发消息"
+
+    class _TextElement:
+        def __init__(self, text):
+            self.text = text
+
+        async def inner_text(self):
+            return self.text
+
+    async def scenario():
+        chat = DouyinChat(_EventPage(), sleep=lambda _: asyncio.sleep(0))
+        assert await chat._title_of(SearchItem()) == "老龙帮"
 
     asyncio.run(scenario())
 
@@ -135,6 +183,43 @@ def test_batch_import_backfills_and_renames_by_platform_id(client):
     assert len(targets) == 1
     assert targets[0]["nicknameSnapshot"] == "新昵称"
     assert targets[0]["platformUserId"] == "sec-user-1"
+
+
+def test_batch_import_persists_readable_handle_and_reports_identity_state(client):
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+
+    imported = client.post(
+        "/api/targets/batch",
+        json={
+            "accountId": account["id"],
+            "items": [
+                {
+                    "nickname": "已识别好友",
+                    "platformUserId": "sec-user-1",
+                    "platformHandle": "friend_handle",
+                    "identityStatus": "bound",
+                },
+                {
+                    "nickname": "未识别好友",
+                    "identityStatus": "not_observed",
+                },
+                {
+                    "nickname": "同名好友",
+                    "identityStatus": "ambiguous",
+                },
+            ],
+        },
+    )
+
+    assert imported.status_code == 201, imported.text
+    payload = imported.json()
+    assert payload["identityBound"] == ["已识别好友"]
+    assert payload["identityUnresolved"] == ["未识别好友"]
+    assert payload["identityAmbiguous"] == ["同名好友"]
+
+    targets = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    readable = next(target for target in targets if target["nicknameSnapshot"] == "已识别好友")
+    assert readable["platformHandle"] == "friend_handle"
 
 
 def test_batch_import_backfills_legacy_target_and_rejects_identity_conflict(client):

@@ -4,10 +4,10 @@
 M5 已全部完成并完成换机迁移（2026-08-29）。下一步按三期推进：**M6 补齐无人值守可靠性闭环**（诊断/重试/熔断/自启），**M7 前端重设计**（信息架构+视觉，使用 emilkowalski 技能与本地设计技能），**M8 体验功能**（文案池/统计/备份/截图扫码，长在新设计上）。
 
 ## Next Step
-本轮任务已完成：稳定身份匹配、扫描任务 SQLite 持久化与重启收束、全局发送/扫描任务坞、实时扫描结果、取消/重试、多账号与同账号互斥验收，以及文档同步均已提交（`b0aa6f6`、`9168a06`、`63f46a4`、`964c24d`、`10ceb0d`）。无强制待办；可选后续为第二个真实账号实测、统计图表可视化、真实风控样本检测。交接提示词见 `docs/HANDOFF_PROMPT.md`。
+本轮任务已完成：稳定身份匹配、可读平台号展示、扫描任务 SQLite 持久化与重启收束、全局发送/扫描任务坞、实时扫描结果、取消/重试、多账号与同账号互斥验收，以及文档同步均已完成。无强制待办；可选后续为第二个真实账号实测、统计图表可视化、真实风控样本检测。交接提示词见 `docs/HANDOFF_PROMPT.md`。
 
 ## Current Phase
-M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别/官方状态快照刷新）。前端采用 D1「驾驶舱」方向（用户拍板）；全局调度暂停状态持久化；会话扫描任务 SQLite 持久化、重启收束、实时结果、取消/重试与跨页面任务坞；稳定 `platform_user_id` 绑定；仓库协作规范已写入 `AGENTS.md`；全量 144 passed + build 通过，关键功能真机实测
+M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删除改名/unknown 人工闭环/扫描会话导入+抖音官方火花识别/官方状态快照刷新）。前端采用 D1「驾驶舱」方向（用户拍板）；全局调度暂停状态持久化；会话扫描任务 SQLite 持久化、重启收束、实时结果、取消/重试与跨页面任务坞；稳定 `platform_user_id` 绑定与可读 `platform_handle` 展示；仓库协作规范已写入 `AGENTS.md`；全量 147 passed + build 通过，关键功能真机实测
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -58,7 +58,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - `app/main.py` lifespan 挂载 `AsyncIOScheduler`，执行器复用 `browser_manager.run_send`；`requirements.txt` 加 `apscheduler>=3.10,<4`。
 - `app/api/scheduler.py`：`GET /api/scheduler`、`POST /api/scheduler/{pause,resume}`。
 - 前端 DashboardPage「自动调度」卡片：启停开关 + 今日各账号计划时刻与状态。
-- **验证**：后端 pytest 144 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ok/database:ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
+- **验证**：后端 pytest 147 passed；前端 build 通过；实际启动 uvicorn 后 `/health=ok/database:ready`、`/api/scheduler` 返回真实账号今日计划（business_date 正确、scheduled_at 落在窗口内）。
 - **完整真机 E2E**：到期计划 → `Scheduler.tick()` 派发 1 个账号 → `BrowserManager.run_send` 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 tick `dispatched=0` 且不调用发送执行器。
 
 ## M5 子阶段
@@ -74,7 +74,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - [x] **火花天数手动校准**（`PATCH /api/targets/{id}` + 好友页「校准」按钮；不 DOM 读取）。
 - [x] **官方火花状态快照**（会话扫描识别原文徽标并持久化；已有好友可刷新展示状态，不改写本地 `streak_days`）。
 ### Phase 4: 验收与交接
-- [x] 后端测试 144 passed；前端 build；图片/原生表情 E2E 实机验证通过；调度暂停状态持久化、官方火花状态快照、扫描任务持久化/恢复/取消/重试与多账号互斥回归通过。
+- [x] 后端测试 147 passed；前端 build；图片/原生表情 E2E 实机验证通过；调度暂停状态持久化、官方火花状态快照、扫描任务持久化/恢复/取消/重试与多账号互斥回归通过。
 - [x] 完整自动调度真机 E2E：到期计划 → `tick` 派发 1 个账号 → 真实发送与终态确认 → `SendSchedule.succeeded` + `SendJob.succeeded`；二次 `tick` `dispatched=0` 且不调用发送执行器。
 - [x] 更新 PROJECT_STATUS / task_plan / docs。
 
@@ -86,7 +86,7 @@ M6/M7/M8 全部完成 + CRUD 补齐（好友启停/模板编辑删除/账号删�
 - 调度器为进程内内存循环（APScheduler），持久调度语义由 `SendSchedule` 表承载。
 
 ## 复用 Success Criteria 参考（M3 保持）
-- 后端 pytest **144 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded；真实扫描已验证后台启动、实时增长（0→29）与完成快照（本轮重启后读取 43 条），跨页面任务坞验证通过，不将动态会话数写死为固定值。
+- 后端 pytest **147 passed**；前端 build 通过；真实发送「测试111」送达小号；重复发送返回 duplicate_succeeded；完整自动调度真机 E2E 的计划与任务均为 succeeded；真实扫描已验证后台启动、实时增长（0→39/44）与完成快照，扫描结果可区分可读平台号、未观察到身份和同名冲突，不将动态会话数写死为固定值。
 
 ## Errors Encountered
 | Error | Attempt | Resolution |

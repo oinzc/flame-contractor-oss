@@ -28,6 +28,7 @@ from .schemas import (
     AccountCreate,
     AccountPatch,
     AccountRead,
+    BatchTargetItem,
     DashboardSummary,
     JobRead,
     PoolItemIn,
@@ -36,7 +37,8 @@ from .schemas import (
     TargetBatchCreate,
     TargetBatchRead,
     TargetPatch,
-    TargetRead,    TemplateCreate,
+    TargetRead,
+    TemplateCreate,
     TemplatePatch,
     TemplateRead,
 )
@@ -444,9 +446,22 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
     refreshed: list[str] = []
     duplicates: list[str] = []
     failed: list[str] = []
+    identity_bound: list[str] = []
+    identity_unresolved: list[str] = []
+    identity_ambiguous: list[str] = []
+
+    def track_identity(item: BatchTargetItem, nickname: str, platform_user_id: str | None) -> None:
+        if platform_user_id:
+            identity_bound.append(nickname)
+        elif item.identity_status == "ambiguous":
+            identity_ambiguous.append(nickname)
+        elif item.identity_status == "not_observed":
+            identity_unresolved.append(nickname)
+
     for item in payload.items:
         nickname = item.nickname
         platform_user_id = item.platform_user_id.strip() if item.platform_user_id else None
+        platform_handle = item.platform_handle.strip() if item.platform_handle else None
         existing = (
             session.exec(
                 select(ContractTarget).where(
@@ -475,6 +490,8 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                 continue
             if platform_user_id and existing.platform_user_id is None:
                 existing.platform_user_id = platform_user_id
+            if platform_handle:
+                existing.platform_handle = platform_handle
             if existing.platform_user_id == platform_user_id and existing.nickname_snapshot != nickname:
                 nickname_conflict = session.exec(
                     select(ContractTarget).where(
@@ -491,6 +508,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             # 扫描导入可以刷新已有好友的官方徽标快照；本地累计天数保持不变。
             if (
                 platform_user_id
+                or platform_handle
                 or "spark_kind" in item.model_fields_set
                 or "spark_label" in item.model_fields_set
             ):
@@ -504,6 +522,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                 refreshed.append(nickname)
             else:
                 duplicates.append(nickname)
+            track_identity(item, nickname, platform_user_id)
             continue
         try:
             scanned_at = (
@@ -515,6 +534,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                 ContractTarget(
                     account_id=payload.account_id,
                     platform_user_id=platform_user_id,
+                    platform_handle=platform_handle,
                     nickname_snapshot=nickname,
                     template_id=payload.template_id,
                     # 扫描读到的官方火花天数作为初始值；之后仍走本地累计
@@ -526,9 +546,11 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             )
             session.commit()
             created.append(nickname)
+            track_identity(item, nickname, platform_user_id)
         except IntegrityError:
             session.rollback()
             duplicates.append(nickname)
+            track_identity(item, nickname, platform_user_id)
         except Exception as exc:  # 单条失败不拖垮整批
             session.rollback()
             failed.append(f"{nickname}：{exc.__class__.__name__}")
@@ -537,6 +559,9 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         refreshed=refreshed,
         duplicates=duplicates,
         failed=failed,
+        identity_bound=identity_bound,
+        identity_unresolved=identity_unresolved,
+        identity_ambiguous=identity_ambiguous,
     )
 
 

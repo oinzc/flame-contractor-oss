@@ -3,13 +3,15 @@
 > 最近更新：2026-09-01 | 功能基线：稳定身份匹配 + CRUD 补齐 + 会话扫描导入 + SQLite 持久化扫描任务/全局任务坞 + 实时结果/取消重试 + 火花识别/官方状态快照 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性）全部落地。后端 pytest **144 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性）全部落地。后端 pytest **147 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
 
 **2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
 
 **2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容。
 
 **2026-09-01 会话扫描任务可靠性闭环**：新增 `ScanTask`/迁移 `d2e6f8a0b1c3`，每次进度快照和已发现会话条目写入 SQLite；`GET /scan-chats/latest` 可在刷新或后端重启后恢复最近快照。前端任务坞统一承载发送与扫描任务，扫描结果实时增长，支持取消并保留已发现条目、失败重试；后端重启会把遗留 `running` 收束为 `interrupted`，不自动续跑或自动导入/发送，避免重复操作。
+
+**2026-09-01 稳定身份展示与扫描导入修复**：新增 `ContractTarget.platform_handle`（迁移 `e7f9a1c3d5b7`）保存 `unique_id/short_id` 等可读平台号；内部 `platform_user_id` 继续只作为稳定身份核对键，不再直接当作用户可读的「抖音号」。扫描会话名改为读取搜索结果的首个非空昵称，避免把 `(9)` 等官方数量后缀带入严格匹配；扫描结果和导入摘要新增 `bound/not_observed/ambiguous` 身份诊断。未观察到身份数据或同名冲突时明确显示并保持空绑定，绝不猜测。真实账号扫描 44/44 完成，结果页可见 100%、可读平台号与未识别原因。
 
 **2026-08-31 发送定位修复**：抖音右侧标题会在主昵称后追加官方火花状态；确认逻辑现在只对首个非空行做严格等值匹配，保留完整标题用于诊断，不放宽为模糊匹配。真实 Dry Run 14 个对象中 10 个 `found`、4 个 `not_found`，未发送消息。
 
@@ -109,7 +111,7 @@ backend/app/
   scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
@@ -122,11 +124,11 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **144 passed**（含稳定身份匹配、扫描任务 SQLite 持久化/恢复、实时结果、取消/重试、多账号互斥与重启回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **147 passed**（含稳定身份匹配、可读平台号、扫描任务 SQLite 持久化/恢复、实时结果、取消/重试、多账号互斥与重启回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
 | 2026-09-01 运行态检查 | 后端 `/health` 返回 `status=ok`、`database=ready`；账号「示例账号」为 `healthy`；前后端均监听回环地址 `127.0.0.1`（8000/5173） |
-| 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `29`；本轮重启后从 SQLite 读取最近一次 `completed` 快照 43 条。会话数随抖音页面状态变化，不写死为固定总数 |
+| 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `39`/`44`；本轮 `44/44` 完成，导入摘要正确区分 6 个稳定身份已绑定与 9 个本次未观察到身份数据。会话数随抖音页面状态变化，不写死为固定总数 |
 | 真实 Dry Run（2026-08-31） | `overall=ok`；14 个对象中 10 个 `found`（含三种火花徽标后缀），4 个 `not_found`；只读，未发送消息 |
 | 端到端自动调度真机 E2E | 到期计划 → `Scheduler.tick()` 派发 1 个账号 → 真实 `run_send` 发送与终态确认；计划 `succeeded`、任务 `succeeded`；再次 tick `dispatched=0` 且未调用发送执行器 |
 | M3 真实发送 E2E | 测试111 送达小号；重复发送正确跳过（M3 保留，未回归） |

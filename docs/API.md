@@ -199,7 +199,8 @@ password, cookie, token, storageState, profilePath
 |---|---|---|---|---|
 | 账号 ID | accountId | UUID | 是 | 所属账号 |
 | 昵称快照 | nicknameSnapshot | string(1..80) | 是 | 当前识别名称；未来绑定稳定 ID 后仅作展示 |
-| 平台用户 ID | platformUserId | string | 否 | 稳定 ID，获得后优先匹配 |
+| 平台用户 ID | platformUserId | string | 否 | 内部稳定 ID（通常为 sec_uid），获得后优先匹配；不建议当作可读抖音号展示 |
+| 可读平台号 | platformHandle | string | 否 | 抖音 `unique_id`，缺失时回退 `short_id`；仅用于展示 |
 | 模板 ID | templateId | UUID | 否 | 绑定模板 |
 | 展示火花天数 | streakDays | integer>=0 | 否 | 默认 0 |
 
@@ -417,9 +418,11 @@ password, cookie, token, storageState, profilePath
 ### 好友（/api/targets）
 - `PATCH /api/targets/{id}`：开放 `enabled`（暂停/启用，删除被任务引用时的兜底）与
   `templateId`（换绑模板，`null`=解绑，模板不存在 404）。
-- `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, streakDays?, sparkKind?, sparkLabel?}]`（≤200 条），
+- `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, platformUserId?, platformHandle?, identityStatus?, streakDays?, sparkKind?, sparkLabel?}]`（≤200 条），
   逐条独立提交：新好友进 `created`、普通重名进 `duplicates`、单条失败进 `failed`，不中断整批；
   携带官方状态字段的已有好友更新官方快照并进 `refreshed`，不改写本地 `streakDays`。
+  响应中的 `identityBound`、`identityUnresolved`、`identityAmbiguous` 分别说明本批实际写入稳定身份、
+  本次没有观察到可安全绑定的身份、以及同名冲突而主动阻止绑定的条目；未观察到不等于用户不存在。
   新好友的 `streakDays` 为扫描读到的官方火花天数，用作本地累计初始值；官方状态原文与扫描时间另存为展示快照。
 
 ### 模板（/api/templates）
@@ -440,7 +443,10 @@ password, cookie, token, storageState, profilePath
 
 ### 会话扫描与好友导入（/api/accounts/{id}/scan-chats）
 - `POST /api/accounts/{id}/scan-chats`：headless 全量滚动会话列表（只读），返回
-  `entries: [{title, preview, streakDays?, streakKind?, streakLabel?}]`。
+  `entries: [{title, platformUserId?, platformHandle?, identityStatus, identitySource?, identityCandidateCount, identityDetail?, preview, streakDays?, streakKind?, streakLabel?}]`。
+  - `platformUserId` 是内部稳定身份核对键，`platformHandle` 是可读抖音号；二者均只有在页面响应能安全关联时才返回；
+  - `identityStatus` 为 `bound`（唯一绑定）、`not_observed`（本次响应没有对应身份数据）或 `ambiguous`（多个用户同名）；
+    后两种状态不会猜测绑定，也不会据此发送；`identityDetail` 用于解释导入后为什么没有变化；
   - `streakDays`：抖音官方火花天数（名字旁徽标，数字形态）；
   - `streakLabel`：特殊态文字徽标（「重燃中 1/3」「N 天后消失」）；
   - `streakKind`：`normal`/`couple`/`family`（取自火花图标路径）；

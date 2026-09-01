@@ -16,6 +16,11 @@
     "[class*=\"SearchPanelitem_name\"]",
     "[class*=\"SearchPanelitem-name\"]"
   ],
+  "SEARCH_NAME_EXACT_SELECTORS": [
+    "[class*=\"SearchPanelitemsearch_highlight\"]",
+    "[class*=\"SearchPanelitemsearch-highlight\"]",
+    "[class*=\"SearchPanelitemsearchHighlight\"]"
+  ],
   "SEARCH_CHAT_BTN": "div[class*=\"SearchPanelitemchat_btn\"]",
   "RIGHT_TITLE": ".RightPanelHeadertitleContainer",
   "SEARCH_INPUT": "input.semi-input[placeholder=\"搜索\"][type=\"text\"]",

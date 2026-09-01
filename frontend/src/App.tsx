@@ -226,6 +226,9 @@ export default function App() {
       refreshed: [],
       duplicates: [],
       failed: [],
+      identityBound: [],
+      identityUnresolved: [],
+      identityAmbiguous: [],
     }
 
     try {
@@ -236,6 +239,8 @@ export default function App() {
           items: existingEntries.map((entry) => ({
             nickname: entry.title,
             platformUserId: entry.platformUserId,
+            platformHandle: entry.platformHandle,
+            identityStatus: entry.identityStatus,
             streakDays: entry.streakDays ?? undefined,
             sparkKind: entry.streakKind,
             sparkLabel: entry.streakLabel,
