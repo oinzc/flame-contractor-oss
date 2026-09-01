@@ -283,3 +283,24 @@ class ScanTask(SQLModel, table=True):
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
     updated_at: datetime = Field(default_factory=utc_now, index=True)
+
+
+class IdentityHydrationTask(SQLModel, table=True):
+    """普通好友身份补采任务快照；保存进度以便切页或刷新后继续查看。"""
+
+    __tablename__ = "identity_hydration_task"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
+    status: ScanTaskStatus = Field(default=ScanTaskStatus.RUNNING, max_length=16, index=True)
+    total: int = Field(default=0, ge=0)
+    completed: int = Field(default=0, ge=0)
+    stage: str = Field(default="准备补采身份", max_length=64)
+    current_item: str | None = Field(default=None, max_length=255)
+    overall: str | None = Field(default=None, max_length=32)
+    detail: str | None = Field(default=None, max_length=256)
+    # 只保存每个目标的必要结果，不保存抖音完整响应体。
+    results_json: str = Field(default="[]", sa_column=Column(Text, nullable=False))
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=utc_now, index=True)

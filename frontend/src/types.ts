@@ -155,6 +155,37 @@ export interface ScanTaskState extends ScanProgress {
   pollError: string | null
 }
 
+export interface IdentityHydrationResult {
+  targetId: string
+  nickname: string
+  status: 'bound' | 'ambiguous' | 'not_observed' | 'conflict'
+  opened: boolean
+  platformUserId: string | null
+  platformHandle: string | null
+  identitySource: 'remark_name' | 'nickname' | 'unique_id' | 'short_id' | null
+  identityCandidateCount: number
+  detail: string | null
+}
+
+export interface IdentityHydrationProgress {
+  taskId: string
+  accountId: string
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
+  total: number
+  completed: number
+  stage: string
+  currentItem: string | null
+  overall: 'ok' | 'partial' | 'auth_expired' | 'error' | null
+  detail: string | null
+  results: IdentityHydrationResult[]
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface IdentityHydrationTaskState extends IdentityHydrationProgress {
+  pollError: string | null
+}
+
 export interface PoolItem {
   id: string
   content: string

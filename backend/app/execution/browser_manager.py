@@ -25,6 +25,7 @@ from ..models import (
     SendJob,
     ScanTask,
     ScanTaskStatus,
+    IdentityHydrationTask,
     TemplateType,
 )
 from .douyin_chat import (
@@ -116,6 +117,25 @@ class ScanProgress:
     finished_at: datetime | None = None
 
 
+@dataclass
+class IdentityHydrationProgress:
+    """普通好友身份补采快照；结果与进度一起持久化到 SQLite。"""
+
+    task_id: str
+    account_id: str
+    target_ids: list[str]
+    total: int
+    completed: int = 0
+    status: str = "running"  # running | completed | failed | interrupted | cancelled
+    stage: str = "准备补采身份"
+    current_item: str | None = None
+    overall: str | None = None
+    detail: str | None = None
+    results: list[dict] | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class BrowserManager:
     """每账号一个浏览器会话；负责扫码登录流程与 Dry Run。
 
@@ -151,6 +171,8 @@ class BrowserManager:
         self._send_progress: dict[str, SendProgress] = {}
         self._scan_progress: dict[str, ScanProgress] = {}
         self._scan_tasks: dict[str, asyncio.Task] = {}
+        self._identity_hydration_progress: dict[str, IdentityHydrationProgress] = {}
+        self._identity_hydration_tasks: dict[str, asyncio.Task] = {}
         self._playwright = None
         self._browser_factory = browser_factory
         self._login_poll_interval = login_poll_interval
@@ -482,8 +504,428 @@ class BrowserManager:
                 return self._scan_progress_view(progress)
             return self._scan_progress_view_from_record(task)
 
+    @staticmethod
+    def _identity_hydration_results_from_json(value: str | None) -> list[dict]:
+        if not value:
+            return []
+        try:
+            results = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return results if isinstance(results, list) else []
+
+    def _identity_hydration_progress_view_from_record(
+        self, task: IdentityHydrationTask
+    ) -> dict:
+        status = task.status.value if isinstance(task.status, ScanTaskStatus) else str(task.status)
+        return {
+            "task_id": task.id,
+            "account_id": task.account_id,
+            "status": status,
+            "total": task.total,
+            "completed": task.completed,
+            "stage": task.stage,
+            "current_item": task.current_item,
+            "overall": task.overall,
+            "detail": task.detail,
+            "results": self._identity_hydration_results_from_json(task.results_json),
+            "started_at": task.started_at,
+            "finished_at": task.finished_at,
+        }
+
+    def _persist_identity_hydration_progress(
+        self, progress: IdentityHydrationProgress
+    ) -> None:
+        """把身份补采快照写入 SQLite；每次只占用一个短事务。"""
+        with Session(self._engine) as session:
+            task = session.get(IdentityHydrationTask, progress.task_id)
+            if task is None:
+                return
+            task.status = ScanTaskStatus(progress.status)
+            task.total = progress.total
+            task.completed = progress.completed
+            task.stage = progress.stage
+            task.current_item = progress.current_item
+            task.overall = progress.overall
+            task.detail = progress.detail
+            task.results_json = json.dumps(
+                progress.results or [], ensure_ascii=False, separators=(",", ":")
+            )
+            task.started_at = progress.started_at or task.started_at
+            task.finished_at = progress.finished_at
+            task.updated_at = _utcnow()
+            session.add(task)
+            session.commit()
+
+    def _identity_hydration_progress_view(
+        self, progress: IdentityHydrationProgress
+    ) -> dict:
+        return {
+            "task_id": progress.task_id,
+            "account_id": progress.account_id,
+            "status": progress.status,
+            "total": progress.total,
+            "completed": progress.completed,
+            "stage": progress.stage,
+            "current_item": progress.current_item,
+            "overall": progress.overall,
+            "detail": progress.detail,
+            "results": progress.results or [],
+            "started_at": progress.started_at,
+            "finished_at": progress.finished_at,
+        }
+
+    def _update_identity_hydration_progress(
+        self, task_id: str, **changes: object
+    ) -> None:
+        progress = self._identity_hydration_progress.get(task_id)
+        if progress is None:
+            return
+        for key, value in changes.items():
+            if hasattr(progress, key):
+                setattr(progress, key, value)
+        self._persist_identity_hydration_progress(progress)
+
+    def _active_identity_hydration(self, account_id: str) -> IdentityHydrationProgress | None:
+        for progress in reversed(list(self._identity_hydration_progress.values())):
+            if progress.account_id == account_id and progress.status == "running":
+                return progress
+        return None
+
+    async def start_identity_hydration(
+        self, account_id: str, target_ids: list[str]
+    ) -> dict:
+        """为已存在的普通好友逐个打开会话，补采并安全回填稳定身份。"""
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能补采身份")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能补采身份")
+        if self._active_identity_hydration(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号已有身份补采进行中")
+        send_progress = self._send_progress.get(account_id)
+        if send_progress is not None and send_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号正在发送，暂不能补采身份")
+
+        ordered_ids = list(dict.fromkeys(target_id.strip() for target_id in target_ids if target_id.strip()))
+        with Session(self._engine) as session:
+            if session.get(Account, account_id) is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+            targets_by_id = {
+                target.id: target
+                for target in session.exec(
+                    select(ContractTarget).where(ContractTarget.id.in_(ordered_ids))
+                ).all()
+            }
+            if len(targets_by_id) != len(ordered_ids) or any(
+                targets_by_id[target_id].account_id != account_id for target_id in ordered_ids if target_id in targets_by_id
+            ):
+                raise HTTPException(status_code=404, detail="所选好友不存在或不属于当前账号")
+            eligible = [
+                targets_by_id[target_id]
+                for target_id in ordered_ids
+                if targets_by_id[target_id].platform_user_id is None
+                and targets_by_id[target_id].platform_conversation_id is None
+                and targets_by_id[target_id].conversation_type != "group"
+            ]
+
+        if not eligible:
+            raise HTTPException(status_code=409, detail="所选好友中没有需要补采的普通好友")
+
+        now = _utcnow()
+        progress = IdentityHydrationProgress(
+            task_id=str(uuid4()),
+            account_id=account_id,
+            target_ids=[target.id for target in eligible],
+            total=len(eligible),
+            results=[
+                {
+                    "target_id": target.id,
+                    "nickname": target.nickname_snapshot,
+                    "status": "not_observed",
+                    "opened": False,
+                    "platform_user_id": None,
+                    "platform_handle": None,
+                    "identity_source": None,
+                    "identity_candidate_count": 0,
+                    "detail": "等待补采",
+                }
+                for target in eligible
+            ],
+            started_at=now,
+        )
+        with Session(self._engine) as session:
+            session.add(
+                IdentityHydrationTask(
+                    id=progress.task_id,
+                    account_id=account_id,
+                    status=ScanTaskStatus.RUNNING,
+                    total=progress.total,
+                    completed=progress.completed,
+                    stage=progress.stage,
+                    current_item=progress.current_item,
+                    results_json=json.dumps(
+                        progress.results, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    started_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+        self._identity_hydration_progress[progress.task_id] = progress
+        task = asyncio.create_task(self._run_identity_hydration_task(progress))
+        self._identity_hydration_tasks[progress.task_id] = task
+        task.add_done_callback(lambda _: self._identity_hydration_tasks.pop(progress.task_id, None))
+        return self._identity_hydration_progress_view(progress)
+
+    async def _run_identity_hydration_task(
+        self, progress: IdentityHydrationProgress
+    ) -> None:
+        try:
+            result = await self._identity_hydration_impl(progress.account_id, progress)
+            overall = result["overall"]
+            if overall in {"ok", "partial"}:
+                self._update_identity_hydration_progress(
+                    progress.task_id,
+                    status="completed",
+                    completed=progress.total,
+                    current_item=None,
+                    stage="身份补采完成",
+                    overall=overall,
+                    detail=result.get("detail"),
+                    results=result.get("results") or progress.results or [],
+                    finished_at=_utcnow(),
+                )
+            else:
+                self._update_identity_hydration_progress(
+                    progress.task_id,
+                    status="failed",
+                    current_item=None,
+                    stage="登录失效" if overall == "auth_expired" else "身份补采失败",
+                    overall=overall,
+                    detail=result.get("detail"),
+                    results=result.get("results") or progress.results or [],
+                    finished_at=_utcnow(),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._update_identity_hydration_progress(
+                progress.task_id,
+                status="failed",
+                current_item=None,
+                stage="流程中断",
+                overall="error",
+                detail=type(exc).__name__,
+                results=progress.results or [],
+                finished_at=_utcnow(),
+            )
+
+    def _bind_hydrated_identity(
+        self,
+        account_id: str,
+        target_id: str,
+        platform_user_id: str,
+        platform_handle: str | None,
+    ) -> tuple[bool, str | None]:
+        """只给原目标回填身份；已有其他目标占用同一 ID 时拒绝覆盖。"""
+        with Session(self._engine) as session:
+            target = session.get(ContractTarget, target_id)
+            if target is None or target.account_id != account_id:
+                return False, "好友已不存在或不属于当前账号"
+            if target.platform_user_id is not None:
+                if target.platform_user_id == platform_user_id:
+                    return True, None
+                return False, "好友已有不同稳定身份，拒绝覆盖"
+            conflict = session.exec(
+                select(ContractTarget).where(
+                    ContractTarget.account_id == account_id,
+                    ContractTarget.platform_user_id == platform_user_id,
+                    ContractTarget.id != target_id,
+                )
+            ).first()
+            if conflict is not None:
+                return False, f"该稳定身份已绑定好友「{conflict.nickname_snapshot}」，拒绝覆盖"
+            target.platform_user_id = platform_user_id
+            target.platform_handle = platform_handle
+            target.conversation_type = "user"
+            target.updated_at = _utcnow()
+            session.add(target)
+            session.commit()
+        return True, None
+
+    async def _identity_hydration_impl(
+        self,
+        account_id: str,
+        progress: IdentityHydrationProgress,
+    ) -> dict:
+        """执行身份补采；浏览器只打开会话，不触发发送动作。"""
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                return {"overall": "error", "detail": "账号不存在", "results": []}
+            targets = session.exec(
+                select(ContractTarget).where(ContractTarget.id.in_(progress.target_ids))
+            ).all()
+        targets_by_id = {target.id: target for target in targets}
+        ordered_targets = [targets_by_id[target_id] for target_id in progress.target_ids if target_id in targets_by_id]
+        profile_path = ensure_profile_dir(self._settings, account_id)
+        context = None
+        try:
+            self._update_identity_hydration_progress(progress.task_id, stage="启动浏览器")
+            context, page = await self._open(profile_path, headless=True)
+            chat = self._make_chat(page)
+            self._update_identity_hydration_progress(progress.task_id, stage="打开会话列表")
+            await chat.open_chat_page()
+            self._update_identity_hydration_progress(progress.task_id, stage="检查登录状态")
+            if not await chat.wait_logged_in(
+                timeout=self._login_check_timeout,
+                poll_interval=self._login_poll_interval,
+            ):
+                self._mark_auth_expired(account_id)
+                return {
+                    "overall": "auth_expired",
+                    "detail": "登录已失效，请重新扫码",
+                    "results": progress.results or [],
+                }
+
+            results = list(progress.results or [])
+            result_index = {item.get("target_id"): index for index, item in enumerate(results)}
+            for index, target in enumerate(ordered_targets):
+                self._update_identity_hydration_progress(
+                    progress.task_id,
+                    stage="打开好友会话并读取身份",
+                    current_item=target.nickname_snapshot,
+                    completed=index,
+                )
+                opened, match = await chat.hydrate_identity_for_label(target.nickname_snapshot)
+                result = {
+                    "target_id": target.id,
+                    "nickname": target.nickname_snapshot,
+                    "status": match.status,
+                    "opened": bool(opened.opened and opened.exact),
+                    "platform_user_id": match.platform_user_id,
+                    "platform_handle": match.platform_handle,
+                    "identity_source": match.source,
+                    "identity_candidate_count": match.candidate_count,
+                    "detail": match.detail,
+                }
+                if match.status == "bound" and match.platform_user_id:
+                    bound, bind_detail = self._bind_hydrated_identity(
+                        account_id,
+                        target.id,
+                        match.platform_user_id,
+                        match.platform_handle,
+                    )
+                    if not bound:
+                        result["status"] = "conflict"
+                        result["platform_user_id"] = None
+                        result["platform_handle"] = None
+                        result["detail"] = bind_detail
+                if target.id in result_index:
+                    results[result_index[target.id]] = result
+                else:
+                    results.append(result)
+                self._update_identity_hydration_progress(
+                    progress.task_id,
+                    completed=index + 1,
+                    current_item=target.nickname_snapshot
+                    if index + 1 < len(ordered_targets)
+                    else None,
+                    results=results,
+                )
+            self._touch_verified(account_id)
+            bound_count = sum(item.get("status") == "bound" for item in results)
+            unresolved_count = len(results) - bound_count
+            overall = "ok" if unresolved_count == 0 else "partial"
+            detail = f"补采完成：已绑定 {bound_count} 个，仍需处理 {unresolved_count} 个"
+            return {"overall": overall, "detail": detail, "results": results}
+        except Exception as exc:
+            return {
+                "overall": "error",
+                "detail": type(exc).__name__,
+                "results": progress.results or [],
+            }
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+    def identity_hydration_progress(self, account_id: str, task_id: str) -> dict:
+        progress = self._identity_hydration_progress.get(task_id)
+        if progress is not None:
+            if progress.account_id != account_id:
+                raise HTTPException(status_code=404, detail="身份补采任务不存在")
+            return self._identity_hydration_progress_view(progress)
+        with Session(self._engine) as session:
+            task = session.get(IdentityHydrationTask, task_id)
+            if task is None or task.account_id != account_id:
+                raise HTTPException(status_code=404, detail="身份补采任务不存在")
+            return self._identity_hydration_progress_view_from_record(task)
+
+    async def cancel_identity_hydration(self, account_id: str, task_id: str) -> dict:
+        """取消身份补采；已完成的回填保留，重复取消幂等。"""
+        progress = self._identity_hydration_progress.get(task_id)
+        if progress is None:
+            with Session(self._engine) as session:
+                task = session.get(IdentityHydrationTask, task_id)
+                if task is None or task.account_id != account_id:
+                    raise HTTPException(status_code=404, detail="身份补采任务不存在")
+                if task.status == ScanTaskStatus.RUNNING:
+                    now = _utcnow()
+                    task.status = ScanTaskStatus.CANCELLED
+                    task.stage = "已取消身份补采"
+                    task.current_item = None
+                    task.detail = "用户取消身份补采；已完成的身份回填已保留"
+                    task.finished_at = now
+                    task.updated_at = now
+                    session.add(task)
+                    session.commit()
+                return self._identity_hydration_progress_view_from_record(task)
+
+        if progress.account_id != account_id:
+            raise HTTPException(status_code=404, detail="身份补采任务不存在")
+        if progress.status != "running":
+            return self._identity_hydration_progress_view(progress)
+        task = self._identity_hydration_tasks.get(task_id)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if progress.status == "running":
+            self._update_identity_hydration_progress(
+                task_id,
+                status="cancelled",
+                stage="已取消身份补采",
+                current_item=None,
+                overall=None,
+                detail="用户取消身份补采；已完成的身份回填已保留",
+                results=progress.results or [],
+                finished_at=_utcnow(),
+            )
+        return self._identity_hydration_progress_view(progress)
+
+    def latest_identity_hydration(self, account_id: str) -> dict | None:
+        """读取账号最近一次身份补采；用于刷新后恢复任务坞。"""
+        with Session(self._engine) as session:
+            task = session.exec(
+                select(IdentityHydrationTask)
+                .where(IdentityHydrationTask.account_id == account_id)
+                .order_by(IdentityHydrationTask.updated_at.desc())
+                .limit(1)
+            ).first()
+            if task is None:
+                return None
+            progress = self._identity_hydration_progress.get(task.id)
+            if progress is not None:
+                return self._identity_hydration_progress_view(progress)
+            return self._identity_hydration_progress_view_from_record(task)
+
     def recover_persisted_scan_tasks(self) -> int:
-        """启动时收束遗留 running 任务；不自动重启浏览器或重复扫描。"""
+        """启动时收束遗留扫描/身份补采；不自动重启浏览器或重复操作。"""
         now = _utcnow()
         recovered = 0
         with Session(self._engine) as session:
@@ -495,6 +937,20 @@ class BrowserManager:
                 task.stage = "后端重启，中断扫描"
                 task.current_item = None
                 task.detail = "后端在扫描完成前重启，已保留已发现结果；请重新发起扫描"
+                task.finished_at = now
+                task.updated_at = now
+                session.add(task)
+                recovered += 1
+            hydration_tasks = session.exec(
+                select(IdentityHydrationTask).where(
+                    IdentityHydrationTask.status == ScanTaskStatus.RUNNING
+                )
+            ).all()
+            for task in hydration_tasks:
+                task.status = ScanTaskStatus.INTERRUPTED
+                task.stage = "后端重启，中断身份补采"
+                task.current_item = None
+                task.detail = "后端在身份补采完成前重启，已保留已完成回填；请重新发起"
                 task.finished_at = now
                 task.updated_at = now
                 session.add(task)
@@ -1545,10 +2001,23 @@ class BrowserManager:
                     detail="后端在扫描完成前停止，已保留已发现结果；请重新发起扫描",
                     finished_at=_utcnow(),
                 )
+        for progress in list(self._identity_hydration_progress.values()):
+            if progress.status == "running":
+                self._update_identity_hydration_progress(
+                    progress.task_id,
+                    status="interrupted",
+                    stage="后端停止，中断身份补采",
+                    current_item=None,
+                    detail="后端在身份补采完成前停止，已保留已完成回填；请重新发起",
+                    finished_at=_utcnow(),
+                )
         for flow in list(self._flows.values()):
             if flow.task is not None and not flow.task.done():
                 flow.task.cancel()
         for task in list(self._scan_tasks.values()):
+            if not task.done():
+                task.cancel()
+        for task in list(self._identity_hydration_tasks.values()):
             if not task.done():
                 task.cancel()
         for flow in list(self._flows.values()):
@@ -1562,9 +2031,16 @@ class BrowserManager:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        for task in list(self._identity_hydration_tasks.values()):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         self._flows.clear()
         self._scan_tasks.clear()
         self._scan_progress.clear()
+        self._identity_hydration_tasks.clear()
+        self._identity_hydration_progress.clear()
         if self._playwright is not None:
             await self._playwright.stop()
             self._playwright = None

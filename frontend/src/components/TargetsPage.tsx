@@ -3,6 +3,7 @@ import { api, ApiError } from '../api'
 import type {
   Account,
   ContractTarget,
+  IdentityHydrationTaskState,
   MessageTemplate,
   ScanChatEntry,
   ScanTaskState,
@@ -20,6 +21,9 @@ interface Props {
   scanTask: ScanTaskState | null
   scanStarting: boolean
   onStartScan: (accountId: string) => Promise<void>
+  identityTask: IdentityHydrationTaskState | null
+  identityStarting: boolean
+  onStartIdentityHydration: (accountId: string, targetIds: string[]) => Promise<void>
 }
 
 function compactStableId(value: string): string {
@@ -54,6 +58,9 @@ export default function TargetsPage({
   scanTask,
   scanStarting,
   onStartScan,
+  identityTask,
+  identityStarting,
+  onStartIdentityHydration,
 }: Props) {
   const [selectedAccountId, setSelectedAccountId] = useState(accounts[0]?.id ?? '')
   const [showPaused, setShowPaused] = useState(false)
@@ -122,6 +129,17 @@ export default function TargetsPage({
       .filter((conversationId): conversationId is string => Boolean(conversationId)),
   )
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
+  const identityTargetIds = accountTargets
+    .filter(
+      (target) =>
+        target.conversationType !== 'group' &&
+        !target.platformUserId &&
+        !target.platformConversationId,
+    )
+    .map((target) => target.id)
+  const selectedIdentityTask =
+    identityTask?.accountId === selectedAccountId ? identityTask : null
+  const identityRunning = identityTask?.status === 'running'
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
   const visibleScanEntries =
@@ -245,6 +263,20 @@ export default function TargetsPage({
     }
   }
 
+  async function handleIdentityHydration() {
+    if (identityTargetIds.length === 0) return
+    const confirmed = window.confirm(
+      `将逐个打开 ${identityTargetIds.length} 个未识别的普通好友会话，触发抖音官方身份接口。\n\n不会发送消息，但可能将这些会话标记为已读。是否继续？`,
+    )
+    if (!confirmed) return
+    setActionError(null)
+    try {
+      await onStartIdentityHydration(selectedAccountId, identityTargetIds)
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '身份补采启动失败，请重试')
+    }
+  }
+
   async function handleImportSelected() {
     if (selectedEntries.size === 0) return
     setBatchSubmitting(true)
@@ -346,6 +378,33 @@ export default function TargetsPage({
                 <h2>好友列表（{selectedTargets.length}）</h2>
               </div>
               <div className="target-list-actions">
+                <button
+                  className="btn small"
+                  type="button"
+                  disabled={
+                    identityStarting ||
+                    identityRunning ||
+                    scanLoading ||
+                    identityTargetIds.length === 0 ||
+                    selectedAccount?.status !== 'healthy'
+                  }
+                  title={
+                    identityTargetIds.length === 0
+                      ? '普通好友身份均已绑定'
+                      : selectedAccount?.status !== 'healthy'
+                        ? '账号需处于健康登录状态才能补采身份'
+                        : '逐个打开已有普通好友会话以触发官方身份接口；不会发送消息，但可能将会话标为已读'
+                  }
+                  onClick={() => void handleIdentityHydration()}
+                >
+                  {identityStarting
+                    ? '正在启动补采…'
+                    : identityRunning
+                      ? selectedIdentityTask
+                        ? `补采中… ${Math.round((selectedIdentityTask.completed / Math.max(selectedIdentityTask.total, 1)) * 100)}%`
+                        : '其他账号补采中…'
+                      : `补采好友身份（${identityTargetIds.length}）`}
+                </button>
                 <button
                   className="btn small"
                   type="button"
@@ -506,7 +565,7 @@ export default function TargetsPage({
               <h2>会话扫描与批量添加</h2>
             </div>
             <p className="scan-helper">
-              扫描只读取会话列表，不会发送消息。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突的会话不会猜测绑定。
+              扫描只读取会话列表，不点击会话、不发送消息；身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
             </p>
             {selectedScanTask && (
               <section

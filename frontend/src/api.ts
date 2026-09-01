@@ -108,6 +108,27 @@ export const api = {
     ),
   latestScanChats: (accountId: string) =>
     request<import('./types').ScanProgress | null>(`/api/accounts/${accountId}/scan-chats/latest`),
+  startIdentityHydration: (accountId: string, targetIds: string[]) =>
+    request<import('./types').IdentityHydrationProgress>(
+      `/api/accounts/${accountId}/identity-hydration/start`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ targetIds }),
+      },
+    ),
+  identityHydrationProgress: (accountId: string, taskId: string) =>
+    request<import('./types').IdentityHydrationProgress>(
+      `/api/accounts/${accountId}/identity-hydration/progress?taskId=${encodeURIComponent(taskId)}`,
+    ),
+  cancelIdentityHydration: (accountId: string, taskId: string) =>
+    request<import('./types').IdentityHydrationProgress>(
+      `/api/accounts/${accountId}/identity-hydration/cancel?taskId=${encodeURIComponent(taskId)}`,
+      { method: 'POST' },
+    ),
+  latestIdentityHydration: (accountId: string) =>
+    request<import('./types').IdentityHydrationProgress | null>(
+      `/api/accounts/${accountId}/identity-hydration/latest`,
+    ),
   sendPreview: (id: string) =>
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
   sendProgress: (id: string) =>

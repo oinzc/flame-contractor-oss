@@ -490,6 +490,58 @@ class ScanProgressRead(APIBase):
     finished_at: datetime | None = None
 
 
+class IdentityHydrationStart(APIBase):
+    """请求为已存在的普通好友补采稳定身份；不接受昵称，避免目标漂移。"""
+
+    target_ids: list[str] = Field(min_length=1, max_length=50)
+
+    @field_validator("target_ids")
+    @classmethod
+    def _deduplicate_target_ids(cls, value: list[str]) -> list[str]:
+        ids: list[str] = []
+        seen: set[str] = set()
+        for target_id in value:
+            target_id = target_id.strip()
+            if not target_id or target_id in seen:
+                continue
+            seen.add(target_id)
+            ids.append(target_id)
+        if not ids:
+            raise ValueError("至少选择一个好友")
+        return ids
+
+
+class IdentityHydrationResultRead(APIBase):
+    """单个好友的身份补采结果；只返回必要字段与诊断，不返回完整抖音响应。"""
+
+    target_id: str
+    nickname: str
+    status: Literal["bound", "ambiguous", "not_observed", "conflict"]
+    opened: bool = False
+    platform_user_id: str | None = None
+    platform_handle: str | None = None
+    identity_source: Literal["remark_name", "nickname", "unique_id", "short_id"] | None = None
+    identity_candidate_count: int = Field(default=0, ge=0)
+    detail: str | None = None
+
+
+class IdentityHydrationProgressRead(APIBase):
+    """普通好友身份补采进度；结果写入 SQLite，切页/刷新后仍可读取。"""
+
+    task_id: str
+    account_id: str
+    status: Literal["running", "completed", "failed", "interrupted", "cancelled"]
+    total: int = Field(default=0, ge=0)
+    completed: int = Field(default=0, ge=0)
+    stage: str
+    current_item: str | None = None
+    overall: Literal["ok", "partial", "auth_expired", "error"] | None = None
+    detail: str | None = None
+    results: list[IdentityHydrationResultRead] = []
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 # ---------------------------------------------------------------- send
 
 class SendPreviewItemRead(APIBase):

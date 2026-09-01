@@ -426,10 +426,8 @@ class DouyinChat:
             return set()
         return self._identity_ids_by_label.get(self._normalize_identity_label(label), set())
 
-    def identity_match_for_label(self, label: str | None) -> IdentityMatch:
-        """按显示名返回身份匹配诊断；无法唯一确认时明确保持未绑定。"""
-        normalized = self._normalize_identity_label(label) if label else ""
-        ids = self._identity_ids_for_label(normalized)
+    def _identity_match_for_ids(self, normalized: str, ids: set[str]) -> IdentityMatch:
+        """按一组本次观察到的候选 ID 生成安全匹配结果。"""
         if not ids:
             return IdentityMatch(
                 status="not_observed",
@@ -463,6 +461,33 @@ class DouyinChat:
             candidate_count=1,
             detail=(f"通过{self._identity_source_label(source)}唯一匹配" if source else "已唯一匹配平台身份"),
         )
+
+    def identity_match_for_label(self, label: str | None) -> IdentityMatch:
+        """按显示名返回身份匹配诊断；无法唯一确认时明确保持未绑定。"""
+        normalized = self._normalize_identity_label(label) if label else ""
+        return self._identity_match_for_ids(normalized, self._identity_ids_for_label(normalized))
+
+    async def hydrate_identity_for_label(self, label: str) -> tuple[ConversationOpen, IdentityMatch]:
+        """打开一个精确会话并只使用本次打开后新到达的身份响应。"""
+        normalized = self._normalize_identity_label(label)
+        before = set(self._identity_ids_for_label(normalized))
+        opened = await self.open_conversation(label)
+        # Playwright 通常会在点击后同步派发 response 事件；给替代页面协议一个
+        # 调度机会，确保事件处理任务已登记后再等待它完成。
+        await self._sleep(0)
+        await self._wait_for_identity_updates()
+        if not opened.opened or not opened.exact:
+            return opened, IdentityMatch(
+                status="not_observed",
+                detail="未能精确打开该好友会话，未写入稳定身份",
+            )
+        fresh = self._identity_ids_for_label(normalized) - before
+        if not fresh:
+            return opened, IdentityMatch(
+                status="not_observed",
+                detail="已精确打开会话，但未观察到本次用户身份响应，未写入稳定身份",
+            )
+        return opened, self._identity_match_for_ids(normalized, fresh)
 
     @staticmethod
     def _identity_source_label(source: str | None) -> str:

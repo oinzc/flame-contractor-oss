@@ -40,6 +40,15 @@ class FakeElement:
         self.uploaded_path = path
 
 
+class _FakeIdentityResponse:
+    def __init__(self, payload: dict):
+        self.url = "https://www.douyin.com/aweme/v1/web/im/user/info/"
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
 class FakeItem:
     def __init__(self, page: "FakePage", title: str, search_style: bool = False):
         self._page = page
@@ -54,7 +63,7 @@ class FakeItem:
                 return None
             return FakeElement(
                 "发消息",
-                on_click=lambda: self._page.clicked.append((self._title, "chat_btn")),
+                on_click=lambda: self._page._on_conversation_click(self._title),
             )
         return None
 
@@ -82,6 +91,7 @@ class FakePage:
         titles_revealed_by_scroll: tuple[str, ...] = (),
         search_requires_warmup: bool = False,
         search_results_after_polls: int = 0,
+        identity_payloads: dict[str, dict] | None = None,
         image_bubble_render: bool = False,
         sticker_items: list[str] = (),
         sticker_button_available: bool = True,
@@ -100,6 +110,8 @@ class FakePage:
         self.titles_revealed_by_scroll = list(titles_revealed_by_scroll)
         self.search_requires_warmup = search_requires_warmup
         self.search_results_after_polls = search_results_after_polls
+        self.identity_payloads = identity_payloads or {}
+        self._handlers: dict[str, list] = {}
         self._search_polls = 0
         self.warmed = False
         self.search_active = False
@@ -123,6 +135,20 @@ class FakePage:
         self.screenshots: list[str] = []
         # evaluate 桩：设置后 page.evaluate 返回该值（读自身昵称测试用）
         self.evaluate_result = None
+
+    def on(self, event: str, handler) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    def _on_conversation_click(self, title: str) -> None:
+        self.clicked.append((title, "chat_btn"))
+        payload = self.identity_payloads.get(title)
+        if payload is not None:
+            asyncio.create_task(self.emit_response(_FakeIdentityResponse(payload)))
+
+    async def emit_response(self, response) -> None:
+        for handler in self._handlers.get("response", []):
+            handler(response)
+        await asyncio.sleep(0)
 
     async def screenshot(self, path=None, full_page=False, **kwargs):
         """记录截图调用并落一个占位文件（诊断截图路径断言用）。"""
