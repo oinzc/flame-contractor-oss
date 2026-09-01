@@ -160,6 +160,11 @@ class ContractTarget(SQLModel, table=True):
             "platform_user_id",
             name="uq_target_account_platform_user",
         ),
+        UniqueConstraint(
+            "account_id",
+            "platform_conversation_id",
+            name="uq_target_account_platform_conversation",
+        ),
     )
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
@@ -167,6 +172,9 @@ class ContractTarget(SQLModel, table=True):
     platform_user_id: str | None = Field(default=None, max_length=128, index=True)
     # 抖音公开展示号（unique_id/short_id），仅作可读展示；发送核对仍使用 platform_user_id。
     platform_handle: str | None = Field(default=None, max_length=128)
+    # 群聊不具备 platform_user_id；使用抖音 protobuf 返回的会话 ID 做稳定核对。
+    platform_conversation_id: str | None = Field(default=None, max_length=128, index=True)
+    conversation_type: str | None = Field(default=None, max_length=16)
     nickname_snapshot: str = Field(min_length=1, max_length=80, index=True)
     template_id: str | None = Field(
         default=None, foreign_key="message_template.id", ondelete="RESTRICT"

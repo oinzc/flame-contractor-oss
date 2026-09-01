@@ -74,7 +74,10 @@ export const api = {
       nickname: string
       platformUserId?: string | null
       platformHandle?: string | null
+      platformConversationId?: string | null
+      conversationType?: 'user' | 'group' | null
       identityStatus?: 'bound' | 'ambiguous' | 'not_observed'
+      conversationStatus?: 'bound' | 'ambiguous' | 'not_observed'
       streakDays?: number
       sparkKind?: string | null
       sparkLabel?: string | null

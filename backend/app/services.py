@@ -423,6 +423,15 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
         ).first()
         if same_platform_user is not None:
             raise HTTPException(status_code=409, detail="该账号下已存在同一抖音用户")
+    if payload.platform_conversation_id:
+        same_platform_conversation = session.exec(
+            select(ContractTarget).where(
+                ContractTarget.account_id == payload.account_id,
+                ContractTarget.platform_conversation_id == payload.platform_conversation_id,
+            )
+        ).first()
+        if same_platform_conversation is not None:
+            raise HTTPException(status_code=409, detail="该账号下已存在同一群会话")
 
     target = ContractTarget.model_validate(payload)
     session.add(target)
@@ -449,10 +458,25 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
     identity_bound: list[str] = []
     identity_unresolved: list[str] = []
     identity_ambiguous: list[str] = []
+    conversation_bound: list[str] = []
+    conversation_unresolved: list[str] = []
+    conversation_ambiguous: list[str] = []
 
-    def track_identity(item: BatchTargetItem, nickname: str, platform_user_id: str | None) -> None:
+    def track_identity(
+        item: BatchTargetItem,
+        nickname: str,
+        platform_user_id: str | None,
+        platform_conversation_id: str | None,
+    ) -> None:
         if platform_user_id:
             identity_bound.append(nickname)
+        elif platform_conversation_id:
+            conversation_bound.append(nickname)
+        elif item.conversation_type == "group":
+            if item.conversation_status == "ambiguous":
+                conversation_ambiguous.append(nickname)
+            elif item.conversation_status == "not_observed":
+                conversation_unresolved.append(nickname)
         elif item.identity_status == "ambiguous":
             identity_ambiguous.append(nickname)
         elif item.identity_status == "not_observed":
@@ -462,6 +486,14 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         nickname = item.nickname
         platform_user_id = item.platform_user_id.strip() if item.platform_user_id else None
         platform_handle = item.platform_handle.strip() if item.platform_handle else None
+        platform_conversation_id = (
+            item.platform_conversation_id.strip()
+            if item.platform_conversation_id
+            else None
+        )
+        conversation_type = item.conversation_type or (
+            "group" if platform_conversation_id else None
+        )
         existing = (
             session.exec(
                 select(ContractTarget).where(
@@ -472,6 +504,13 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             if platform_user_id
             else None
         )
+        if platform_conversation_id:
+            existing = session.exec(
+                select(ContractTarget).where(
+                    ContractTarget.account_id == payload.account_id,
+                    ContractTarget.platform_conversation_id == platform_conversation_id,
+                )
+            ).first()
         nickname_existing = session.exec(
             select(ContractTarget).where(
                 ContractTarget.account_id == payload.account_id,
@@ -488,11 +527,35 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             ):
                 failed.append(f"{nickname}：稳定身份与已有好友不一致")
                 continue
+            if (
+                platform_conversation_id
+                and existing.platform_conversation_id
+                and existing.platform_conversation_id != platform_conversation_id
+            ):
+                failed.append(f"{nickname}：稳定会话身份与已有好友不一致")
+                continue
+            if platform_conversation_id and existing.platform_user_id:
+                failed.append(f"{nickname}：群会话身份与已有好友不一致")
+                continue
+            if platform_user_id and existing.platform_conversation_id:
+                failed.append(f"{nickname}：用户身份与已有群会话不一致")
+                continue
             if platform_user_id and existing.platform_user_id is None:
                 existing.platform_user_id = platform_user_id
             if platform_handle:
                 existing.platform_handle = platform_handle
-            if existing.platform_user_id == platform_user_id and existing.nickname_snapshot != nickname:
+            if platform_conversation_id and existing.platform_conversation_id is None:
+                existing.platform_conversation_id = platform_conversation_id
+            if conversation_type:
+                existing.conversation_type = conversation_type
+            same_stable_identity = (
+                platform_user_id is not None
+                and existing.platform_user_id == platform_user_id
+            ) or (
+                platform_conversation_id is not None
+                and existing.platform_conversation_id == platform_conversation_id
+            )
+            if same_stable_identity and existing.nickname_snapshot != nickname:
                 nickname_conflict = session.exec(
                     select(ContractTarget).where(
                         ContractTarget.account_id == payload.account_id,
@@ -509,6 +572,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             if (
                 platform_user_id
                 or platform_handle
+                or platform_conversation_id
                 or "spark_kind" in item.model_fields_set
                 or "spark_label" in item.model_fields_set
             ):
@@ -522,7 +586,7 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                 refreshed.append(nickname)
             else:
                 duplicates.append(nickname)
-            track_identity(item, nickname, platform_user_id)
+            track_identity(item, nickname, platform_user_id, platform_conversation_id)
             continue
         try:
             scanned_at = (
@@ -535,6 +599,8 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                     account_id=payload.account_id,
                     platform_user_id=platform_user_id,
                     platform_handle=platform_handle,
+                    platform_conversation_id=platform_conversation_id,
+                    conversation_type=conversation_type,
                     nickname_snapshot=nickname,
                     template_id=payload.template_id,
                     # 扫描读到的官方火花天数作为初始值；之后仍走本地累计
@@ -546,11 +612,11 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
             )
             session.commit()
             created.append(nickname)
-            track_identity(item, nickname, platform_user_id)
+            track_identity(item, nickname, platform_user_id, platform_conversation_id)
         except IntegrityError:
             session.rollback()
             duplicates.append(nickname)
-            track_identity(item, nickname, platform_user_id)
+            track_identity(item, nickname, platform_user_id, platform_conversation_id)
         except Exception as exc:  # 单条失败不拖垮整批
             session.rollback()
             failed.append(f"{nickname}：{exc.__class__.__name__}")
@@ -562,6 +628,9 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         identity_bound=identity_bound,
         identity_unresolved=identity_unresolved,
         identity_ambiguous=identity_ambiguous,
+        conversation_bound=conversation_bound,
+        conversation_unresolved=conversation_unresolved,
+        conversation_ambiguous=conversation_ambiguous,
     )
 
 

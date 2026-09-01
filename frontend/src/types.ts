@@ -80,6 +80,9 @@ export interface ContractTarget {
   platformUserId: string | null
   /** 抖音公开展示号；稳定 sec_uid 只用于安全核对，不直接展示。 */
   platformHandle: string | null
+  /** 群聊不使用用户 sec_uid；这里保存抖音会话 protobuf 的唯一 ID。 */
+  platformConversationId: string | null
+  conversationType: 'user' | 'group' | null
   nicknameSnapshot: string
   templateId: string | null
   enabled: boolean
@@ -98,10 +101,15 @@ export interface ScanChatEntry {
   title: string
   platformUserId: string | null
   platformHandle: string | null
+  platformConversationId: string | null
+  conversationType: 'user' | 'group' | null
   identityStatus: 'bound' | 'ambiguous' | 'not_observed'
   identitySource: 'remark_name' | 'nickname' | 'unique_id' | 'short_id' | null
   identityCandidateCount: number
   identityDetail: string | null
+  conversationStatus: 'bound' | 'ambiguous' | 'not_observed'
+  conversationCandidateCount: number
+  conversationDetail: string | null
   preview: string
   streakDays: number | null
   streakKind: string | null
@@ -116,6 +124,9 @@ export interface TargetBatchResult {
   identityBound: string[]
   identityUnresolved: string[]
   identityAmbiguous: string[]
+  conversationBound: string[]
+  conversationUnresolved: string[]
+  conversationAmbiguous: string[]
 }
 
 export interface ScanProgress {
@@ -267,6 +278,8 @@ export interface TargetCreateInput {
   nicknameSnapshot: string
   platformUserId?: string
   platformHandle?: string
+  platformConversationId?: string
+  conversationType?: 'user' | 'group'
   templateId?: string
   streakDays: number
 }

@@ -28,6 +28,17 @@ function compactStableId(value: string): string {
 }
 
 function identityStatusLabel(entry: ScanChatEntry): string {
+  if (entry.conversationType === 'group') {
+    if (entry.conversationStatus === 'bound') {
+      return entry.platformConversationId
+        ? `群聊已识别 · ${compactStableId(entry.platformConversationId)}`
+        : '群聊会话已识别'
+    }
+    if (entry.conversationStatus === 'ambiguous') {
+      return `群聊同名冲突 · ${entry.conversationCandidateCount} 个会话`
+    }
+    return '群聊会话未识别'
+  }
   if (entry.identityStatus === 'bound') {
     return entry.platformHandle ? `已识别 · ${entry.platformHandle}` : '稳定身份已识别'
   }
@@ -105,6 +116,11 @@ export default function TargetsPage({
       .map((target) => target.platformUserId)
       .filter((platformUserId): platformUserId is string => Boolean(platformUserId)),
   )
+  const existingConversationIds = new Set(
+    accountTargets
+      .map((target) => target.platformConversationId)
+      .filter((conversationId): conversationId is string => Boolean(conversationId)),
+  )
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
@@ -127,12 +143,20 @@ export default function TargetsPage({
     visibleScanEntries?.filter(
       (entry) =>
         existingNicknames.has(entry.title) ||
-        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)),
+        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)) ||
+        (entry.platformConversationId != null &&
+          existingConversationIds.has(entry.platformConversationId)),
     ).length ?? 0
   const scanIdentityCount =
     visibleScanEntries?.filter((entry) => entry.identityStatus === 'bound').length ?? 0
   const scanIdentityPendingCount =
-    visibleScanEntries?.filter((entry) => entry.identityStatus !== 'bound').length ?? 0
+    visibleScanEntries?.filter(
+      (entry) => entry.conversationType !== 'group' && entry.identityStatus !== 'bound',
+    ).length ?? 0
+  const scanConversationCount =
+    visibleScanEntries?.filter(
+      (entry) => entry.conversationType === 'group' && entry.conversationStatus === 'bound',
+    ).length ?? 0
   const scanFiltered = (visibleScanEntries ?? []).filter((entry) => {
     if (!showNoStreak && !isStreakTarget(entry)) return false
     const q = scanQuery.trim().toLowerCase()
@@ -232,7 +256,10 @@ export default function TargetsPage({
           nickname: entry.title,
           platformUserId: entry.platformUserId,
           platformHandle: entry.platformHandle,
+          platformConversationId: entry.platformConversationId,
+          conversationType: entry.conversationType,
           identityStatus: entry.identityStatus,
+          conversationStatus: entry.conversationStatus,
           streakDays: entry.streakDays ?? undefined,
           // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
           sparkKind: entry.streakKind,
@@ -384,19 +411,33 @@ export default function TargetsPage({
                           )}
                         </td>
                         <td>
-                          <div className="identity-cell">
-                            <strong title={target.platformHandle ?? undefined}>
-                              {target.platformHandle ?? (target.platformUserId ? '稳定身份已绑定' : '未识别')}
-                            </strong>
-                            {target.platformUserId && (
-                              <span
-                                className="identity-stable-id"
-                                title={`稳定身份：${target.platformUserId}`}
-                              >
-                                {compactStableId(target.platformUserId)}
-                              </span>
-                            )}
-                          </div>
+                          {target.conversationType === 'group' ? (
+                            <div className="identity-cell">
+                              <strong title={target.platformConversationId ?? undefined}>群聊会话</strong>
+                              {target.platformConversationId && (
+                                <span
+                                  className="identity-stable-id"
+                                  title={`群会话唯一 ID：${target.platformConversationId}`}
+                                >
+                                  {compactStableId(target.platformConversationId)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="identity-cell">
+                              <strong title={target.platformHandle ?? undefined}>
+                                {target.platformHandle ?? (target.platformUserId ? '稳定身份已绑定' : '未识别')}
+                              </strong>
+                              {target.platformUserId && (
+                                <span
+                                  className="identity-stable-id"
+                                  title={`稳定身份：${target.platformUserId}`}
+                                >
+                                  {compactStableId(target.platformUserId)}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <select
@@ -465,7 +506,7 @@ export default function TargetsPage({
               <h2>会话扫描与批量添加</h2>
             </div>
             <p className="scan-helper">
-              扫描只读取会话列表，不会发送消息。已识别的平台身份才会写入稳定 ID；未识别或同名冲突的会话不会猜测绑定。
+              扫描只读取会话列表，不会发送消息。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突的会话不会猜测绑定。
             </p>
             {selectedScanTask && (
               <section
@@ -548,10 +589,19 @@ export default function TargetsPage({
                     {batchResult.identityAmbiguous.length > 0 && (
                       <div>🛑 同名冲突，未绑定 {batchResult.identityAmbiguous.length} 个：{batchResult.identityAmbiguous.join('、')}</div>
                     )}
+                    {batchResult.conversationBound.length > 0 && (
+                      <div>👥 已绑定群会话 {batchResult.conversationBound.length} 个：{batchResult.conversationBound.join('、')}</div>
+                    )}
+                    {batchResult.conversationUnresolved.length > 0 && (
+                      <div>🔎 未观察到群会话 ID {batchResult.conversationUnresolved.length} 个：{batchResult.conversationUnresolved.join('、')}</div>
+                    )}
+                    {batchResult.conversationAmbiguous.length > 0 && (
+                      <div>🛑 群聊同名冲突，未绑定 {batchResult.conversationAmbiguous.length} 个：{batchResult.conversationAmbiguous.join('、')}</div>
+                    )}
                   </div>
                 )}
                 {visibleScanEntries !== null && (
-                  <div style={{ display: 'grid', gap: 8 }}>
+                  <div className="scan-pick-results" style={{ display: 'grid', gap: 8 }}>
                     <div className="pick-toolbar">
                       <input
                         className="pick-search"
@@ -582,9 +632,17 @@ export default function TargetsPage({
                         scanFiltered.map((entry) => {
                           const exists =
                             existingNicknames.has(entry.title) ||
-                            (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId))
+                            (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)) ||
+                            (entry.platformConversationId != null &&
+                              existingConversationIds.has(entry.platformConversationId))
                           const checked = selectedEntries.has(entry.title)
-                          const group = looksLikeGroup(entry.title, entry.preview)
+                          const group =
+                            entry.conversationType === 'group' ||
+                            looksLikeGroup(entry.title, entry.preview)
+                          const identityStatus =
+                            entry.conversationType === 'group'
+                              ? entry.conversationStatus
+                              : entry.identityStatus
                           return (
                             <label
                               key={entry.title}
@@ -623,8 +681,12 @@ export default function TargetsPage({
                                 )}
                                 {group && <span className="badge">群</span>}
                                 <span
-                                  className={`badge identity-badge identity-${entry.identityStatus}`}
-                                  title={entry.identityDetail ?? undefined}
+                                  className={`badge identity-badge identity-${identityStatus}`}
+                                  title={
+                                    entry.conversationType === 'group'
+                                      ? entry.conversationDetail ?? undefined
+                                      : entry.identityDetail ?? undefined
+                                  }
                                 >
                                   {identityStatusLabel(entry)}
                                 </span>
@@ -641,7 +703,7 @@ export default function TargetsPage({
                     </div>
                     <div className="pick-foot">
                       <span className="pick-stat">
-                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 身份已识别 {scanIdentityCount} · 待识别 {scanIdentityPendingCount} · 已在列表 {scanExistCount}
+                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 用户身份已识别 {scanIdentityCount} · 群会话已识别 {scanConversationCount} · 待识别 {scanIdentityPendingCount} · 已在列表 {scanExistCount}
                       </span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <select
