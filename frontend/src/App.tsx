@@ -65,6 +65,9 @@ export default function App() {
   const [scanDockVisible, setScanDockVisible] = useState(false)
   const scanCompletionHandledRef = useRef<string | null>(null)
   const scanRecoveryStartedRef = useRef(false)
+  const [autoScanTask, setAutoScanTask] = useState<ScanTaskState | null>(null)
+  const [autoScanDockVisible, setAutoScanDockVisible] = useState(false)
+  const autoScanCompletionHandledRef = useRef<string | null>(null)
   const [identityTask, setIdentityTask] = useState<IdentityHydrationTaskState | null>(null)
   const [identityStarting, setIdentityStarting] = useState(false)
   const [identityCancelling, setIdentityCancelling] = useState(false)
@@ -75,6 +78,16 @@ export default function App() {
   const [sendMinimized, setSendMinimized] = useState(false)
 
   const accounts = summary?.accounts ?? []
+  const visibleDockKeys = [
+    sendAccount && sendMinimized ? 'send' : null,
+    autoScanTask && autoScanDockVisible ? 'auto-scan' : null,
+    scanTask && scanDockVisible ? 'scan' : null,
+    identityTask && identityDockVisible ? 'identity' : null,
+  ].filter((key): key is string => key !== null)
+  const dockOffset = (key: string): number => {
+    const index = visibleDockKeys.indexOf(key)
+    return 20 + Math.max(index, 0) * 216
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -109,6 +122,27 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [refresh])
 
+  // 自动同步需要比驾驶舱普通刷新更快地发现后台任务；这里只读调度状态，不触发扫描。
+  useEffect(() => {
+    if (!schedulerStatus?.enabled) return undefined
+    let cancelled = false
+    const pollScheduler = async () => {
+      if (document.hidden) return
+      try {
+        const next = await api.schedulerStatus()
+        if (!cancelled) setSchedulerStatus(next)
+      } catch {
+        // 普通驾驶舱刷新负责显示控制面错误；任务发现轮询保持安静并等待下一轮。
+      }
+    }
+    const timer = window.setInterval(() => void pollScheduler(), 3000)
+    void pollScheduler()
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [schedulerStatus?.enabled])
+
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (!document.hidden) setNow(new Date())
@@ -118,6 +152,8 @@ export default function App() {
 
   const scanTaskId = scanTask?.taskId ?? null
   const scanTaskStatus = scanTask?.status ?? null
+  const autoScanTaskId = autoScanTask?.taskId ?? null
+  const autoScanTaskStatus = autoScanTask?.status ?? null
   const identityTaskId = identityTask?.taskId ?? null
   const identityTaskStatus = identityTask?.status ?? null
 
@@ -173,6 +209,128 @@ export default function App() {
       if (timer !== null) window.clearTimeout(timer)
     }
   }, [scanTaskId, scanTaskStatus])
+
+  // 自动同步与手动扫描共用后端进度快照，但单独存放，避免触发好友页的手动导入逻辑。
+  useEffect(() => {
+    if (!autoScanTaskId || autoScanTaskStatus !== 'running' || !autoScanTask) return undefined
+
+    let cancelled = false
+    let timer: number | null = null
+    const accountId = autoScanTask.accountId
+
+    const poll = async () => {
+      try {
+        const next = await api.scanChatsProgress(accountId, autoScanTaskId)
+        if (cancelled) return
+        setAutoScanTask((previous) => {
+          if (!previous || previous.taskId !== autoScanTaskId) return previous
+          return {
+            ...previous,
+            ...next,
+            syncStatus: next.status === 'completed' ? 'pending' : previous.syncStatus,
+            pollError: null,
+          }
+        })
+        if (next.status === 'running') timer = window.setTimeout(() => void poll(), 800)
+      } catch (err) {
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) {
+          setAutoScanTask((previous) =>
+            previous && previous.taskId === autoScanTaskId
+              ? {
+                  ...previous,
+                  status: 'failed',
+                  stage: '自动同步任务失效',
+                  overall: 'error',
+                  detail: '后端自动同步任务已失效，请等待下一周期重试',
+                  currentItem: null,
+                  pollError: null,
+                  syncStatus: 'done',
+                }
+              : previous,
+          )
+          return
+        }
+        setAutoScanTask((previous) =>
+          previous && previous.taskId === autoScanTaskId
+            ? { ...previous, pollError: '进度读取暂时失败，正在自动重连…' }
+            : previous,
+        )
+        timer = window.setTimeout(() => void poll(), 1200)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [autoScanTaskId, autoScanTaskStatus])
+
+  // 调度器只返回当前自动任务 ID；拿到后再读取同一份 SQLite/内存进度快照。
+  useEffect(() => {
+    const runningScan = schedulerStatus?.autoScans.find(
+      (scan) => scan.status === 'running' && scan.taskId,
+    )
+    if (!runningScan?.taskId || autoScanTask?.taskId === runningScan.taskId) {
+      return undefined
+    }
+
+    let cancelled = false
+    api
+      .scanChatsProgress(runningScan.accountId, runningScan.taskId)
+      .then((next) => {
+        if (cancelled || next.source !== 'automatic') return
+        setAutoScanTask({
+          ...next,
+          syncStatus: next.status === 'completed' ? 'pending' : 'done',
+          batchResult: null,
+          syncError: null,
+          pollError: null,
+        })
+        setAutoScanDockVisible(true)
+      })
+      .catch(() => {
+        // 任务可能刚创建尚未提交快照；下一轮调度状态会再次尝试接管。
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [schedulerStatus, autoScanTask?.taskId])
+
+  // 调度器保持 running 到官方状态写回完成，100% 后用它解除自动同步任务坞的收尾态。
+  useEffect(() => {
+    if (
+      !autoScanTask ||
+      autoScanTask.status !== 'completed' ||
+      autoScanTask.syncStatus !== 'pending'
+    ) {
+      return
+    }
+    const status = schedulerStatus?.autoScans.find(
+      (scan) => scan.accountId === autoScanTask.accountId,
+    )
+    if (status?.status === 'running') return
+    setAutoScanTask((previous) =>
+      previous && previous.taskId === autoScanTask.taskId
+        ? { ...previous, syncStatus: 'done' }
+        : previous,
+    )
+  }, [autoScanTask?.taskId, autoScanTask?.status, autoScanTask?.syncStatus, schedulerStatus])
+
+  // 调度器完成自动同步后刷新好友状态；不会调用手动扫描的批量导入收尾。
+  useEffect(() => {
+    if (
+      !autoScanTask ||
+      autoScanTask.status === 'running' ||
+      autoScanTask.syncStatus !== 'done'
+    ) {
+      return
+    }
+    if (autoScanCompletionHandledRef.current === autoScanTask.taskId) return
+    autoScanCompletionHandledRef.current = autoScanTask.taskId
+    void refresh()
+  }, [autoScanTask?.taskId, autoScanTask?.status, autoScanTask?.syncStatus, refresh])
 
   // 身份补采也属于 App 生命周期，离开好友页后继续由后端执行并持久化进度。
   useEffect(() => {
@@ -245,24 +403,49 @@ export default function App() {
         }),
       )
       if (cancelled) return
-      const candidate = snapshots
+      const candidates = snapshots
         .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null)
         .sort((left, right) => {
           const leftTime = Date.parse(left.finishedAt ?? left.startedAt ?? '') || 0
           const rightTime = Date.parse(right.finishedAt ?? right.startedAt ?? '') || 0
           return rightTime - leftTime
+        })
+      const manualCandidate = snapshots
+        .filter(
+          (snapshot): snapshot is NonNullable<typeof snapshot> =>
+            snapshot !== null && snapshot.source !== 'automatic',
+        )
+        .sort((left, right) => {
+          const leftTime = Date.parse(left.finishedAt ?? left.startedAt ?? '') || 0
+          const rightTime = Date.parse(right.finishedAt ?? right.startedAt ?? '') || 0
+          return rightTime - leftTime
         })[0]
-      if (!candidate) return
+      const automaticCandidate = candidates.find((candidate) => candidate.source === 'automatic')
 
-      scanCompletionHandledRef.current = null
-      setScanTask({
-        ...candidate,
-        syncStatus: candidate.status === 'completed' ? 'pending' : 'done',
-        batchResult: null,
-        syncError: null,
-        pollError: null,
-      })
-      setScanDockVisible(true)
+      if (manualCandidate) {
+        scanCompletionHandledRef.current = null
+        setScanTask({
+          ...manualCandidate,
+          syncStatus: manualCandidate.status === 'completed' ? 'pending' : 'done',
+          batchResult: null,
+          syncError: null,
+          pollError: null,
+        })
+        setScanDockVisible(true)
+      }
+      if (
+        automaticCandidate &&
+        (automaticCandidate.status === 'running' || automaticCandidate.status === 'interrupted')
+      ) {
+        setAutoScanTask({
+          ...automaticCandidate,
+          syncStatus: 'done',
+          batchResult: null,
+          syncError: null,
+          pollError: null,
+        })
+        setAutoScanDockVisible(true)
+      }
     }
 
     void recoverLatestScan()
@@ -408,6 +591,19 @@ export default function App() {
     const timer = window.setTimeout(() => setScanDockVisible(false), 4500)
     return () => window.clearTimeout(timer)
   }, [scanTask?.taskId, scanTask?.status, scanTask?.syncStatus, scanDockVisible])
+
+  useEffect(() => {
+    if (
+      !autoScanTask ||
+      !autoScanDockVisible ||
+      autoScanTask.status === 'running' ||
+      autoScanTask.syncStatus !== 'done'
+    ) {
+      return undefined
+    }
+    const timer = window.setTimeout(() => setAutoScanDockVisible(false), 4500)
+    return () => window.clearTimeout(timer)
+  }, [autoScanTask?.taskId, autoScanTask?.status, autoScanTask?.syncStatus, autoScanDockVisible])
 
   useEffect(() => {
     if (!identityTask || identityTask.status === 'running') return
@@ -727,7 +923,18 @@ export default function App() {
             onRetry={() => void handleRetryScan(scanTask.accountId)}
             cancelLabel={scanCancelling ? '正在取消…' : '取消扫描'}
             cancelDisabled={scanCancelling}
-            offset={Boolean(sendAccount && sendMinimized) || Boolean(identityTask && identityDockVisible)}
+            offset={dockOffset('scan')}
+          />
+        )}
+
+        {autoScanTask && autoScanDockVisible && (
+          <ScanProgressDock
+            task={autoScanTask}
+            accounts={accounts}
+            automatic
+            onOpen={() => setPage('targets')}
+            onDismiss={() => setAutoScanDockVisible(false)}
+            offset={dockOffset('auto-scan')}
           />
         )}
 
@@ -735,10 +942,7 @@ export default function App() {
           <SendModal
             account={sendAccount}
             minimized={sendMinimized}
-            offset={
-              sendMinimized &&
-              (Boolean(scanTask && scanDockVisible) || Boolean(identityTask && identityDockVisible))
-            }
+            offset={sendMinimized ? dockOffset('send') : false}
             onClose={() => {
               setSendAccount(null)
               setSendMinimized(false)
@@ -759,7 +963,7 @@ export default function App() {
             onRetry={() => void handleRetryIdentityHydration()}
             cancelLabel={identityCancelling ? '正在取消…' : '取消补采'}
             cancelDisabled={identityCancelling}
-            offset={Boolean(sendAccount && sendMinimized) || Boolean(scanTask && scanDockVisible)}
+            offset={dockOffset('identity')}
           />
         )}
 
