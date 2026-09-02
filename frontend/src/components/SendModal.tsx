@@ -32,7 +32,7 @@ const RESULT_TONES: Record<string, string> = {
 interface Props {
   account: Account
   minimized: boolean
-  offset?: boolean
+  offset?: boolean | number
   onClose: () => void
   onMinimize: () => void
   onRestore: () => void
@@ -114,7 +114,7 @@ interface SendDockProps {
   sending: boolean
   result: SendRead | null
   error: string | null
-  offset?: boolean
+  offset?: boolean | number
   onRestore: () => void
   onClose: () => void
 }

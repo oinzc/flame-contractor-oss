@@ -58,7 +58,8 @@ interface ScanDockProps {
   onRetry?: () => void
   cancelLabel?: string
   cancelDisabled?: boolean
-  offset?: boolean
+  offset?: boolean | number
+  automatic?: boolean
 }
 
 function elapsed(startedAt: string | null, finishedAt: string | null): string | null {
@@ -82,6 +83,7 @@ export default function ScanProgressDock({
   cancelLabel,
   cancelDisabled = false,
   offset = false,
+  automatic = false,
 }: ScanDockProps) {
   const account = accounts.find((item) => item.id === task.accountId)
   const percent = scanProgressPercent(task)
@@ -96,7 +98,9 @@ export default function ScanProgressDock({
   const stage = task.pollError ?? task.syncError ?? (syncing ? '正在保存官方状态快照' : task.stage)
   const currentItem = task.currentItem ?? (
     running
-      ? '继续读取下一段会话列表…'
+      ? automatic
+        ? '继续读取会话列表…'
+        : '继续读取下一段会话列表…'
       : complete
         ? '扫描结果已就绪'
         : cancelled
@@ -121,15 +125,23 @@ export default function ScanProgressDock({
     : task.syncError
       ? task.syncError
       : syncing
-        ? '扫描已到 100%，正在把已存在好友的官方状态写回本地。'
+        ? automatic
+          ? '扫描已到 100%，正在把已有好友/群聊的官方状态写回本地。'
+          : '扫描已到 100%，正在把已存在好友的官方状态写回本地。'
         : running
-          ? '可切换页面；扫描由后端继续执行，不会因页面收起而中断。'
+          ? automatic
+            ? '可切换页面或收起窗口；后台只读同步会继续，不会新增好友或发送消息。'
+            : '可切换页面；扫描由后端继续执行，不会因页面收起而中断。'
           : interrupted
-            ? '后端曾重启，扫描已安全收束；已发现结果已保留，请重新发起完整扫描。'
+            ? automatic
+              ? '后端曾重启，自动同步已安全收束；不会自动续跑或发送消息。'
+              : '后端曾重启，扫描已安全收束；已发现结果已保留，请重新发起完整扫描。'
             : cancelled
               ? '扫描已取消；已发现结果仍可在好友页查看或手动导入。'
               : complete
-                ? `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
+                ? automatic
+                  ? `自动同步完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}；只刷新已有好友/群聊状态，不新增、不发送。`
+                  : `扫描完成${elapsedLabel ? ` · 用时 ${elapsedLabel}` : ''}。`
                 : '扫描未完成，请重新发起。'
 
   return (
@@ -138,8 +150,16 @@ export default function ScanProgressDock({
       account={account}
       mark="↘"
       kicker={
-        complete
-          ? 'SCAN COMPLETE'
+        automatic
+          ? complete
+            ? 'AUTO SYNC COMPLETE'
+            : interrupted
+              ? 'AUTO SYNC INTERRUPTED'
+              : failed
+                ? 'AUTO SYNC FAILED'
+                : 'AUTO SYNC'
+          : complete
+            ? 'SCAN COMPLETE'
           : interrupted
             ? 'SCAN INTERRUPTED'
             : cancelled
@@ -159,11 +179,11 @@ export default function ScanProgressDock({
       indeterminate={running}
       offset={offset}
       onRestore={onOpen}
-      restoreLabel="查看好友页"
-      onCancel={running ? onCancel : undefined}
+      restoreLabel={automatic ? '查看好友状态' : '查看好友页'}
+      onCancel={automatic ? undefined : running ? onCancel : undefined}
       cancelLabel={cancelLabel ?? '取消扫描'}
       cancelDisabled={cancelDisabled}
-      onRetry={retryable ? onRetry : undefined}
+      onRetry={automatic ? undefined : retryable ? onRetry : undefined}
       retryLabel="重新扫描"
       onClose={!running && !syncing ? onDismiss : undefined}
     />

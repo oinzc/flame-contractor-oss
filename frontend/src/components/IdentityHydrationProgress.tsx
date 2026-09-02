@@ -10,7 +10,7 @@ interface Props {
   onRetry?: () => void
   cancelLabel?: string
   cancelDisabled?: boolean
-  offset?: boolean
+  offset?: boolean | number
 }
 
 export function identityHydrationPercent(task: IdentityHydrationTaskState): number {

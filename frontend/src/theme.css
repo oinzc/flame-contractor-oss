@@ -1474,7 +1474,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .task-dock {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  bottom: var(--task-dock-bottom, 20px);
   z-index: 55;
   width: min(380px, calc(100vw - 32px));
   padding: 14px 16px 15px;
@@ -1483,7 +1483,7 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   border-left: 3px solid var(--flame);
   animation: task-dock-in 220ms var(--ease-out) both;
 }
-.task-dock.is-offset { bottom: 236px; }
+.task-dock.is-offset { --task-dock-bottom: 236px; }
 .task-dock.is-error { border-left-color: var(--red); }
 .task-dock.is-complete { border-left-color: var(--green); }
 .task-dock-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -1705,8 +1705,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   .send-modal-footer .form-actions .btn { flex: 1; }
   .send-live-panel { min-height: 300px; padding: 16px; }
   .send-live-percent { font-size: 30px; }
-  .task-dock { right: 10px; bottom: 10px; left: 10px; width: auto; }
-  .task-dock.is-offset { bottom: 230px; }
+  .task-dock { right: 10px; bottom: var(--task-dock-bottom, 10px); left: 10px; width: auto; }
+  .task-dock.is-offset { --task-dock-bottom: 230px; }
   .scan-inline-head { gap: 10px; }
   .scan-inline-head > b { font-size: 18px; }
   .jobs-card-head { display: grid; gap: 8px; }

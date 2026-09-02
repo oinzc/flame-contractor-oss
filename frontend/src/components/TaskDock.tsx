@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import type { Account } from '../types'
 
 export type TaskDockKind = 'scan' | 'send' | 'identity'
@@ -22,7 +23,7 @@ interface Props {
   failed?: boolean
   complete?: boolean
   indeterminate?: boolean
-  offset?: boolean
+  offset?: boolean | number
   onRestore: () => void
   restoreLabel: string
   onCancel?: () => void
@@ -91,9 +92,15 @@ export default function TaskDock({
   onClose,
   closeLabel = '关闭',
 }: Props) {
+  const dockStyle =
+    typeof offset === 'number'
+      ? ({ '--task-dock-bottom': `${offset}px` } as CSSProperties)
+      : undefined
+
   return (
     <aside
       className={`task-dock task-dock-${kind}${failed ? ' is-error' : ''}${complete ? ' is-complete' : ''}${offset ? ' is-offset' : ''}`}
+      style={dockStyle}
       aria-label={`${TASK_LABELS[kind]}任务 · ${account?.displayName ?? '当前账号'}`}
       aria-live="polite"
     >

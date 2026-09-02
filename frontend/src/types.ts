@@ -62,6 +62,7 @@ export type AutoScanStatusKind =
 
 export interface AutoScanStatus {
   accountId: string
+  taskId: string | null
   status: AutoScanStatusKind
   lastScanAt: string | null
   nextScanAt: string | null
@@ -151,6 +152,7 @@ export interface TargetBatchResult {
 export interface ScanProgress {
   taskId: string
   accountId: string
+  source: 'manual' | 'automatic'
   status: 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
   /** 会话列表滚动到底前总数未知；为 null 时只展示已发现计数。 */
   total: number | null
