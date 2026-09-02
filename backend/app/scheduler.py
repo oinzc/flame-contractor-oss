@@ -848,15 +848,15 @@ class Scheduler:
             elif not has_targets:
                 status = "no_targets"
                 detail = "暂无契约对象"
-            elif self._paused:
-                status = "paused"
-                detail = "全局自动调度已暂停"
             elif account.status != AccountStatus.HEALTHY:
                 status = "waiting_login"
                 detail = "账号未处于可用登录状态"
             elif account.id in self._auto_scan_running:
                 status = "running"
                 detail = "正在读取会话列表"
+            elif self._paused:
+                status = "paused"
+                detail = "全局自动调度已暂停"
             else:
                 retry_at = self._auto_scan_next_attempt_at.get(account.id)
                 if retry_at is not None and retry_at > now:
@@ -875,6 +875,7 @@ class Scheduler:
             statuses.append(
                 {
                     "account_id": account.id,
+                    "task_id": latest.id if status == "running" and latest is not None else None,
                     "status": status,
                     "last_scan_at": last_at,
                     "next_scan_at": next_at,

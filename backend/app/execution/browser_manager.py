@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -106,6 +106,7 @@ class ScanProgress:
 
     task_id: str
     account_id: str
+    source: Literal["manual", "automatic"] = "manual"
     total: int | None = None
     completed: int = 0
     status: str = "running"  # running | completed | failed | interrupted | cancelled
@@ -280,6 +281,7 @@ class BrowserManager:
         return {
             "task_id": task.id,
             "account_id": task.account_id,
+            "source": task.source,
             "status": status,
             "total": task.total,
             "completed": task.completed,
@@ -322,6 +324,7 @@ class BrowserManager:
         return {
             "task_id": progress.task_id,
             "account_id": progress.account_id,
+            "source": progress.source,
             "status": progress.status,
             "total": progress.total,
             "completed": progress.completed,
@@ -345,8 +348,15 @@ class BrowserManager:
                 setattr(progress, key, value)
         self._persist_scan_progress(progress)
 
-    async def start_scan_chats(self, account_id: str) -> dict:
+    async def start_scan_chats(
+        self,
+        account_id: str,
+        *,
+        source: Literal["manual", "automatic"] = "manual",
+    ) -> dict:
         """创建后台扫描任务；浏览器扫描不会绑定前端页面生命周期。"""
+        if source not in ("manual", "automatic"):
+            raise ValueError("扫描任务来源无效")
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能扫描会话")
         if self._active_scan(account_id) is not None:
@@ -362,6 +372,7 @@ class BrowserManager:
         progress = ScanProgress(
             task_id=str(uuid4()),
             account_id=account_id,
+            source=source,
             started_at=_utcnow(),
         )
         with Session(self._engine) as session:
@@ -369,6 +380,7 @@ class BrowserManager:
                 ScanTask(
                     id=progress.task_id,
                     account_id=account_id,
+                    source=source,
                     status=ScanTaskStatus.RUNNING,
                     total=progress.total,
                     completed=progress.completed,
@@ -1373,7 +1385,7 @@ class BrowserManager:
 
     async def run_auto_scan(self, account_id: str) -> dict:
         """执行一次由调度器触发的扫描，并在完成后回写已有对象的官方快照。"""
-        initial = await self.start_scan_chats(account_id)
+        initial = await self.start_scan_chats(account_id, source="automatic")
         task_id = initial["task_id"]
         progress = initial
         while progress["status"] == "running":
