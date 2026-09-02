@@ -1748,7 +1748,7 @@ class BrowserManager:
         *,
         force_run_id: str | None = None,
     ) -> dict:
-        has_unresolved_unknown = False
+        daily_jobs: list[SendJob] = []
         with Session(self._engine) as session:
             current = session.get(ContractTarget, target.id)
             if current is None or not current.enabled:
@@ -1769,18 +1769,14 @@ class BrowserManager:
             platform_user_id = current.platform_user_id
             platform_conversation_id = current.platform_conversation_id
             streak_days = current.streak_days
-            if force_run_id is not None:
-                has_unresolved_unknown = (
-                    session.exec(
-                        select(SendJob).where(
-                            SendJob.account_id == account.id,
-                            SendJob.target_id == target.id,
-                            SendJob.business_date == business_date,
-                            SendJob.status == JobStatus.UNKNOWN_REQUIRES_REVIEW,
-                        )
-                    ).first()
-                    is not None
-                )
+            if template_ok:
+                daily_jobs = session.exec(
+                    select(SendJob).where(
+                        SendJob.account_id == account.id,
+                        SendJob.target_id == target.id,
+                        SendJob.business_date == business_date,
+                    )
+                ).all()
             pool_item = None
             pool_content = None
             if template_ok and template.type == TemplateType.POOL:
@@ -1792,7 +1788,7 @@ class BrowserManager:
         if not template_ok:
             return {"target": nickname, "status": "skipped",
                     "detail": "未绑定可用模板", "failure_class": None, "message": None}
-        if has_unresolved_unknown:
+        if any(job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW for job in daily_jobs):
             return {
                 "target": nickname,
                 "status": "duplicate_unknown",
@@ -1825,7 +1821,20 @@ class BrowserManager:
                 streak_days=streak_days,
                 timezone=account.timezone,
             )
-        slot = f"{template_id}:v{template_version}"
+        base_slot = f"{template_id}:v{template_version}"
+        if force_run_id is None and any(
+            job.status == JobStatus.SUCCEEDED
+            and job.message_slot_id.startswith(f"{base_slot}:force:")
+            for job in daily_jobs
+        ):
+            return {
+                "target": nickname,
+                "status": "duplicate_succeeded",
+                "detail": "今日已通过手动强制发送，已跳过",
+                "failure_class": None,
+                "message": message,
+            }
+        slot = base_slot
         if force_run_id is not None:
             # 保留每日任务表的可审计记录，同时不与普通发送的成功槽位冲突。
             slot = f"{slot}:force:{force_run_id}"
