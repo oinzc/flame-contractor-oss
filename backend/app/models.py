@@ -269,6 +269,8 @@ class ScanTask(SQLModel, table=True):
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
     account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
+    # manual=好友页主动扫描；automatic=调度器只读同步，供前端恢复时区分行为。
+    source: str = Field(default="manual", max_length=16, index=True)
     status: ScanTaskStatus = Field(default=ScanTaskStatus.RUNNING, max_length=16, index=True)
     total: int | None = Field(default=None, ge=0)
     completed: int = Field(default=0, ge=0)

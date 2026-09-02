@@ -1,5 +1,6 @@
 """会话扫描进度的 SQLite 持久化与重启收束测试。"""
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -47,6 +48,7 @@ def test_completed_scan_progress_is_readable_after_manager_recreation(settings):
         started = client.post(f"/api/accounts/{account['id']}/scan-chats/start").json()
         finished = _wait_scan(client, account["id"], started["taskId"])
         assert finished["status"] == "completed", finished
+        assert finished["source"] == "manual"
         assert finished["entries"][-1]["title"] == "好友C"
 
         reader = BrowserManager(build_engine(settings.database_url), settings)
@@ -62,6 +64,41 @@ def test_completed_scan_progress_is_readable_after_manager_recreation(settings):
         ]
         assert latest is not None
         assert latest["task_id"] == started["taskId"]
+        assert latest["source"] == "manual"
+
+
+def test_automatic_scan_source_is_persisted_and_exposed(settings):
+    engine = build_engine(settings.database_url)
+    run_migrations(settings.database_url)
+    account = Account(display_name="自动同步账号")
+    with Session(engine) as session:
+        session.add(account)
+        session.commit()
+        session.refresh(account)
+
+    manager = BrowserManager(engine, settings)
+
+    async def hold_scan(_progress):
+        await asyncio.Event().wait()
+
+    manager._run_scan_task = hold_scan
+
+    async def exercise() -> dict:
+        started = await manager.start_scan_chats(account.id, source="automatic")
+        await asyncio.sleep(0)
+        with Session(engine) as session:
+            stored = session.get(ScanTask, started["task_id"])
+            assert stored is not None
+            assert stored.source == "automatic"
+        await manager.cancel_scan_chats(account.id, started["task_id"])
+        return manager.latest_scan_chats(account.id) or {}
+
+    try:
+        latest = asyncio.run(exercise())
+    finally:
+        engine.dispose()
+
+    assert latest["source"] == "automatic"
 
 
 def test_running_scan_is_marked_interrupted_on_app_start(settings):

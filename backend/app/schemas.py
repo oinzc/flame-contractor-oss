@@ -393,6 +393,7 @@ class SendScheduleRead(APIBase):
 
 class AutoScanStatusRead(APIBase):
     account_id: str
+    task_id: str | None = None
     status: Literal[
         "scheduled",
         "due",
@@ -504,6 +505,7 @@ class ScanProgressRead(APIBase):
 
     task_id: str
     account_id: str
+    source: Literal["manual", "automatic"] = "manual"
     status: Literal["running", "completed", "failed", "interrupted", "cancelled"]
     total: int | None = None
     completed: int = 0
