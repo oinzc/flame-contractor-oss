@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     notify_on_success: bool = True
     # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断
     failure_streak_limit: int = 3
+    # 会话官方火花状态自动同步间隔（小时）；官方页面只提供天级状态，默认每日同步一次
+    auto_scan_interval_hours: int = 24
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",

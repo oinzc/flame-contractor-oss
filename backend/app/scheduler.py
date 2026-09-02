@@ -1,7 +1,8 @@
-"""M4 调度器：按账号发送窗口自动触发真实发送。
+"""M4/M9 调度器：按账号发送窗口自动触发真实发送，并定期同步会话状态。
 
-只负责「哪个账号今天何时发 + 账号级租约/互斥/恢复」，具体每个好友的发送仍走
-BrowserManager.run_send（SendJob 幂等键兜底、终态确认已实机验证）。
+发送部分只负责「哪个账号今天何时发 + 账号级租约/互斥/恢复」，具体每个好友的发送仍走
+BrowserManager.run_send（SendJob 幂等键兜底、终态确认已实机验证）。会话状态同步复用
+后台扫描任务，只回写已在列表中的好友/群聊官方快照，不导入新对象、不发送消息。
 
 设计约定（对齐 docs/TECHNICAL_DESIGN 5.2）：
 - 账号级随机取时：一账号在其 send_window 内取一个时刻，到点批量发该账号所有启用好友；
@@ -28,7 +29,9 @@ from .models import (
     Account,
     AccountStatus,
     AppSetting,
+    ContractTarget,
     ScheduleStatus,
+    ScanTask,
     SendJob,
     SendSchedule,
     JobStatus,
@@ -40,6 +43,14 @@ from .notifications import Notifier, NullNotifier
 DEFAULT_LEASE_SECONDS = 5.0
 # 触发后发给 run_send 的软超时（后台任务不管，仅用于租约判断），与 run_send 内部超时无关
 DEFAULT_RUN_TIMEOUT = 180.0
+# 会话状态同步默认每 24 小时一次；官方火花展示为天级状态，没必要高频访问会话列表。
+DEFAULT_AUTO_SCAN_INTERVAL_HOURS = 24
+# 服务启动后给手动登录/发送留出缓冲，再启动首次自动扫描。
+DEFAULT_AUTO_SCAN_INITIAL_DELAY = 60.0
+# 自动扫描避开发送窗口开始前的缓冲区，避免两个后台浏览器流程抢同一账号。
+DEFAULT_AUTO_SCAN_GUARD_MINUTES = 15
+# 与手动登录/发送/扫描发生账号级互斥时，短暂延后而不是错过一整天。
+DEFAULT_AUTO_SCAN_CONFLICT_RETRY_MINUTES = 5
 # 失败重试退避基数（秒），指数退避：60s, 120s, ...
 RETRY_BACKOFF_BASE = 60.0
 RETRY_MAX_COUNT = 2
@@ -70,6 +81,10 @@ class Scheduler:
         settings: Settings,
         send_account: Callable[[str], Awaitable[dict]] | None = None,
         *,
+        scan_account: Callable[[str], Awaitable[dict]] | None = None,
+        auto_scan_interval_hours: int = DEFAULT_AUTO_SCAN_INTERVAL_HOURS,
+        auto_scan_initial_delay: float = DEFAULT_AUTO_SCAN_INITIAL_DELAY,
+        auto_scan_guard_minutes: int = DEFAULT_AUTO_SCAN_GUARD_MINUTES,
         notifier: "Notifier | None" = None,
         loop_interval: float = 60.0,
         lease_seconds: float = DEFAULT_LEASE_SECONDS,
@@ -88,6 +103,10 @@ class Scheduler:
         self._engine = engine
         self._settings = settings
         self._send_account = send_account
+        self._scan_account = scan_account
+        self._auto_scan_interval_hours = max(1, int(auto_scan_interval_hours))
+        self._auto_scan_initial_delay = max(0.0, float(auto_scan_initial_delay))
+        self._auto_scan_guard_minutes = max(0, int(auto_scan_guard_minutes))
         self._notifier = notifier or NullNotifier()
         self._loop_interval = loop_interval
         self._lease_seconds = lease_seconds
@@ -106,6 +125,10 @@ class Scheduler:
         self._paused = False
         self._task: asyncio.Task | None = None
         self._send_tasks: set[asyncio.Task] = set()
+        self._auto_scan_tasks: set[asyncio.Task] = set()
+        self._auto_scan_running: set[str] = set()
+        self._auto_scan_next_attempt_at: dict[str, datetime] = {}
+        self._auto_scan_not_before: datetime | None = None
         self._stopping = False
         # M6-2 重试/延迟状态（进程内）：重启即清零，重新计数；
         # 发送幂等由 SendJob 唯一键兜底，重复派发不会导致重复发送。
@@ -125,6 +148,14 @@ class Scheduler:
     @property
     def running_accounts(self) -> set[str]:
         return set(self._running)
+
+    @property
+    def auto_scan_interval_hours(self) -> int:
+        return self._auto_scan_interval_hours
+
+    @property
+    def auto_scan_running_accounts(self) -> set[str]:
+        return set(self._auto_scan_running)
 
     def load_persisted_state(self) -> None:
         """从数据库恢复全局调度开关；应在数据库迁移完成后调用。"""
@@ -291,6 +322,8 @@ class Scheduler:
                 continue
             dispatched += 1
             self._spawn_send(schedule.id, schedule.account_id)
+        # 发送计划先派发，自动扫描随后检查账号租约，避免二者同时抢同一浏览器。
+        self._dispatch_auto_scans(now)
         return {"dispatched": dispatched}
 
     def _account_ready(self, account: Account) -> bool:
@@ -605,13 +638,207 @@ class Scheduler:
             session.add(row)
             session.commit()
 
+    # ------------------------------------------------------------ 会话状态自动同步
+
+    def _latest_scan(self, account_id: str) -> ScanTask | None:
+        with Session(self._engine) as session:
+            return session.exec(
+                select(ScanTask)
+                .where(ScanTask.account_id == account_id)
+                .order_by(ScanTask.updated_at.desc())
+                .limit(1)
+            ).first()
+
+    def _has_targets(self, account_id: str) -> bool:
+        with Session(self._engine) as session:
+            return (
+                session.exec(
+                    select(ContractTarget.id)
+                    .where(ContractTarget.account_id == account_id)
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+    def _auto_scan_blocked_by_send_window(self, account: Account, now: datetime) -> bool:
+        """自动扫描避开发送窗口及其前置缓冲，避免占用同账号浏览器。"""
+        tz = ZoneInfo(account.timezone)
+        aware_now = (
+            now.replace(tzinfo=ZoneInfo("UTC")) if now.tzinfo is None else now
+        ).astimezone(tz)
+        start = self._parse_hhmm(account.send_window_start)
+        end = self._parse_hhmm(account.send_window_end)
+        start_dt = datetime.combine(aware_now.date(), start, tzinfo=tz)
+        end_dt = datetime.combine(aware_now.date(), end, tzinfo=tz)
+        if end < start:
+            if aware_now < end_dt:
+                start_dt -= timedelta(days=1)
+            else:
+                end_dt += timedelta(days=1)
+        guard_start = start_dt - timedelta(minutes=self._auto_scan_guard_minutes)
+        return guard_start <= aware_now < end_dt
+
+    def _auto_scan_due(self, account: Account, now: datetime) -> bool:
+        if self._scan_account is None:
+            return False
+        if self._auto_scan_not_before is not None:
+            not_before = self._utc_naive(self._auto_scan_not_before)
+            if not_before is not None and now < not_before:
+                return False
+        if account.id in self._auto_scan_running or account.id in self._running:
+            return False
+        latest = self._latest_scan(account.id)
+        if latest is not None and latest.status == "running":
+            return False
+        # 登录刚恢复后，立即补做一次此前因失效而跳过的状态同步。
+        if (
+            latest is not None
+            and latest.overall == "auth_expired"
+            and account.status == AccountStatus.HEALTHY
+        ):
+            return True
+        retry_at = self._auto_scan_next_attempt_at.get(account.id)
+        if retry_at is not None and now < retry_at:
+            return False
+        if latest is None:
+            return True
+        reference = latest.updated_at or latest.finished_at or latest.started_at
+        reference = self._utc_naive(reference)
+        if reference is None:
+            return True
+        return now >= reference + timedelta(hours=self._auto_scan_interval_hours)
+
+    def _dispatch_auto_scans(self, now: datetime) -> int:
+        if self._scan_account is None or self._stopping:
+            return 0
+        with Session(self._engine) as session:
+            accounts = session.exec(select(Account).where(Account.enabled)).all()
+
+        dispatched = 0
+        for account in accounts:
+            if account.status != AccountStatus.HEALTHY:
+                continue
+            if not self._has_targets(account.id):
+                continue
+            if self._auto_scan_blocked_by_send_window(account, now):
+                continue
+            if not self._auto_scan_due(account, now):
+                continue
+            # 即使回调因外部互斥提前失败，也不要每 60 秒反复打开浏览器；
+            # 正常回调会创建 ScanTask，之后由数据库时间窗控制下一次扫描。
+            self._auto_scan_next_attempt_at[account.id] = now + timedelta(
+                hours=self._auto_scan_interval_hours
+            )
+            self._spawn_auto_scan(account.id)
+            dispatched += 1
+        return dispatched
+
+    def _spawn_auto_scan(self, account_id: str) -> None:
+        self._auto_scan_running.add(account_id)
+        task = asyncio.create_task(self._run_auto_scan(account_id))
+        self._auto_scan_tasks.add(task)
+        task.add_done_callback(
+            lambda completed: self._finish_auto_scan_task(account_id, completed)
+        )
+
+    def _finish_auto_scan_task(self, account_id: str, task: asyncio.Task) -> None:
+        self._auto_scan_tasks.discard(task)
+        self._auto_scan_running.discard(account_id)
+
+    async def _run_auto_scan(self, account_id: str) -> None:
+        if self._scan_account is None:
+            return
+        try:
+            result = await self._scan_account(account_id)
+            overall = result.get("overall")
+            if overall == "auth_expired":
+                await self._notify(
+                    "会话状态同步失败",
+                    f"账号「{self._account_name(account_id)}」登录已失效，官方火花状态暂未更新；"
+                    "重新扫码后会自动补做同步。",
+                    "critical",
+                )
+        except asyncio.CancelledError:
+            # 扫描子任务由 BrowserManager.aclose 收束为 interrupted，避免误记成用户取消。
+            raise
+        except Exception as exc:
+            if getattr(exc, "status_code", None) == 409:
+                # 账号正被手动流程占用；这不是扫描失败，下一轮短暂退避后再尝试。
+                retry_at = self._utc_naive(self._clock()) or datetime.now()
+                self._auto_scan_next_attempt_at[account_id] = retry_at + timedelta(
+                    minutes=DEFAULT_AUTO_SCAN_CONFLICT_RETRY_MINUTES
+                )
+                return
+            # 失败详情已经落在 ScanTask；调度循环不能因单账号同步异常退出。
+            return
+
+    def auto_scan_status(self) -> list[dict]:
+        """返回每个账号的自动同步状态，供总览说明「何时会更新」。"""
+        now = self._utc_naive(self._clock()) or datetime.now()
+        with Session(self._engine) as session:
+            accounts = session.exec(select(Account).order_by(Account.created_at)).all()
+
+        statuses: list[dict] = []
+        interval = timedelta(hours=self._auto_scan_interval_hours)
+        for account in accounts:
+            latest = self._latest_scan(account.id)
+            has_targets = self._has_targets(account.id)
+            last_at = None
+            if latest is not None:
+                last_at = latest.finished_at or latest.started_at
+            status = "scheduled"
+            detail = None
+            next_at = None
+            if not account.enabled:
+                status = "disabled"
+                detail = "账号已停用"
+            elif not has_targets:
+                status = "no_targets"
+                detail = "暂无契约对象"
+            elif self._paused:
+                status = "paused"
+                detail = "全局自动调度已暂停"
+            elif account.status != AccountStatus.HEALTHY:
+                status = "waiting_login"
+                detail = "账号未处于可用登录状态"
+            elif account.id in self._auto_scan_running:
+                status = "running"
+                detail = "正在读取会话列表"
+            else:
+                retry_at = self._auto_scan_next_attempt_at.get(account.id)
+                if retry_at is not None and retry_at > now:
+                    next_at = retry_at
+                elif latest is not None and latest.overall == "auth_expired":
+                    next_at = now
+                elif last_at is not None:
+                    next_at = self._utc_naive(last_at) + interval
+                else:
+                    next_at = self._auto_scan_not_before or now
+                if next_at <= now:
+                    status = "due"
+                    detail = "等待调度器启动同步"
+                else:
+                    status = "scheduled"
+            statuses.append(
+                {
+                    "account_id": account.id,
+                    "status": status,
+                    "last_scan_at": last_at,
+                    "next_scan_at": next_at,
+                    "detail": detail,
+                }
+            )
+        return statuses
+
     # ---------------------------------------------------------------- 生命周期
 
     async def wait_idle(self) -> None:
-        """等待所有在途后台发送任务结束（测试/收尾用）。"""
-        if self._send_tasks:
-            await asyncio.gather(*tuple(self._send_tasks), return_exceptions=True)
-            self._send_tasks.clear()
+        """等待所有在途后台发送与自动扫描任务结束（测试/收尾用）。"""
+        tasks = tuple(self._send_tasks) + tuple(self._auto_scan_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._send_tasks.clear()
+        self._auto_scan_tasks.clear()
 
     async def _loop(self) -> None:
         while not self._stopping:
@@ -630,6 +857,9 @@ class Scheduler:
             return
         self.load_persisted_state()
         self._stopping = False
+        self._auto_scan_not_before = self._utc_naive(self._clock()) + timedelta(
+            seconds=self._auto_scan_initial_delay
+        )
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -646,3 +876,9 @@ class Scheduler:
                 task.cancel()
             await asyncio.gather(*tuple(self._send_tasks), return_exceptions=True)
             self._send_tasks.clear()
+        if self._auto_scan_tasks:
+            for task in self._auto_scan_tasks:
+                task.cancel()
+            await asyncio.gather(*tuple(self._auto_scan_tasks), return_exceptions=True)
+            self._auto_scan_tasks.clear()
+        self._auto_scan_running.clear()

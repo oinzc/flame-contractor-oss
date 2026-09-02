@@ -105,6 +105,35 @@ sequenceDiagram
 | 账号列表 | accounts | Account[] | 是 | 首页账号摘要 |
 | 最近任务 | recentJobs | SendJob[] | 是 | 最近任务，默认最多 8 条 |
 
+### 3.3 查询调度与会话状态自动同步
+
+- **接口说明**：返回今日发送计划，以及每个账号的后台会话状态自动同步计划。
+- **请求 URL**：`/scheduler`
+- **请求方式**：GET
+- **自动同步默认策略**：服务启动后首次等待约 1 分钟，此后默认每 24 小时一次；自动扫描避开发送窗口开始前 15 分钟至窗口结束。周期可由后端环境变量 `FLAME_AUTO_SCAN_INTERVAL_HOURS` 调整。
+- 自动同步只刷新数据库中已经存在的契约对象官方状态，不自动新增会话、不发送消息；手动扫描接口仍可单独触发。
+
+#### 响应新增字段
+
+| 名称 | 字段属性 | 类型 | 含义 |
+|---|---|---|---|
+| 自动同步间隔 | autoScanIntervalHours | integer | 自动会话扫描周期，单位小时，默认 24 |
+| 账号自动同步状态 | autoScans | AutoScanStatus[] | 每个账号的最近一次与下一次同步状态 |
+
+`autoScans[].status` 取值：
+
+| 值 | 含义 |
+|---|---|
+| scheduled | 已排期，`nextScanAt` 为下一次触发时间 |
+| due | 已到触发时间，等待调度器启动同步 |
+| running | 正在读取会话列表 |
+| paused | 全局自动调度已暂停 |
+| waiting_login | 账号未处于可用登录状态 |
+| disabled | 账号已停用 |
+| no_targets | 暂无契约对象 |
+
+`lastScanAt` 和 `nextScanAt` 为 ISO 8601 时间；暂停、停用、未登录或无契约对象时，下一次时间可能为 `null`。`POST /scheduler/pause` 与 `POST /scheduler/resume` 返回同样的调度状态结构；暂停会同时暂停自动发送与自动会话同步，但不影响手动操作。
+
 ## 4. 账号接口
 
 ### 4.1 查询账号

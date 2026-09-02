@@ -10,7 +10,10 @@ from app.models import (
     Account,
     AccountStatus,
     AppSetting,
+    ContractTarget,
     JobStatus,
+    ScanTask,
+    ScanTaskStatus,
     ScheduleStatus,
     SendJob,
     SendSchedule,
@@ -399,3 +402,152 @@ def test_auth_expired_triggers_notification(engine):
     asyncio.run(sched.wait_idle())
 
     assert any("登录失效" in title for title, _, _ in notifier.sent)
+
+
+# ---------------------------------------------------------------- 会话状态自动同步
+
+
+def test_auto_scan_dispatches_once_per_interval(engine):
+    """自动扫描以最近一次完成时间为基准，每 24 小时最多触发一次。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="好友A"))
+        session.commit()
+
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def scan(account_id: str) -> dict:
+        calls.append(account_id)
+        stamp = clock().replace(tzinfo=None)
+        with Session(engine) as session:
+            session.add(
+                ScanTask(
+                    id=f"scan-{len(calls)}",
+                    account_id=account_id,
+                    status=ScanTaskStatus.COMPLETED,
+                    total=1,
+                    completed=1,
+                    stage="扫描完成",
+                    overall="ok",
+                    entries_json="[]",
+                    started_at=stamp,
+                    finished_at=stamp,
+                    updated_at=stamp,
+                )
+            )
+            session.commit()
+        return {"overall": "ok"}
+
+    scheduler = Scheduler(
+        engine,
+        settings=None,
+        scan_account=scan,
+        auto_scan_interval_hours=24,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+
+    async def drive() -> None:
+        await scheduler.tick()
+        await scheduler.wait_idle()
+
+    asyncio.run(drive())
+    assert calls == [account.id]
+    first_status = scheduler.auto_scan_status()[0]
+    assert first_status["status"] == "scheduled"
+    assert first_status["next_scan_at"] == datetime(2026, 8, 28, 10, 0)
+
+    clock.set(datetime(2026, 8, 28, 9, 59, 59, tzinfo=timezone.utc))
+    asyncio.run(drive())
+    assert calls == [account.id]
+
+    clock.set(datetime(2026, 8, 28, 10, 0, 1, tzinfo=timezone.utc))
+    asyncio.run(drive())
+    assert calls == [account.id, account.id]
+
+
+def test_auto_scan_waits_until_send_window_ends(engine):
+    """发送窗口及前 15 分钟保护区内不抢占账号浏览器，窗口结束后再触发。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="好友A"))
+        session.commit()
+
+    clock = make_clock(datetime(2026, 8, 27, 11, 50, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def scan(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    scheduler = Scheduler(
+        engine,
+        settings=None,
+        scan_account=scan,
+        auto_scan_interval_hours=24,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+
+    async def drive() -> None:
+        await scheduler.tick()
+        await scheduler.wait_idle()
+
+    # 19:50 Asia/Shanghai，处于 19:45-22:00 的自动扫描保护区。
+    asyncio.run(drive())
+    assert calls == []
+
+    clock.set(datetime(2026, 8, 27, 14, 1, tzinfo=timezone.utc))
+    asyncio.run(drive())
+    assert calls == [account.id]
+
+
+def test_auto_scan_conflict_is_shortly_deferred(engine):
+    """撞上手动账号流程时只延后 5 分钟，不把本次同步误记成失败。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="好友A"))
+        session.commit()
+
+    class AccountBusyError(Exception):
+        status_code = 409
+
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def scan(account_id: str) -> dict:
+        calls.append(account_id)
+        if len(calls) == 1:
+            raise AccountBusyError()
+        return {"overall": "ok"}
+
+    scheduler = Scheduler(
+        engine,
+        settings=None,
+        scan_account=scan,
+        auto_scan_interval_hours=24,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+
+    async def drive() -> None:
+        await scheduler.tick()
+        await scheduler.wait_idle()
+
+    asyncio.run(drive())
+    assert calls == [account.id]
+    assert scheduler.auto_scan_status()[0]["next_scan_at"] == datetime(
+        2026, 8, 27, 10, 5
+    )
+
+    clock.set(datetime(2026, 8, 27, 10, 4, 59, tzinfo=timezone.utc))
+    asyncio.run(drive())
+    assert calls == [account.id]
+
+    clock.set(datetime(2026, 8, 27, 10, 5, tzinfo=timezone.utc))
+    asyncio.run(drive())
+    assert calls == [account.id, account.id]

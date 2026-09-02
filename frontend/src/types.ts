@@ -51,11 +51,30 @@ export interface SendSchedule {
   lastError: string | null
 }
 
+export type AutoScanStatusKind =
+  | 'scheduled'
+  | 'due'
+  | 'running'
+  | 'paused'
+  | 'waiting_login'
+  | 'disabled'
+  | 'no_targets'
+
+export interface AutoScanStatus {
+  accountId: string
+  status: AutoScanStatusKind
+  lastScanAt: string | null
+  nextScanAt: string | null
+  detail: string | null
+}
+
 export interface SchedulerStatus {
   enabled: boolean
   paused: boolean
   runningAccounts: string[]
   todaySchedules: SendSchedule[]
+  autoScanIntervalHours: number
+  autoScans: AutoScanStatus[]
 }
 
 export interface Account {

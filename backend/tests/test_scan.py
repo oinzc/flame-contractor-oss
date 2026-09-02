@@ -92,6 +92,34 @@ def test_scan_chats_background_progress_reaches_completion(settings):
         assert snapshot["entries"][-1]["title"] == "好友C"
 
 
+def test_auto_scan_refreshes_existing_targets_without_importing_new_chats(settings):
+    """自动扫描回写已有对象的官方快照，但不会静默新增扫描到的会话。"""
+    app = make_app(
+        settings,
+        [
+            FakePage(
+                logged_in=True,
+                conversation_titles=("好友A", "新会话"),
+            )
+        ],
+    )
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+        manager = app.state.browser_manager
+
+        result = asyncio.run(manager.run_auto_scan(account["id"]))
+
+        assert result["overall"] == "ok"
+        assert result["sync"]["refreshed"] == ["好友A"]
+        assert result["sync"]["created"] == []
+        targets = client.get(
+            "/api/targets", params={"accountId": account["id"]}
+        ).json()
+        assert len(targets) == 1
+        assert targets[0]["nicknameSnapshot"] == "好友A"
+        assert targets[0]["sparkScannedAt"] is not None
+
+
 def test_cancel_scan_preserves_discovered_entries(settings):
     """取消后台扫描只结束任务，不丢失取消前已经持久化的候选会话。"""
     app = make_app(settings, [FakePage(logged_in=True)])

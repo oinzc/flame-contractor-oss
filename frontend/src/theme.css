@@ -497,6 +497,42 @@ body {
 .mini-row .state.bad { color: var(--red); }
 .mini-row .state.idle { color: var(--text-3); }
 
+/* 会话官方状态自动同步：把周期与下一次触发放在调度器同一模块内。 */
+.auto-sync-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--seam);
+  color: var(--text-2);
+  font-size: 10.5px;
+}
+.auto-sync-lamp {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(79, 200, 120, 0.42);
+}
+.auto-sync-status.running .auto-sync-lamp { background: var(--flame); box-shadow: 0 0 6px var(--flame-glow); }
+.auto-sync-status.paused .auto-sync-lamp { background: var(--text-3); box-shadow: none; }
+.auto-sync-label { color: var(--ink); }
+.auto-sync-cadence { color: var(--text-3); font-family: var(--mono); font-size: 9.5px; }
+.auto-sync-state {
+  margin-left: auto;
+  color: var(--flame);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-align: right;
+}
+
+@media (max-width: 640px) {
+  .auto-sync-state { flex-basis: 100%; margin-left: 0; text-align: left; }
+}
+
 /* MOD·03 好友火花榜 */
 .streak-rows { display: grid; gap: 7px; }
 
