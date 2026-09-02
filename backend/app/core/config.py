@@ -1,11 +1,14 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "flame-contractor.db"
+AUTO_SCAN_INTERVAL_MIN_HOURS = 1
+AUTO_SCAN_INTERVAL_MAX_HOURS = 168
 
 
 class Settings(BaseSettings):
@@ -26,7 +29,11 @@ class Settings(BaseSettings):
     # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断
     failure_streak_limit: int = 3
     # 会话官方火花状态自动同步间隔（小时）；官方页面只提供天级状态，默认每日同步一次
-    auto_scan_interval_hours: int = 24
+    auto_scan_interval_hours: int = Field(
+        default=24,
+        ge=AUTO_SCAN_INTERVAL_MIN_HOURS,
+        le=AUTO_SCAN_INTERVAL_MAX_HOURS,
+    )
     cors_origins: tuple[str, ...] = (
         "http://127.0.0.1:5173",
         "http://localhost:5173",

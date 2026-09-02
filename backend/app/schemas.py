@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .core.config import AUTO_SCAN_INTERVAL_MAX_HOURS, AUTO_SCAN_INTERVAL_MIN_HOURS
 from .models import AccountStatus, FailureClass, JobStatus, ScheduleStatus, TemplateType
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -404,6 +405,15 @@ class AutoScanStatusRead(APIBase):
     last_scan_at: datetime | None
     next_scan_at: datetime | None
     detail: str | None
+
+
+class SchedulerSettingsPatch(APIBase):
+    """更新自动会话状态同步周期；单位为小时。"""
+
+    auto_scan_interval_hours: int = Field(
+        ge=AUTO_SCAN_INTERVAL_MIN_HOURS,
+        le=AUTO_SCAN_INTERVAL_MAX_HOURS,
+    )
 
 
 class SchedulerStatusRead(APIBase):

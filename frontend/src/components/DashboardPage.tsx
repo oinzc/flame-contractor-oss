@@ -16,8 +16,12 @@ interface Props {
   schedulerStatus: SchedulerStatus | null
   now: Date
   onToggleScheduler: () => void
+  onUpdateAutoScanInterval: (hours: number) => void
+  autoScanIntervalSaving: boolean
   onNavigate: (page: 'accounts' | 'targets' | 'jobs') => void
 }
+
+const AUTO_SCAN_INTERVAL_OPTIONS = [1, 3, 6, 12, 24, 48, 72, 168]
 
 function hhmmToFraction(value: string): number {
   const [hour, minute] = value.split(':').map(Number)
@@ -50,6 +54,8 @@ export default function DashboardPage({
   schedulerStatus,
   now,
   onToggleScheduler,
+  onUpdateAutoScanInterval,
+  autoScanIntervalSaving,
   onNavigate,
 }: Props) {
   const [stats, setStats] = useState<StatsSummary | null>(null)
@@ -97,6 +103,10 @@ export default function DashboardPage({
       schedule.accountId.slice(0, 6),
   }))
   const autoScans = schedulerStatus?.autoScans ?? []
+  const autoScanIntervalHours = schedulerStatus?.autoScanIntervalHours ?? 24
+  const intervalOptions = AUTO_SCAN_INTERVAL_OPTIONS.includes(autoScanIntervalHours)
+    ? AUTO_SCAN_INTERVAL_OPTIONS
+    : [autoScanIntervalHours, ...AUTO_SCAN_INTERVAL_OPTIONS]
   const runningAutoScans = autoScans.filter((scan) => scan.status === 'running')
   const nextAutoScan = [...autoScans]
     .filter((scan) => scan.status === 'scheduled' && scan.nextScanAt)
@@ -266,10 +276,25 @@ export default function DashboardPage({
         >
           <span className="auto-sync-lamp" aria-hidden="true" />
           <span className="auto-sync-label">会话状态自动同步</span>
-          <span className="auto-sync-cadence">
-            每 {schedulerStatus?.autoScanIntervalHours ?? 24} 小时
+          <label className="auto-sync-control">
+            <span>间隔</span>
+            <select
+              aria-label="自动同步周期"
+              value={autoScanIntervalHours}
+              disabled={schedulerStatus === null || autoScanIntervalSaving}
+              onChange={(event) => onUpdateAutoScanInterval(Number(event.currentTarget.value))}
+            >
+              {intervalOptions.map((hours) => (
+                <option key={hours} value={hours}>
+                  每 {hours} 小时
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="auto-sync-safety">只读 · 不发送</span>
+          <span className="auto-sync-state">
+            {autoScanIntervalSaving ? '保存中…' : autoScanState}
           </span>
-          <span className="auto-sync-state">{autoScanState}</span>
         </div>
       </section>
 

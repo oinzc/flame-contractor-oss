@@ -32,7 +32,7 @@ flowchart LR
 
 ### 2.2 当前组件与边界
 
-- Scheduler：按发送窗口生成任务、租约与有界重试；调度循环是进程内 APScheduler，持久语义由 SQLite 记录承载；
+- Scheduler：按发送窗口生成任务、租约与有界重试，并按可配置间隔触发只读会话状态同步；调度循环是进程内 APScheduler，持久语义由 SQLite 记录承载，自动同步周期和暂停开关写入 `AppSetting`；
 - BrowserManager：按账号复用独立持久 Profile，串行执行登录、扫描、定位和发送，账号级流程互斥；
 - Douyin Adapter：selector、身份确认、输入和发送终态确认；无法可靠判断时记录 `unknown_requires_review`，不自动重发；
 - ScanTask：把后台会话扫描的进度和已发现条目持久化到 SQLite，后端重启将遗留任务收束为 `interrupted`，不自动续跑；
