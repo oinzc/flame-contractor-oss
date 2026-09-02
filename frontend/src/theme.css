@@ -1014,6 +1014,30 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .flow-hint.ember { border-color: rgba(255, 122, 26, 0.45); color: var(--flame); }
 .flow-hint.crimson { border-color: rgba(255, 83, 70, 0.45); color: var(--red); }
 
+.dry-progress {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--seam);
+  border-left: 3px solid var(--flame);
+  padding: 10px 12px;
+  background: #17120e;
+}
+.dry-progress-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.dry-progress-head > div { min-width: 0; display: grid; gap: 3px; }
+.dry-progress-kicker { color: var(--text-3); font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em; }
+.dry-progress-head strong { font-size: 12px; }
+.dry-progress-state { flex: none; color: var(--flame); font-family: var(--mono); font-size: 10px; }
+.dry-progress-track { height: 8px; overflow: hidden; background: #2a221a; border: 1px solid var(--seam); }
+.dry-progress-fill {
+  display: block;
+  width: 36%;
+  height: 100%;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, var(--flame-deep), var(--flame));
+  animation: task-progress-sweep 1.2s linear infinite;
+}
+.dry-progress p { margin: 0; color: var(--text-2); font-size: 10.5px; line-height: 1.45; }
+
 .dry-result { border: 1px solid var(--seam); padding: 10px 12px; display: grid; gap: 6px; }
 .dry-head { font-size: 12px; color: var(--flame); letter-spacing: 0.06em; }
 .dry-result ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -1680,7 +1704,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition-duration: 0.01ms !important; }
   .task-progress-track.is-indeterminate .task-progress-fill,
-  .scan-progress-track.is-indeterminate .scan-progress-fill {
+  .scan-progress-track.is-indeterminate .scan-progress-fill,
+  .dry-progress-track.is-indeterminate .dry-progress-fill {
     transform: translateX(0) !important;
     opacity: 0.55;
   }
