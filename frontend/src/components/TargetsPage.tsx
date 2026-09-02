@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api'
 import type {
   Account,
@@ -66,19 +66,6 @@ function scanEntryMatchesTarget(entry: ScanChatEntry, target: ContractTarget): b
   )
 }
 
-function autoSelectExistingEnabledEntries(
-  entries: ScanChatEntry[],
-  targets: ContractTarget[],
-): Map<string, ScanChatEntry> {
-  const selected = new Map<string, ScanChatEntry>()
-  for (const entry of entries) {
-    if (targets.some((target) => target.enabled && scanEntryMatchesTarget(entry, target))) {
-      selected.set(entry.title, entry)
-    }
-  }
-  return selected
-}
-
 export default function TargetsPage({
   accounts,
   targets,
@@ -108,7 +95,6 @@ export default function TargetsPage({
   const [selectedEntries, setSelectedEntries] = useState<Map<string, ScanChatEntry>>(new Map())
   const [scanQuery, setScanQuery] = useState('')
   const [showNoStreak, setShowNoStreak] = useState(false)
-  const autoSelectionKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -149,6 +135,9 @@ export default function TargetsPage({
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
   const isExistingScanEntry = (entry: ScanChatEntry) =>
     accountTargets.some((target) => scanEntryMatchesTarget(entry, target))
+  const selectedImportEntries = [...selectedEntries.values()].filter(
+    (entry) => !isExistingScanEntry(entry),
+  )
 
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const identityTargetIds = accountTargets
@@ -164,16 +153,6 @@ export default function TargetsPage({
   const identityRunning = identityTask?.status === 'running'
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
-
-  // 扫描结果和好友列表由 App 并行加载；等目标数据到齐后只初始化一次自动勾选，避免覆盖用户手动取消选择。
-  useEffect(() => {
-    if (!selectedScanTask || selectedScanTask.status !== 'completed') return
-    if (targets.length === 0 && selectedScanTask.entries.length > 0) return
-    const selectionKey = `${selectedScanTask.taskId}:${selectedAccountId}`
-    if (autoSelectionKeyRef.current === selectionKey) return
-    autoSelectionKeyRef.current = selectionKey
-    setSelectedEntries(autoSelectExistingEnabledEntries(selectedScanTask.entries, accountTargets))
-  }, [selectedScanTask?.taskId, selectedScanTask?.status, selectedAccountId, targets])
 
   const visibleScanEntries =
     selectedScanTask?.status === 'running' ? selectedScanTask.entries : scanEntries
@@ -305,13 +284,13 @@ export default function TargetsPage({
   }
 
   async function handleImportSelected() {
-    if (selectedEntries.size === 0) return
+    if (selectedImportEntries.length === 0) return
     setBatchSubmitting(true)
     setActionError(null)
     try {
       const result = await api.createTargetsBatch({
         accountId: selectedAccountId,
-        items: [...selectedEntries.values()].map((entry) => ({
+        items: selectedImportEntries.map((entry) => ({
           nickname: entry.title,
           platformUserId: entry.platformUserId,
           platformHandle: entry.platformHandle,
@@ -578,7 +557,7 @@ export default function TargetsPage({
                 title={
                   selectedAccount?.status !== 'healthy'
                     ? '账号需先扫码登录才能扫描会话列表'
-                    : '后台滚动加载整个会话列表；完成后自动刷新已有好友/群聊的官方状态，并预选仍启用的已有对象（约需 1–2 分钟）'
+                    : '后台滚动加载整个会话列表；完成后自动刷新已有好友/群聊的官方状态，下方仅需勾选新对象（约需 1–2 分钟）'
                 }
                 onClick={() => void handleScan()}
               >
@@ -592,7 +571,7 @@ export default function TargetsPage({
               </button>
             </div>
             <p className="scan-helper">
-              扫描只读取会话列表，不点击会话、不发送消息；完成后会自动刷新列表中已有好友/群聊的官方状态，并自动勾选仍启用的已有对象，暂停项不会勾选。身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
+              扫描只读取会话列表，不点击会话、不发送消息；完成后会自动刷新列表中已有好友/群聊的官方状态。已有对象会标记为已自动同步，下方仅需勾选未在列表的新对象进行导入。身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
             </p>
             {selectedScanTask && (
               <section
@@ -717,7 +696,7 @@ export default function TargetsPage({
                       ) : (
                         scanFiltered.map((entry) => {
                           const exists = isExistingScanEntry(entry)
-                          const checked = selectedEntries.has(entry.title)
+                          const checked = !exists && selectedEntries.has(entry.title)
                           const group =
                             entry.conversationType === 'group' ||
                             looksLikeGroup(entry.title, entry.preview)
@@ -739,9 +718,11 @@ export default function TargetsPage({
                             >
                               <input
                                 type="checkbox"
+                                disabled={exists}
                                 checked={checked}
                                 onChange={() =>
                                   setSelectedEntries((previous) => {
+                                    if (exists) return previous
                                     const next = new Map(previous)
                                     if (next.has(entry.title)) next.delete(entry.title)
                                     else next.set(entry.title, entry)
@@ -773,9 +754,7 @@ export default function TargetsPage({
                                   {identityStatusLabel(entry)}
                                 </span>
                                 {exists && (
-                                  <span className="badge">
-                                    {checked ? '将刷新官方状态' : '已在列表'}
-                                  </span>
+                                  <span className="badge">已自动同步</span>
                                 )}
                               </span>
                             </label>
@@ -804,12 +783,12 @@ export default function TargetsPage({
                         <button
                           className="btn primary small"
                           type="button"
-                          disabled={batchSubmitting || selectedEntries.size === 0}
+                          disabled={batchSubmitting || selectedImportEntries.length === 0}
                           onClick={() => void handleImportSelected()}
                         >
                           {batchSubmitting
                             ? '导入中…'
-                            : `导入 / 刷新所选（${selectedEntries.size}）`}
+                            : `导入新对象（${selectedImportEntries.length}）`}
                         </button>
                       </span>
                     </div>
