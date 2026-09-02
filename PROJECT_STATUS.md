@@ -3,13 +3,13 @@
 > 最近更新：2026-09-02 | 功能基线：用户/群会话稳定身份匹配 + 普通好友身份补采 + CRUD 补齐 + 会话扫描导入 + SQLite 持久化任务/全局任务坞 + 实时结果/取消重试 + 火花识别/官方状态快照 + 会话状态自动同步 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M9 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性、群会话身份识别、普通好友身份补采）和 M9 会话状态自动同步全部落地。后端 pytest **167 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M9 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性、群会话身份识别、普通好友身份补采）和 M9 会话状态自动同步全部落地。后端 pytest **169 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
 
 **2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
 
-**2026-09-02 会话状态自动同步**：Scheduler 默认每 24 小时触发一次会话列表后台扫描，服务启动后首次等待约 1 分钟，并避开发送窗口开始前 15 分钟至窗口结束；完成后只刷新已存在好友/群聊的官方火花状态，不自动导入新会话、不发送消息。总览可在 1–168 小时内设置周期并写入 `AppSetting`，环境变量 `FLAME_AUTO_SCAN_INTERVAL_HOURS` 仅作为无持久化设置时的初始默认值；`GET /api/scheduler` 返回周期、最近同步时间、下一次同步时间和运行状态，`PATCH /api/scheduler/settings` 更新周期。当前本机数据库的全局调度开关仍为暂停，恢复后自动同步才会运行。
+**2026-09-02 会话状态自动同步**：Scheduler 默认每 24 小时触发一次会话列表后台扫描，服务启动后首次等待约 1 分钟，并避开发送窗口开始前 15 分钟至窗口结束；完成后只刷新已存在好友/群聊的官方火花状态，不自动导入新会话、不发送消息。总览可在 1–168 小时内设置周期并写入 `AppSetting`，环境变量 `FLAME_AUTO_SCAN_INTERVAL_HOURS` 仅作为无持久化设置时的初始默认值；`GET /api/scheduler` 返回周期、最近同步时间、下一次同步时间和运行状态，`PATCH /api/scheduler/settings` 更新周期。自动同步运行时由前端独立显示 `AUTO SYNC` 全局任务坞，持续展示真实处理数、当前会话和百分比；切换页面或收起面板不影响后台任务，完成后保留只读结果摘要。全局调度暂停时自动同步不运行。
 
-**2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容。
+**2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容；自动同步使用同一进度接口但以 `source=automatic` 独立呈现，不进入手动导入、取消或重试流程。
 
 **2026-09-01 会话扫描任务可靠性闭环**：新增 `ScanTask`/迁移 `d2e6f8a0b1c3`，每次进度快照和已发现会话条目写入 SQLite；`GET /scan-chats/latest` 可在刷新或后端重启后恢复最近快照。前端任务坞统一承载发送与扫描任务，扫描结果实时增长，支持取消并保留已发现条目、失败重试；后端重启会把遗留 `running` 收束为 `interrupted`，不自动续跑或自动导入/发送，避免重复操作。
 
@@ -121,7 +121,7 @@ backend/app/
   scheduler.py M4/M9 调度器：发送调度 + 会话自动同步/窗口保护/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)、add_conversation_identity(f4a8c2e6b1d3)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)、add_conversation_identity(f4a8c2e6b1d3)、add_scan_task_source(c6e7f8a9b0d1)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
@@ -134,10 +134,10 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **167 passed**（新增自动同步周期持久化/API、发送窗口保护/互斥短暂延后/已有对象状态回写回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **169 passed**（新增自动同步周期持久化/API、发送窗口保护/互斥短暂延后/已有对象状态回写回归、自动同步任务发现与来源隔离；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
-| 端到端启动 | uvicorn 重启后 `/health=database:ready`；`/api/scheduler` 返回 `autoScanIntervalHours=24`、账号自动同步状态和原有发送计划字段 |
-| 前端真实渲染 | `http://localhost:5173/`，内置浏览器 673×773 窄视口；总览显示可配置“自动同步周期”、只读说明和暂停状态，交互保存后可恢复为 24 小时，无横向溢出，控制台无新增错误 |
+| 端到端启动 | uvicorn 重启后 `/health=database:ready`；`/api/scheduler` 返回自动同步周期、账号状态（含运行中任务 `taskId`）和原有发送计划字段 |
+| 前端真实渲染 | `http://localhost:5173/`，内置浏览器独立标签页完成硬刷新；总览显示可配置“自动同步周期”、只读说明和调度状态，宽度检查无横向溢出，当前刷新标签页控制台无错误 |
 | 2026-09-01 运行态检查 | 后端 `/health` 返回 `status=ok`、`database=ready`；账号「示例账号」为 `healthy`；前后端均监听回环地址 `127.0.0.1`（8000/5173） |
 | 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `39`/`44`；后续本次重启后真实扫描 `54/54` 完成，导入摘要包含 10 个群会话 ID/名称，现有 4 个群聊已按会话 ID 回填好友记录。会话数随抖音页面状态变化，不写死为固定总数 |
 | 真实 Dry Run（2026-08-31） | `overall=ok`；14 个对象中 10 个 `found`（含三种火花徽标后缀），4 个 `not_found`；只读，未发送消息 |
