@@ -39,13 +39,15 @@ def create_app(
             prune_old_artifacts(settings.artifacts_dir, settings.artifact_retention_days)
         except Exception:
             pass
-        # 调度器：发送执行器复用 browser_manager.run_send（账号级批量、幂等、终态确认）
+        # 调度器：发送执行器复用 run_send；会话状态同步复用后台扫描并只回写已有对象
         sched = scheduler
         if sched is None:
             sched = Scheduler(
                 engine,
                 settings,
                 send_account=browser_manager.run_send,
+                scan_account=browser_manager.run_auto_scan,
+                auto_scan_interval_hours=settings.auto_scan_interval_hours,
                 notifier=BarkNotifier(base_url=settings.bark_url),
                 window_expiry_policy=settings.window_expiry_policy,
                 notify_on_success=settings.notify_on_success,

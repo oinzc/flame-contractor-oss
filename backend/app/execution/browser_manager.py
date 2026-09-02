@@ -28,6 +28,8 @@ from ..models import (
     IdentityHydrationTask,
     TemplateType,
 )
+from ..schemas import BatchTargetItem, TargetBatchCreate
+from ..services import create_targets_batch
 from .douyin_chat import (
     SCAN_MAX_ROUNDS,
     DomChangedError,
@@ -1317,6 +1319,97 @@ class BrowserManager:
     async def scan_chats(self, account_id: str) -> dict:
         """兼容旧客户端的同步扫描接口；新控制台使用 start/progress 接口。"""
         return await self._scan_chats_impl(account_id)
+
+    @staticmethod
+    def _scan_entry_matches_target(entry: dict, target: ContractTarget) -> bool:
+        title = entry.get("title")
+        if isinstance(title, str) and target.nickname_snapshot == title:
+            return True
+        platform_user_id = entry.get("platform_user_id")
+        if platform_user_id and target.platform_user_id == platform_user_id:
+            return True
+        conversation_id = entry.get("platform_conversation_id")
+        return bool(
+            conversation_id
+            and target.platform_conversation_id == conversation_id
+        )
+
+    def _sync_existing_scan_entries(self, account_id: str, entries: list[dict]) -> dict:
+        """自动扫描只刷新已有契约对象，绝不把新会话静默导入好友列表。"""
+        with Session(self._engine) as session:
+            targets = session.exec(
+                select(ContractTarget).where(ContractTarget.account_id == account_id)
+            ).all()
+            items: list[BatchTargetItem] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                title = entry.get("title")
+                if not isinstance(title, str) or not any(
+                    self._scan_entry_matches_target(entry, target) for target in targets
+                ):
+                    continue
+                items.append(
+                    BatchTargetItem(
+                        nickname=title,
+                        platform_user_id=entry.get("platform_user_id"),
+                        platform_handle=entry.get("platform_handle"),
+                        platform_conversation_id=entry.get("platform_conversation_id"),
+                        conversation_type=entry.get("conversation_type"),
+                        identity_status=entry.get("identity_status") or "not_observed",
+                        conversation_status=entry.get("conversation_status") or "not_observed",
+                        streak_days=entry.get("streak_days"),
+                        spark_kind=entry.get("streak_kind"),
+                        spark_label=entry.get("streak_label"),
+                    )
+                )
+            if not items:
+                return {"refreshed": [], "created": []}
+            result = create_targets_batch(
+                session,
+                TargetBatchCreate(account_id=account_id, items=items),
+            )
+            return result.model_dump()
+
+    async def run_auto_scan(self, account_id: str) -> dict:
+        """执行一次由调度器触发的扫描，并在完成后回写已有对象的官方快照。"""
+        initial = await self.start_scan_chats(account_id)
+        task_id = initial["task_id"]
+        progress = initial
+        while progress["status"] == "running":
+            await self._sleep(0.5)
+            progress = self.scan_chats_progress(account_id, task_id)
+        if progress["status"] != "completed":
+            return {
+                "overall": progress.get("overall") or "error",
+                "detail": progress.get("detail"),
+                "entries": progress.get("entries") or [],
+            }
+        try:
+            sync = self._sync_existing_scan_entries(
+                account_id,
+                progress.get("entries") or [],
+            )
+        except Exception as exc:
+            detail = f"扫描完成，但官方状态同步失败：{type(exc).__name__}"
+            with Session(self._engine) as session:
+                task = session.get(ScanTask, task_id)
+                if task is not None:
+                    task.detail = detail
+                    task.updated_at = _utcnow()
+                    session.add(task)
+                    session.commit()
+            return {
+                "overall": "error",
+                "detail": detail,
+                "entries": progress.get("entries") or [],
+            }
+        return {
+            "overall": "ok",
+            "detail": None,
+            "entries": progress.get("entries") or [],
+            "sync": sync,
+        }
 
     async def run_dry_run(self, account_id: str) -> dict:
         if self._active_flow(account_id) is not None:

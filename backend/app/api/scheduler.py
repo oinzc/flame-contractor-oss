@@ -29,36 +29,33 @@ def _today_schedules(session: SessionDep, scheduler) -> list[SendScheduleRead]:
     return records
 
 
-@router.get("", response_model=SchedulerStatusRead)
-def read_scheduler_status(request: Request, session: SessionDep) -> SchedulerStatusRead:
+def _scheduler_read(request: Request, session: SessionDep) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
+    auto_scan_status = getattr(scheduler, "auto_scan_status", None)
     return SchedulerStatusRead(
         enabled=scheduler.enabled,
         paused=scheduler.paused,
         running_accounts=sorted(scheduler.running_accounts),
         today_schedules=_today_schedules(session, scheduler),
+        auto_scan_interval_hours=getattr(scheduler, "auto_scan_interval_hours", 24),
+        auto_scans=auto_scan_status() if callable(auto_scan_status) else [],
     )
+
+
+@router.get("", response_model=SchedulerStatusRead)
+def read_scheduler_status(request: Request, session: SessionDep) -> SchedulerStatusRead:
+    return _scheduler_read(request, session)
 
 
 @router.post("/pause", response_model=SchedulerStatusRead)
 def pause_scheduler(request: Request, session: SessionDep) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     scheduler.pause()
-    return SchedulerStatusRead(
-        enabled=scheduler.enabled,
-        paused=scheduler.paused,
-        running_accounts=sorted(scheduler.running_accounts),
-        today_schedules=_today_schedules(session, scheduler),
-    )
+    return _scheduler_read(request, session)
 
 
 @router.post("/resume", response_model=SchedulerStatusRead)
 def resume_scheduler(request: Request, session: SessionDep) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     scheduler.resume()
-    return SchedulerStatusRead(
-        enabled=scheduler.enabled,
-        paused=scheduler.paused,
-        running_accounts=sorted(scheduler.running_accounts),
-        today_schedules=_today_schedules(session, scheduler),
-    )
+    return _scheduler_read(request, session)

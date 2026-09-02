@@ -31,6 +31,19 @@ function isoToFraction(value: string | null): number | null {
   return (date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600) / 24
 }
 
+function formatAutoScanTime(value: string | null): string {
+  if (!value) return '待定'
+  const date = parseBackendTime(value)
+  if (Number.isNaN(date.getTime())) return '待定'
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 export default function DashboardPage({
   summary,
   targets,
@@ -83,6 +96,28 @@ export default function DashboardPage({
       summary.accounts.find((account) => account.id === schedule.accountId)?.displayName ??
       schedule.accountId.slice(0, 6),
   }))
+  const autoScans = schedulerStatus?.autoScans ?? []
+  const runningAutoScans = autoScans.filter((scan) => scan.status === 'running')
+  const nextAutoScan = [...autoScans]
+    .filter((scan) => scan.status === 'scheduled' && scan.nextScanAt)
+    .sort(
+      (left, right) =>
+        parseBackendTime(left.nextScanAt!).getTime() - parseBackendTime(right.nextScanAt!).getTime(),
+    )[0]
+  const autoScanState =
+    schedulerStatus === null
+      ? '无法读取状态'
+      : schedulerStatus.paused
+        ? '已暂停'
+        : runningAutoScans.length > 0
+          ? `同步中 · ${runningAutoScans.length} 个账号`
+          : nextAutoScan
+            ? `下次 ${formatAutoScanTime(nextAutoScan.nextScanAt)}`
+            : autoScans.some((scan) => scan.status === 'waiting_login')
+              ? '等待账号登录'
+              : autoScans.some((scan) => scan.status === 'no_targets')
+                ? '暂无契约对象'
+                : '等待首次同步'
 
   return (
     <div className="bento board" style={{ margin: 18 }}>
@@ -223,6 +258,18 @@ export default function DashboardPage({
               发送中：{schedulerStatus.runningAccounts.join('、')}
             </span>
           )}
+        </div>
+        <div
+          className={`auto-sync-status${runningAutoScans.length > 0 ? ' running' : ''}${schedulerStatus?.paused ? ' paused' : ''}`}
+          aria-live="polite"
+          aria-label="会话状态自动同步"
+        >
+          <span className="auto-sync-lamp" aria-hidden="true" />
+          <span className="auto-sync-label">会话状态自动同步</span>
+          <span className="auto-sync-cadence">
+            每 {schedulerStatus?.autoScanIntervalHours ?? 24} 小时
+          </span>
+          <span className="auto-sync-state">{autoScanState}</span>
         </div>
       </section>
 

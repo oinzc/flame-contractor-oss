@@ -1,11 +1,13 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-09-02 | 功能基线：用户/群会话稳定身份匹配 + 普通好友身份补采 + CRUD 补齐 + 会话扫描导入 + SQLite 持久化任务/全局任务坞 + 实时结果/取消重试 + 火花识别/官方状态快照 + 暂停状态持久化（见 git log）
+> 最近更新：2026-09-02 | 功能基线：用户/群会话稳定身份匹配 + 普通好友身份补采 + CRUD 补齐 + 会话扫描导入 + SQLite 持久化任务/全局任务坞 + 实时结果/取消重试 + 火花识别/官方状态快照 + 会话状态自动同步 + 暂停状态持久化（见 git log）
 
 ## 当前状态
-**M5–M8 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性、群会话身份识别、普通好友身份补采）全部落地。后端 pytest **161 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
+**M5–M9 全部达成，参考项目功能缺口清零**。M6 可靠性闭环（失败截图/网络预检/有界重试/发送冷却/窗口策略/熔断/成功推送/开机自启/暂停状态持久化）、M7 前端「驾驶舱」重设计（D1 蚀刻 bento，用户选定）、M8 体验功能（文案池 LRU、统计+CSV、备份导入导出、截图扫码登录、后台扫描任务可靠性、群会话身份识别、普通好友身份补采）和 M9 会话状态自动同步全部落地。后端 pytest **165 passed**，前端 build 通过，关键功能真机实测。分期与不做清单见 `task_plan.md`。
 
 **2026-08-31 全局调度暂停状态持久化**：新增 `AppSetting` 与 Alembic 迁移 `b7e3d1f9a2c4`；`POST /api/scheduler/pause|resume` 会写入 `scheduler.paused`，后端启动时恢复，重启后不会意外恢复自动发送。
+
+**2026-09-02 会话状态自动同步**：Scheduler 默认每 24 小时触发一次会话列表后台扫描，服务启动后首次等待约 1 分钟，并避开发送窗口开始前 15 分钟至窗口结束；完成后只刷新已存在好友/群聊的官方火花状态，不自动导入新会话、不发送消息。周期可用 `FLAME_AUTO_SCAN_INTERVAL_HOURS` 调整；总览 `GET /api/scheduler` 返回周期、最近同步时间、下一次同步时间和运行状态。当前本机数据库的全局调度开关仍为暂停，恢复后自动同步才会运行。
 
 **2026-08-31 会话扫描后台进度与全局任务坞**：新增 `POST /api/accounts/{id}/scan-chats/start` 与 `GET /api/accounts/{id}/scan-chats/progress`；扫描由后端后台任务执行，前端在 App 层轮询，切换总览/任务/账号/模板页不会中断。滚动到底前总数未知，只展示真实的「已发现 N 个会话」与读取中状态；完成后显示 100% 和结果摘要，自动同步已在列表好友的官方火花状态。旧 `POST /scan-chats` 同步接口保留兼容。
 
@@ -116,7 +118,7 @@ backend/app/
   models.py    Account/AppSetting/ContractTarget/MessageTemplate/SendJob/SendAttempt/SendSchedule/ScanTask + 枚举
   schemas.py   API 输入/输出模型（camelCase 别名字段）+ SendScheduleRead/SchedulerStatusRead
   services.py  账号/模板/好友 CRUD、发送预览、仪表盘聚合
-  scheduler.py M4 调度器：懒生成/窗口随机/租约互斥/崩溃恢复/暂停
+  scheduler.py M4/M9 调度器：发送调度 + 会话自动同步/窗口保护/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
 backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)、add_conversation_identity(f4a8c2e6b1d3)
@@ -132,9 +134,10 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **161 passed**（含用户/群会话稳定身份匹配、可读平台号、扫描任务 SQLite 持久化/恢复、实时结果、取消/重试、多账号互斥、普通好友身份补采、媒体气泡签名确认与重启回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **165 passed**（新增自动同步周期/发送窗口保护/互斥短暂延后/已有对象状态回写回归；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
-| 端到端启动 | uvicorn 启动后 `/health=database:ready`；`/api/scheduler` 返回 enabled=true、真实账号今日计划（business_date=2026-08-27、scheduled_at 落在账号窗口内、status=pending） |
+| 端到端启动 | uvicorn 重启后 `/health=database:ready`；`/api/scheduler` 返回 `autoScanIntervalHours=24`、账号自动同步状态和原有发送计划字段 |
+| 前端真实渲染 | `http://localhost:5173/`，内置浏览器 673×773 窄视口；总览显示“会话状态自动同步 / 每 24 小时 / 已暂停”，无横向溢出，控制台无新增错误 |
 | 2026-09-01 运行态检查 | 后端 `/health` 返回 `status=ok`、`database=ready`；账号「示例账号」为 `healthy`；前后端均监听回环地址 `127.0.0.1`（8000/5173） |
 | 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `39`/`44`；后续本次重启后真实扫描 `54/54` 完成，导入摘要包含 10 个群会话 ID/名称，现有 4 个群聊已按会话 ID 回填好友记录。会话数随抖音页面状态变化，不写死为固定总数 |
 | 真实 Dry Run（2026-08-31） | `overall=ok`；14 个对象中 10 个 `found`（含三种火花徽标后缀），4 个 `not_found`；只读，未发送消息 |
@@ -165,7 +168,7 @@ frontend/src/
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-M6/M7/M8 已全部完成，本轮扫描可靠性任务也已完成，无强制待办。可选后续（未排期）：
+M6/M7/M8/M9 已全部完成，本轮自动同步任务也已完成，无强制待办。可选后续（未排期）：
 1. 统计页图表可视化（当前为数字块 + CSV）；
 2. 第二个真实账号的扫码/扫描实测（账号级隔离、并发互斥已由测试覆盖）；
 3. 验证码/风控页检测——等真实风控页样本出现后用失败截图留证再写 selector；

@@ -390,11 +390,29 @@ class SendScheduleRead(APIBase):
     last_error: str | None
 
 
+class AutoScanStatusRead(APIBase):
+    account_id: str
+    status: Literal[
+        "scheduled",
+        "due",
+        "running",
+        "paused",
+        "waiting_login",
+        "disabled",
+        "no_targets",
+    ]
+    last_scan_at: datetime | None
+    next_scan_at: datetime | None
+    detail: str | None
+
+
 class SchedulerStatusRead(APIBase):
     enabled: bool
     paused: bool
     running_accounts: list[str]
     today_schedules: list[SendScheduleRead]
+    auto_scan_interval_hours: int
+    auto_scans: list[AutoScanStatusRead]
 
 
 # ---------------------------------------------------------------- dashboard

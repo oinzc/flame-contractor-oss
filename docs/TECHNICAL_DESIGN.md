@@ -36,6 +36,7 @@ flowchart LR
 - BrowserManager：按账号复用独立持久 Profile，串行执行登录、扫描、定位和发送，账号级流程互斥；
 - Douyin Adapter：selector、身份确认、输入和发送终态确认；无法可靠判断时记录 `unknown_requires_review`，不自动重发；
 - ScanTask：把后台会话扫描的进度和已发现条目持久化到 SQLite，后端重启将遗留任务收束为 `interrupted`，不自动续跑；
+- 会话状态自动同步：Scheduler 默认每 24 小时触发一次后台扫描，避开发送窗口保护区；完成后只回写已存在 `ContractTarget` 的官方状态快照，不自动导入新会话或发送消息；
 - Artifact Store：短期保存失败/未知结果的诊断截图与元数据，不保存 Cookie、Token 或消息正文。
 
 ## 3. 后端分层
