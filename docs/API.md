@@ -355,6 +355,25 @@ password, cookie, token, storageState, profilePath
 
 `overall`：`ok` / `auth_expired` / `error`；`targets[].status`：`found` / `not_found` / `ambiguous`。
 
+### 7.5 发送预览
+
+- **接口说明**：返回当前账号全部启用契约对象及本次渲染的消息，不读取或消耗发送幂等记录。
+- **请求 URL**：`/accounts/{accountId}/send/preview`
+- **请求方式**：GET
+
+### 7.6 手动发送
+
+- **请求 URL**：`/accounts/{accountId}/send`
+- **请求方式**：POST
+- **查询参数**：`force`，boolean，可选，默认 `false`。
+
+| 模式 | 说明 |
+|---|---|
+| `force=false` | 普通发送；同账号、好友、业务日期、模板版本已有成功任务时返回 `duplicate_succeeded`，不再发送。自动调度只使用此模式。 |
+| `force=true` | 仅手动入口使用；处理全部启用对象，即使当天同一模板版本已有成功记录，并以带 `:force:` 标记的独立 `message_slot_id` 记录本次任务。 |
+
+两种模式都必须通过登录、网络、模板、好友/群会话身份和发送终态确认；`unknown_requires_review` 会跨任务槽位阻止当天再次发送，必须先人工执行 `confirm-sent` 或 `release`。强制模式不会绕过身份存疑、未知结果、账号暂停、登录失效或网络不可用，也不会改变自动调度的发送策略。响应结构与普通 `SendRead` 相同。
+
 ## 8. 枚举
 
 ### 7.1 AccountStatus
