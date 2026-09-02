@@ -19,6 +19,7 @@ interface Props {
 
 export default function AccountsPage({ accounts, onChanged, onCreateAccount, onOpenSend }: Props) {
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [dryRunAccountId, setDryRunAccountId] = useState<string | null>(null)
   const [loginStates, setLoginStates] = useState<Record<string, LoginStatus>>({})
   const [qrStates, setQrStates] = useState<Record<string, LoginStatus>>({})
   const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
@@ -171,6 +172,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
   async function handleDryRun(account: Account) {
     clearError(account.id)
     setBusyId(account.id)
+    setDryRunAccountId(account.id)
     try {
       const result = await api.dryRun(account.id)
       setDryResults((previous) => ({ ...previous, [account.id]: result }))
@@ -179,6 +181,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
       setError(account.id, err instanceof ApiError ? err.message : '定位校验失败')
     } finally {
       setBusyId(null)
+      setDryRunAccountId(null)
     }
   }
 
@@ -252,6 +255,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
             const login = loginStates[account.id]
             const qr = qrStates[account.id]
             const dry = dryResults[account.id]
+            const dryRunning = dryRunAccountId === account.id
             const error = actionErrors[account.id]
             const needsLogin =
               account.status === 'pending_login' || account.status === 'auth_expired'
@@ -340,7 +344,30 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                   </div>
                 )}
 
-                {dry && (
+                {dryRunning && (
+                  <div className="dry-progress" role="status" aria-live="polite">
+                    <div className="dry-progress-head">
+                      <div>
+                        <span className="dry-progress-kicker">DRY RUN</span>
+                        <strong>正在执行定位校验</strong>
+                      </div>
+                      <span className="dry-progress-state">进行中</span>
+                    </div>
+                    <div
+                      className="dry-progress-track is-indeterminate"
+                      role="progressbar"
+                      aria-label="定位校验进度"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuetext="正在检查登录状态和好友定位"
+                    >
+                      <span className="dry-progress-fill" />
+                    </div>
+                    <p>正在检查登录状态并逐个核对好友；此过程只读，不会发送消息。</p>
+                  </div>
+                )}
+
+                {dry && !dryRunning && (
                   <div className="dry-result">
                     <div className="dry-head">
                       {dry.overall === 'ok' && '定位校验完成 · 未发送任何消息'}
