@@ -428,6 +428,59 @@ def test_auth_expired_triggers_notification(engine):
 # ---------------------------------------------------------------- 会话状态自动同步
 
 
+def test_auto_scan_status_exposes_running_task_id(engine):
+    """自动同步运行时向前端暴露当前 ScanTask，便于任务坞接管进度。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="好友A"))
+        session.commit()
+
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+
+    async def drive() -> str:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def scan(account_id: str) -> dict:
+            stamp = clock().replace(tzinfo=None)
+            with Session(engine) as session:
+                session.add(
+                    ScanTask(
+                        id="automatic-scan-task",
+                        account_id=account_id,
+                        source="automatic",
+                        status=ScanTaskStatus.RUNNING,
+                        stage="滚动读取会话",
+                        entries_json="[]",
+                        started_at=stamp,
+                        updated_at=stamp,
+                    )
+                )
+                session.commit()
+            started.set()
+            await release.wait()
+            return {"overall": "ok"}
+
+        scheduler = Scheduler(
+            engine,
+            settings=None,
+            scan_account=scan,
+            clock=clock,
+            sleep=asyncio.sleep,
+            loop_interval=0,
+        )
+        await scheduler.tick()
+        await started.wait()
+        current = scheduler.auto_scan_status()[0]
+        assert current["status"] == "running"
+        assert current["task_id"] == "automatic-scan-task"
+        release.set()
+        await scheduler.wait_idle()
+        return current["task_id"]
+
+    assert asyncio.run(drive()) == "automatic-scan-task"
+
+
 def test_auto_scan_dispatches_once_per_interval(engine):
     """自动扫描以最近一次完成时间为基准，每 24 小时最多触发一次。"""
     account = make_account(engine)
