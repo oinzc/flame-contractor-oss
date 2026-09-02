@@ -31,6 +31,7 @@ const RESULT_TONES: Record<string, string> = {
 
 interface Props {
   account: Account
+  force: boolean
   minimized: boolean
   offset?: boolean | number
   onClose: () => void
@@ -109,6 +110,7 @@ function ProgressBar({ progress, fallbackTotal = 0, compact = false }: ProgressB
 
 interface SendDockProps {
   account: Account
+  force: boolean
   progress: SendProgress | null
   fallbackTotal: number
   sending: boolean
@@ -121,6 +123,7 @@ interface SendDockProps {
 
 function SendDock({
   account,
+  force,
   progress,
   fallbackTotal,
   sending,
@@ -142,7 +145,15 @@ function SendDock({
       kind="send"
       account={account}
       mark="↗"
-      kicker={completed ? 'SEND COMPLETE' : 'BACKGROUND SEND'}
+      kicker={
+        force
+          ? completed
+            ? 'FORCE COMPLETE'
+            : 'BACKGROUND FORCE'
+          : completed
+            ? 'SEND COMPLETE'
+            : 'BACKGROUND SEND'
+      }
       statusLabel={statusLabel}
       percent={percent}
       progressLabel={`已处理 ${snapshot.completed} / ${snapshot.total || fallbackTotal} 位好友`}
@@ -150,7 +161,9 @@ function SendDock({
       currentItem={currentTarget}
       note={
         sending
-          ? '大面板可以安全收起，发送仍由后端继续执行。'
+          ? force
+            ? '强制发送会忽略今日成功记录；大面板可收起，后端仍继续执行。'
+            : '大面板可以安全收起，发送仍由后端继续执行。'
           : result
             ? resultSummary(result.overall)
             : '任务已停止，可打开详情重试。'
@@ -168,6 +181,7 @@ function SendDock({
 
 export default function SendModal({
   account,
+  force,
   minimized,
   offset = false,
   onClose,
@@ -259,7 +273,7 @@ export default function SendModal({
     void pollProgress()
 
     try {
-      const sendResult = await api.sendNow(account.id)
+      const sendResult = await api.sendNow(account.id, { force })
       const terminalStatus = sendResult.overall === 'ok' || sendResult.overall === 'partial' ? 'completed' : 'failed'
       const finishedAt = new Date().toISOString()
       setProgress((previous) => {
@@ -324,6 +338,7 @@ export default function SendModal({
     return (
       <SendDock
         account={account}
+        force={force}
         progress={progress}
         fallbackTotal={fallbackTotal}
         sending={sending}
@@ -338,15 +353,24 @@ export default function SendModal({
 
   return (
     <div className="modal-overlay send-overlay">
-      <div className="modal send-modal" role="dialog" aria-modal="true" aria-label={`发送确认，${account.displayName}`}>
+      <div
+        className="modal send-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${force ? '强制发送确认' : '发送确认'}，${account.displayName}`}
+      >
         <div className="send-modal-head">
           <div className="send-modal-identity">
             <span className="send-modal-mark" aria-hidden="true">
               焰
             </span>
             <div>
-              <span className="send-modal-kicker">MANUAL SEND / {account.id.slice(0, 8)}</span>
-              <h2 className="modal-title">发送确认 · {account.displayName}</h2>
+              <span className="send-modal-kicker">
+                {force ? 'MANUAL FORCE' : 'MANUAL SEND'} / {account.id.slice(0, 8)}
+              </span>
+              <h2 className="modal-title">
+                {force ? '强制发送确认' : '发送确认'} · {account.displayName}
+              </h2>
             </div>
           </div>
           <button className="btn ghost small" type="button" onClick={handleHeaderAction}>
@@ -362,8 +386,12 @@ export default function SendModal({
               <div className="send-live-intro">
                 <div>
                   <span className="send-section-kicker">LIVE EXECUTION</span>
-                  <h3>续焰任务正在执行</h3>
-                  <p>窗口可以收起，后端发送请求会继续运行。</p>
+                  <h3>{force ? '强制续焰任务正在执行' : '续焰任务正在执行'}</h3>
+                  <p>
+                    {force
+                      ? '本次会忽略今日成功记录，但身份存疑或结果未知仍不会发送。'
+                      : '窗口可以收起，后端发送请求会继续运行。'}
+                  </p>
                 </div>
                 <strong className="send-live-percent">{progressPercent(displayedProgress, fallbackTotal)}%</strong>
               </div>
@@ -393,8 +421,10 @@ export default function SendModal({
 
           {!sending && !result && preview && (
             <>
-              <p className="send-modal-copy">
-                每个好友今天只会发送一次；发送前会严格核对好友身份，存疑则不发。
+              <p className={`send-modal-copy${force ? ' force' : ''}`}>
+                {force
+                  ? '手动强制发送将处理所有启用好友，即使今天已有成功记录；仍会严格核对好友身份，存疑则不发。'
+                  : '每个好友今天只会发送一次；发送前会严格核对好友身份，存疑则不发。'}
               </p>
 
               {preview.items.length === 0 ? (
@@ -404,16 +434,20 @@ export default function SendModal({
                 </div>
               ) : (
                 <>
-                  <div className="send-queue-summary">
+                  <div className={`send-queue-summary${force ? ' force' : ''}`}>
                     <div className="send-queue-total">
                       <strong>{preview.items.length}</strong>
                       <span>位好友</span>
                       <small>待处理</small>
                     </div>
                     <div className="send-queue-rule">
-                      <span className="send-section-kicker">SAFE SEND</span>
-                      <strong>每位好友每日仅发送一次</strong>
-                      <p>先校验好友身份，再按队列逐一处理。</p>
+                      <span className="send-section-kicker">{force ? 'FORCE SEND' : 'SAFE SEND'}</span>
+                      <strong>{force ? '全部启用好友都处理' : '每位好友每日仅发送一次'}</strong>
+                      <p>
+                        {force
+                          ? '仅绕过今日成功记录；身份核验、失败处理和未知结果保护仍保留。'
+                          : '先校验好友身份，再按队列逐一处理。'}
+                      </p>
                     </div>
                   </div>
 
@@ -447,7 +481,11 @@ export default function SendModal({
               )}
 
               <div className="send-modal-footer">
-                <span className="send-footnote">可随时收起执行面板，发送不会被取消。</span>
+                <span className="send-footnote">
+                  {force
+                    ? '这是手动强制发送；可随时收起，后端会继续执行并记录结果。'
+                    : '可随时收起执行面板，发送不会被取消。'}
+                </span>
                 <div className="form-actions">
                   <button
                     className="btn primary"
@@ -455,7 +493,7 @@ export default function SendModal({
                     disabled={preview.items.length === 0}
                     onClick={() => void handleSend()}
                   >
-                    确认发送 · {preview.items.length}
+                    {force ? '确认强制发送' : '确认发送'} · {preview.items.length}
                   </button>
                   <button className="btn" type="button" onClick={onClose}>
                     取消

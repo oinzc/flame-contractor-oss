@@ -76,6 +76,7 @@ export default function App() {
   const identityCompletionHandledRef = useRef<string | null>(null)
   const [sendAccount, setSendAccount] = useState<Account | null>(null)
   const [sendMinimized, setSendMinimized] = useState(false)
+  const [sendForce, setSendForce] = useState(false)
 
   const accounts = summary?.accounts ?? []
   const visibleDockKeys = [
@@ -768,9 +769,10 @@ export default function App() {
     }
   }
 
-  function handleOpenSend(account: Account) {
+  function handleOpenSend(account: Account, force = false) {
     setSendAccount(account)
     setSendMinimized(false)
+    setSendForce(force)
   }
 
   const loading = health === null && error === null
@@ -941,11 +943,13 @@ export default function App() {
         {sendAccount && (
           <SendModal
             account={sendAccount}
+            force={sendForce}
             minimized={sendMinimized}
             offset={sendMinimized ? dockOffset('send') : false}
             onClose={() => {
               setSendAccount(null)
               setSendMinimized(false)
+              setSendForce(false)
             }}
             onMinimize={() => setSendMinimized(true)}
             onRestore={() => setSendMinimized(false)}

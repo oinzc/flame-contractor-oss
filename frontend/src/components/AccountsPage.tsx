@@ -14,7 +14,7 @@ interface Props {
   accounts: Account[]
   onChanged: () => void
   onCreateAccount: () => void
-  onOpenSend: (account: Account) => void
+  onOpenSend: (account: Account, force: boolean) => void
 }
 
 export default function AccountsPage({ accounts, onChanged, onCreateAccount, onOpenSend }: Props) {
@@ -444,13 +444,24 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                     </button>
                   )}
                   {account.status === 'healthy' && account.enabled && (
-                    <button
-                      className="btn small"
-                      type="button"
-                      onClick={() => onOpenSend(account)}
-                    >
-                      立即发送
-                    </button>
+                    <>
+                      <button
+                        className="btn small"
+                        type="button"
+                        onClick={() => onOpenSend(account, false)}
+                      >
+                        立即发送
+                      </button>
+                      <button
+                        className="btn small force-send-button"
+                        type="button"
+                        title="忽略今日已发送记录，处理全部启用好友"
+                        aria-label={`强制发送全部启用好友，${account.displayName}`}
+                        onClick={() => onOpenSend(account, true)}
+                      >
+                        强制发送全部
+                      </button>
+                    </>
                   )}
                   <button
                     className="btn ghost small"

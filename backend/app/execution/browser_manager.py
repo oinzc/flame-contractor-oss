@@ -1567,7 +1567,7 @@ class BrowserManager:
 
     # ------------------------------------------------------------ send
 
-    async def run_send(self, account_id: str) -> dict:
+    async def run_send(self, account_id: str, *, force: bool = False) -> dict:
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
         if self._active_scan(account_id) is not None:
@@ -1627,6 +1627,7 @@ class BrowserManager:
 
         profile_path = ensure_profile_dir(self._settings, account_id)
         results: list[dict] = []
+        force_run_id = uuid4().hex[:12] if force else None
         overall = "ok"
         detail: str | None = None
         context = None
@@ -1674,7 +1675,13 @@ class BrowserManager:
                             account_id,
                             stage="定位并发送",
                         )
-                    result = await self._send_one(chat, account, target, business_date)
+                    result = await self._send_one(
+                        chat,
+                        account,
+                        target,
+                        business_date,
+                        force_run_id=force_run_id,
+                    )
                     results.append(result)
                     self._update_send_progress(
                         account_id,
@@ -1738,7 +1745,10 @@ class BrowserManager:
         account: Account,
         target: ContractTarget,
         business_date: date,
+        *,
+        force_run_id: str | None = None,
     ) -> dict:
+        has_unresolved_unknown = False
         with Session(self._engine) as session:
             current = session.get(ContractTarget, target.id)
             if current is None or not current.enabled:
@@ -1759,6 +1769,18 @@ class BrowserManager:
             platform_user_id = current.platform_user_id
             platform_conversation_id = current.platform_conversation_id
             streak_days = current.streak_days
+            if force_run_id is not None:
+                has_unresolved_unknown = (
+                    session.exec(
+                        select(SendJob).where(
+                            SendJob.account_id == account.id,
+                            SendJob.target_id == target.id,
+                            SendJob.business_date == business_date,
+                            SendJob.status == JobStatus.UNKNOWN_REQUIRES_REVIEW,
+                        )
+                    ).first()
+                    is not None
+                )
             pool_item = None
             pool_content = None
             if template_ok and template.type == TemplateType.POOL:
@@ -1770,6 +1792,14 @@ class BrowserManager:
         if not template_ok:
             return {"target": nickname, "status": "skipped",
                     "detail": "未绑定可用模板", "failure_class": None, "message": None}
+        if has_unresolved_unknown:
+            return {
+                "target": nickname,
+                "status": "duplicate_unknown",
+                "detail": "今日已有结果未确认，强制发送仍跳过以防重复",
+                "failure_class": None,
+                "message": None,
+            }
         if template_type == TemplateType.IMAGE and not image_path:
             return {"target": nickname, "status": "skipped",
                     "detail": "图片模板缺少图片路径", "failure_class": None, "message": None}
@@ -1796,6 +1826,9 @@ class BrowserManager:
                 timezone=account.timezone,
             )
         slot = f"{template_id}:v{template_version}"
+        if force_run_id is not None:
+            # 保留每日任务表的可审计记录，同时不与普通发送的成功槽位冲突。
+            slot = f"{slot}:force:{force_run_id}"
 
         job, created = self._get_or_create_job(
             account.id, target.id, template_id, business_date, slot
