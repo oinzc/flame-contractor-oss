@@ -225,6 +225,27 @@ def test_force_send_ignores_same_day_success(settings):
         assert client.get("/api/targets").json()[0]["streakDays"] == 7
 
 
+def test_regular_send_after_force_success_is_duplicate(settings):
+    """强制发送先完成时，后续普通/自动发送仍保持当天防重复。"""
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        forced = client.post(f"/api/accounts/{account['id']}/send?force=true")
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["results"][0]["status"] == "succeeded", forced.json()
+
+        regular = client.post(f"/api/accounts/{account['id']}/send")
+        assert regular.status_code == 200, regular.text
+        assert regular.json()["results"][0]["status"] == "duplicate_succeeded"
+
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+            assert len(jobs) == 1
+            assert ":force:" in jobs[0].message_slot_id
+        assert client.get("/api/targets").json()[0]["streakDays"] == 6
+
+
 def test_send_unconfirmed_outcome_blocks_retry(settings):
     app = make_app(
         settings,
