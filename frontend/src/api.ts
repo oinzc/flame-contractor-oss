@@ -133,8 +133,11 @@ export const api = {
     request<import('./types').SendPreviewRead>(`/api/accounts/${id}/send/preview`),
   sendProgress: (id: string) =>
     request<import('./types').SendProgress>(`/api/accounts/${id}/send/progress`),
-  sendNow: (id: string) =>
-    request<import('./types').SendRead>(`/api/accounts/${id}/send`, { method: 'POST' }),
+  sendNow: (id: string, options: { force?: boolean } = {}) =>
+    request<import('./types').SendRead>(
+      `/api/accounts/${id}/send${options.force ? '?force=true' : ''}`,
+      { method: 'POST' },
+    ),
   templates: () => request<import('./types').MessageTemplate[]>('/api/templates'),
   createTemplate: (input: import('./types').TemplateCreateInput) =>
     request<import('./types').MessageTemplate>('/api/templates', {

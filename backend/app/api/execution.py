@@ -190,10 +190,18 @@ def read_send_progress(account_id: str, request: Request, session: SessionDep) -
 
 
 @router.post("/send", response_model=SendRead)
-async def send_now(account_id: str, request: Request, session: SessionDep) -> dict:
+async def send_now(
+    account_id: str,
+    request: Request,
+    session: SessionDep,
+    force: bool = Query(
+        False,
+        description="手动强制发送时绕过今日已成功记录；不绕过身份核验和未知结果保护",
+    ),
+) -> dict:
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
-    return await manager.run_send(account_id)
+    return await manager.run_send(account_id, force=force)
 
 
 # ---------------------------------------------------------------- M8-4 截图扫码登录

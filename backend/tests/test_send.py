@@ -203,6 +203,28 @@ def test_send_second_run_same_day_is_duplicate(settings):
         assert client.get("/api/targets").json()[0]["streakDays"] == 6  # 只加过一次
 
 
+def test_force_send_ignores_same_day_success(settings):
+    """手动强制发送绕过当天成功槽位，并创建独立可审计任务。"""
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        first = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert first["results"][0]["status"] == "succeeded"
+
+        forced = client.post(f"/api/accounts/{account['id']}/send?force=true")
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["results"][0]["status"] == "succeeded", forced.json()
+
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+            assert len(jobs) == 2
+            assert all(job.status == JobStatus.SUCCEEDED for job in jobs)
+            assert len({job.message_slot_id for job in jobs}) == 2
+            assert any(":force:" in job.message_slot_id for job in jobs)
+        assert client.get("/api/targets").json()[0]["streakDays"] == 7
+
+
 def test_send_unconfirmed_outcome_blocks_retry(settings):
     app = make_app(
         settings,
@@ -221,6 +243,28 @@ def test_send_unconfirmed_outcome_blocks_retry(settings):
         with Session(app.state.engine) as session:
             job = session.exec(select(SendJob)).one()
             assert job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW
+
+
+def test_force_send_still_blocks_unconfirmed_outcome(settings):
+    """强制模式也不能绕过当天未人工核对的未知结果。"""
+    app = make_app(
+        settings,
+        [_page_for_send(clear_on_enter=False), _page_for_send()],
+    )
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+
+        first = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert first["results"][0]["status"] == "unknown_requires_review"
+
+        forced = client.post(f"/api/accounts/{account['id']}/send?force=true")
+        assert forced.status_code == 200, forced.text
+        assert forced.json()["results"][0]["status"] == "duplicate_unknown"
+
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+            assert len(jobs) == 1
+            assert jobs[0].status == JobStatus.UNKNOWN_REQUIRES_REVIEW
 
 
 def test_send_failure_marker_then_retry_succeeds(settings):
