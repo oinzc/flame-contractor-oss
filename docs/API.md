@@ -111,7 +111,7 @@ sequenceDiagram
 - **请求 URL**：`/scheduler`
 - **请求方式**：GET
 - **自动同步默认策略**：服务启动后首次等待约 1 分钟，此后默认每 24 小时一次；自动扫描避开发送窗口开始前 15 分钟至窗口结束。周期可在总览设置为 1–168 小时并持久化到 SQLite；后端环境变量 `FLAME_AUTO_SCAN_INTERVAL_HOURS` 仅在没有持久化设置时作为初始默认值。
-- 自动同步只刷新数据库中已经存在的契约对象官方状态，不自动新增会话、不发送消息；手动扫描接口仍可单独触发。
+- 自动同步只刷新数据库中已经存在的契约对象官方状态，不自动新增会话、不发送消息；手动扫描接口仍可单独触发。自动任务执行期间，前端可通过返回的 `taskId` 读取同一份扫描进度，在全局任务坞中查看真实处理数和百分比；它不提供手动扫描的导入、取消或重试操作。
 
 #### 响应新增字段
 
@@ -119,6 +119,7 @@ sequenceDiagram
 |---|---|---|---|
 | 自动同步间隔 | autoScanIntervalHours | integer | 自动会话扫描周期，单位小时，默认 24 |
 | 账号自动同步状态 | autoScans | AutoScanStatus[] | 每个账号的最近一次与下一次同步状态 |
+| 当前自动任务 | autoScans[].taskId | string/null | `running` 时对应的扫描任务 ID；其他状态通常为 `null` |
 
 `autoScans[].status` 取值：
 
@@ -126,7 +127,7 @@ sequenceDiagram
 |---|---|
 | scheduled | 已排期，`nextScanAt` 为下一次触发时间 |
 | due | 已到触发时间，等待调度器启动同步 |
-| running | 正在读取会话列表 |
+| running | 正在读取会话列表；`taskId` 可用于读取进度并在前端任务坞中观察 |
 | paused | 全局自动调度已暂停 |
 | waiting_login | 账号未处于可用登录状态 |
 | disabled | 账号已停用 |
@@ -499,7 +500,7 @@ password, cookie, token, storageState, profilePath
   - 登录失效返回 `overall=auth_expired` 并标记账号。
 - `POST /api/accounts/{id}/scan-chats/start`：发起后台扫描，返回 `202` 和 `taskId`；
   浏览器扫描不绑定前端页面，控制台切换页面或关闭前端面板后仍可继续观察。任务进度和已发现条目会持久化到 SQLite。
-- `GET /api/accounts/{id}/scan-chats/progress?taskId={taskId}`：读取扫描进度。
+- `GET /api/accounts/{id}/scan-chats/progress?taskId={taskId}`：读取扫描进度；手动扫描返回 `source=manual`，自动同步返回 `source=automatic`。
   扫描完成前 `total` 为 `null`，`completed` 表示当前已发现的会话数，另返回真实阶段、
   当前会话和滚动轮次；扫描过程中 `entries` 会返回当前已发现的条目，完成时
   `status=completed`、`total=completed`，并返回最终结果。
@@ -508,11 +509,12 @@ password, cookie, token, storageState, profilePath
   仍在执行；后端重启会将遗留任务收束为 `interrupted`，保留已发现条目但不自动续跑。
 - `POST /api/accounts/{id}/scan-chats/cancel?taskId={taskId}`：取消指定后台扫描并保留已发现条目；
   已完成、失败、中断或已取消的终态任务重复调用时返回原终态，不会覆盖真实结果。
-- 快照响应字段为 `{taskId, accountId, status, total, completed, stage, currentItem, round,
+- 快照响应字段为 `{taskId, accountId, source, status, total, completed, stage, currentItem, round,
   maxRounds, overall, detail, entries, startedAt, finishedAt}`；`status` 取值为
   `running`/`completed`/`failed`/`interrupted`/`cancelled`。
+- `source=automatic` 表示调度器发起的只读状态同步；它只回写已有好友/群聊的官方状态，不自动导入新会话、不发送消息。自动同步任务由调度器控制，前端任务坞只提供查看和恢复到好友状态页。
 - `failed` 保留 `detail`；`cancelled` 表示用户主动取消；`interrupted` 表示后端停止或重启。
-  这些状态都不会自动发送或自动导入新好友，用户可查看保留结果并显式重试/手动导入。
+  手动任务的这些状态都不会自动发送或自动导入新好友，用户可查看保留结果并显式重试/手动导入；自动任务只保留结果，不提供重试或导入操作。
 
 ### 普通好友身份补采（/api/accounts/{id}/identity-hydration）
 - `POST /api/accounts/{id}/identity-hydration/start`：为已有好友中未绑定稳定用户身份的普通好友启动后台补采。
