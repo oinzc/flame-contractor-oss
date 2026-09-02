@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api'
 import type {
   Account,
@@ -50,6 +50,35 @@ function identityStatusLabel(entry: ScanChatEntry): string {
   return '本次未识别'
 }
 
+function scanEntryMatchesTarget(entry: ScanChatEntry, target: ContractTarget): boolean {
+  if (entry.platformUserId && target.platformUserId === entry.platformUserId) return true
+  if (
+    entry.platformConversationId &&
+    target.platformConversationId === entry.platformConversationId
+  ) {
+    return true
+  }
+  if (target.nicknameSnapshot !== entry.title) return false
+  return (
+    target.conversationType === null ||
+    entry.conversationType === null ||
+    target.conversationType === entry.conversationType
+  )
+}
+
+function autoSelectExistingEnabledEntries(
+  entries: ScanChatEntry[],
+  targets: ContractTarget[],
+): Map<string, ScanChatEntry> {
+  const selected = new Map<string, ScanChatEntry>()
+  for (const entry of entries) {
+    if (targets.some((target) => target.enabled && scanEntryMatchesTarget(entry, target))) {
+      selected.set(entry.title, entry)
+    }
+  }
+  return selected
+}
+
 export default function TargetsPage({
   accounts,
   targets,
@@ -79,6 +108,7 @@ export default function TargetsPage({
   const [selectedEntries, setSelectedEntries] = useState<Map<string, ScanChatEntry>>(new Map())
   const [scanQuery, setScanQuery] = useState('')
   const [showNoStreak, setShowNoStreak] = useState(false)
+  const autoSelectionKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -117,17 +147,9 @@ export default function TargetsPage({
   const pausedCount = accountTargets.filter((target) => !target.enabled).length
   // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
-  const existingNicknames = new Set(accountTargets.map((target) => target.nicknameSnapshot))
-  const existingPlatformIds = new Set(
-    accountTargets
-      .map((target) => target.platformUserId)
-      .filter((platformUserId): platformUserId is string => Boolean(platformUserId)),
-  )
-  const existingConversationIds = new Set(
-    accountTargets
-      .map((target) => target.platformConversationId)
-      .filter((conversationId): conversationId is string => Boolean(conversationId)),
-  )
+  const isExistingScanEntry = (entry: ScanChatEntry) =>
+    accountTargets.some((target) => scanEntryMatchesTarget(entry, target))
+
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const identityTargetIds = accountTargets
     .filter(
@@ -142,6 +164,17 @@ export default function TargetsPage({
   const identityRunning = identityTask?.status === 'running'
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
+
+  // 扫描结果和好友列表由 App 并行加载；等目标数据到齐后只初始化一次自动勾选，避免覆盖用户手动取消选择。
+  useEffect(() => {
+    if (!selectedScanTask || selectedScanTask.status !== 'completed') return
+    if (targets.length === 0 && selectedScanTask.entries.length > 0) return
+    const selectionKey = `${selectedScanTask.taskId}:${selectedAccountId}`
+    if (autoSelectionKeyRef.current === selectionKey) return
+    autoSelectionKeyRef.current = selectionKey
+    setSelectedEntries(autoSelectExistingEnabledEntries(selectedScanTask.entries, accountTargets))
+  }, [selectedScanTask?.taskId, selectedScanTask?.status, selectedAccountId, targets])
+
   const visibleScanEntries =
     selectedScanTask?.status === 'running' ? selectedScanTask.entries : scanEntries
   const scanLoading = scanStarting || scanTask?.status === 'running'
@@ -158,13 +191,7 @@ export default function TargetsPage({
     visibleScanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
   const scanNoStreakCount = (visibleScanEntries?.length ?? 0) - scanStreakCount
   const scanExistCount =
-    visibleScanEntries?.filter(
-      (entry) =>
-        existingNicknames.has(entry.title) ||
-        (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)) ||
-        (entry.platformConversationId != null &&
-          existingConversationIds.has(entry.platformConversationId)),
-    ).length ?? 0
+    visibleScanEntries?.filter((entry) => isExistingScanEntry(entry)).length ?? 0
   const scanIdentityCount =
     visibleScanEntries?.filter((entry) => entry.identityStatus === 'bound').length ?? 0
   const scanIdentityPendingCount =
@@ -405,25 +432,6 @@ export default function TargetsPage({
                         : '其他账号补采中…'
                       : `补采好友身份（${identityTargetIds.length}）`}
                 </button>
-                <button
-                  className="btn small"
-                  type="button"
-                  disabled={scanLoading || selectedAccount?.status !== 'healthy'}
-                  title={
-                    selectedAccount?.status !== 'healthy'
-                      ? '账号需先扫码登录才能扫描会话列表'
-                      : '后台滚动加载整个会话列表；切换页面不会中断，完成后自动刷新已在列表好友的官方展示状态（约需 1–2 分钟）'
-                  }
-                  onClick={() => void handleScan()}
-                >
-                  {scanLoading
-                    ? scanStarting
-                      ? '正在启动扫描…'
-                      : selectedScanTask?.status === 'running'
-                        ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
-                        : '其他账号扫描中…'
-                    : '扫描会话列表'}
-                </button>
                 {pausedCount > 0 && (
                   <label className={`target-paused-toggle${showPaused ? ' is-active' : ''}`}>
                     <input
@@ -561,11 +569,30 @@ export default function TargetsPage({
           </section>
 
           <section className="card">
-            <div className="card-head">
+            <div className="card-head target-scan-head">
               <h2>会话扫描与批量添加</h2>
+              <button
+                className="btn small"
+                type="button"
+                disabled={scanLoading || selectedAccount?.status !== 'healthy'}
+                title={
+                  selectedAccount?.status !== 'healthy'
+                    ? '账号需先扫码登录才能扫描会话列表'
+                    : '后台滚动加载整个会话列表；完成后自动刷新已有好友/群聊的官方状态，并预选仍启用的已有对象（约需 1–2 分钟）'
+                }
+                onClick={() => void handleScan()}
+              >
+                {scanLoading
+                  ? scanStarting
+                    ? '正在启动扫描…'
+                    : selectedScanTask?.status === 'running'
+                      ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
+                      : '其他账号扫描中…'
+                  : '扫描会话列表'}
+              </button>
             </div>
             <p className="scan-helper">
-              扫描只读取会话列表，不点击会话、不发送消息；身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
+              扫描只读取会话列表，不点击会话、不发送消息；完成后会自动刷新列表中已有好友/群聊的官方状态，并自动勾选仍启用的已有对象，暂停项不会勾选。身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
             </p>
             {selectedScanTask && (
               <section
@@ -689,11 +716,7 @@ export default function TargetsPage({
                         </div>
                       ) : (
                         scanFiltered.map((entry) => {
-                          const exists =
-                            existingNicknames.has(entry.title) ||
-                            (entry.platformUserId != null && existingPlatformIds.has(entry.platformUserId)) ||
-                            (entry.platformConversationId != null &&
-                              existingConversationIds.has(entry.platformConversationId))
+                          const exists = isExistingScanEntry(entry)
                           const checked = selectedEntries.has(entry.title)
                           const group =
                             entry.conversationType === 'group' ||
