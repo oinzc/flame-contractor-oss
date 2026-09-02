@@ -22,6 +22,30 @@ def test_health_reports_ok(client):
     assert payload["database"] == "ready"
 
 
+def test_scheduler_interval_can_be_updated_and_persisted(client):
+    initial = client.get("/api/scheduler")
+    assert initial.status_code == 200
+    assert initial.json()["autoScanIntervalHours"] == 24
+
+    updated = client.patch(
+        "/api/scheduler/settings",
+        json={"autoScanIntervalHours": 1},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["autoScanIntervalHours"] == 1
+
+    persisted = client.get("/api/scheduler")
+    assert persisted.json()["autoScanIntervalHours"] == 1
+    assert client.patch(
+        "/api/scheduler/settings",
+        json={"autoScanIntervalHours": 0},
+    ).status_code == 422
+    assert client.patch(
+        "/api/scheduler/settings",
+        json={"autoScanIntervalHours": 169},
+    ).status_code == 422
+
+
 def test_create_account_returns_camel_case(client):
     response = client.post(
         "/api/accounts",

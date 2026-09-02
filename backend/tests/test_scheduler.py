@@ -282,6 +282,27 @@ def test_paused_state_persists_across_scheduler_instances(engine):
 # ---------------------------------------------------------------- 端到端（真实路由调用 run_send）
 
 
+def test_auto_scan_interval_persists_across_scheduler_instances(engine):
+    first = Scheduler(engine, settings=None, auto_scan_interval_hours=24, loop_interval=0)
+    assert first.auto_scan_interval_hours == 24
+
+    first.update_auto_scan_interval(1)
+    assert first.auto_scan_interval_hours == 1
+    with Session(engine) as session:
+        setting = session.get(AppSetting, "scheduler.auto_scan_interval_hours")
+        assert setting is not None
+        assert setting.value == "1"
+
+    second = Scheduler(engine, settings=None, auto_scan_interval_hours=24, loop_interval=0)
+    second.load_persisted_state()
+    assert second.auto_scan_interval_hours == 1
+
+    with pytest.raises(ValueError):
+        first.update_auto_scan_interval(0)
+    with pytest.raises(ValueError):
+        first.update_auto_scan_interval(169)
+
+
 def test_scheduler_end_to_end_sends_via_run_send(settings):
     """调度触发后复用 browser_manager.run_send 真实发送一名好友。"""
     app = make_app(settings, [FakePage(logged_in=True, conversation_titles=("好友A",), right_title="好友A")])

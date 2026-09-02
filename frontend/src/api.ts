@@ -179,6 +179,11 @@ export const api = {
     }),
   schedulerStatus: () =>
     request<import('./types').SchedulerStatus>('/api/scheduler'),
+  schedulerUpdateSettings: (autoScanIntervalHours: number) =>
+    request<import('./types').SchedulerStatus>('/api/scheduler/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ autoScanIntervalHours }),
+    }),
   schedulerPause: () =>
     request<import('./types').SchedulerStatus>('/api/scheduler/pause', {
       method: 'POST',

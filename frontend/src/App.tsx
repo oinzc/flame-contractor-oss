@@ -55,6 +55,7 @@ export default function App() {
   const [targets, setTargets] = useState<ContractTarget[]>([])
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
+  const [autoScanIntervalSaving, setAutoScanIntervalSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [now, setNow] = useState(() => new Date())
@@ -435,6 +436,20 @@ export default function App() {
     await refresh()
   }
 
+  async function handleUpdateAutoScanInterval(hours: number) {
+    if (!schedulerStatus || autoScanIntervalSaving) return
+    setAutoScanIntervalSaving(true)
+    try {
+      const next = await api.schedulerUpdateSettings(hours)
+      setSchedulerStatus(next)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '自动同步周期保存失败')
+    } finally {
+      setAutoScanIntervalSaving(false)
+    }
+  }
+
   async function handleStartScan(accountId: string) {
     if (scanStarting || scanCancelling || scanTask?.status === 'running') return
     setScanStarting(true)
@@ -659,6 +674,8 @@ export default function App() {
                   schedulerStatus={schedulerStatus}
                   now={now}
                   onToggleScheduler={() => void handleToggleScheduler()}
+                  onUpdateAutoScanInterval={(hours) => void handleUpdateAutoScanInterval(hours)}
+                  autoScanIntervalSaving={autoScanIntervalSaving}
                   onNavigate={setPage}
                 />
               )}

@@ -6,7 +6,7 @@ from sqlmodel import select
 
 from ..core.database import SessionDep
 from ..models import Account, SendSchedule
-from ..schemas import SendScheduleRead, SchedulerStatusRead
+from ..schemas import SchedulerSettingsPatch, SchedulerStatusRead, SendScheduleRead
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
@@ -44,6 +44,17 @@ def _scheduler_read(request: Request, session: SessionDep) -> SchedulerStatusRea
 
 @router.get("", response_model=SchedulerStatusRead)
 def read_scheduler_status(request: Request, session: SessionDep) -> SchedulerStatusRead:
+    return _scheduler_read(request, session)
+
+
+@router.patch("/settings", response_model=SchedulerStatusRead)
+def update_scheduler_settings(
+    request: Request,
+    session: SessionDep,
+    payload: SchedulerSettingsPatch,
+) -> SchedulerStatusRead:
+    scheduler = request.app.state.scheduler
+    scheduler.update_auto_scan_interval(payload.auto_scan_interval_hours)
     return _scheduler_read(request, session)
 
 

@@ -24,7 +24,11 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
-from .core.config import Settings
+from .core.config import (
+    AUTO_SCAN_INTERVAL_MAX_HOURS,
+    AUTO_SCAN_INTERVAL_MIN_HOURS,
+    Settings,
+)
 from .models import (
     Account,
     AccountStatus,
@@ -62,6 +66,7 @@ NETWORK_MAX_DEFERRALS = 5
 WINDOW_EXPIRY_POLICY_DEFAULT = "skip"
 # 全局自动调度暂停状态的持久化键；值为 "1" 表示暂停，"0" 表示运行。
 SCHEDULER_PAUSED_SETTING_KEY = "scheduler.paused"
+SCHEDULER_AUTO_SCAN_INTERVAL_SETTING_KEY = "scheduler.auto_scan_interval_hours"
 
 # 可继续调度/重排的状态
 _RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
@@ -104,7 +109,10 @@ class Scheduler:
         self._settings = settings
         self._send_account = send_account
         self._scan_account = scan_account
-        self._auto_scan_interval_hours = max(1, int(auto_scan_interval_hours))
+        self._auto_scan_interval_hours = min(
+            AUTO_SCAN_INTERVAL_MAX_HOURS,
+            max(AUTO_SCAN_INTERVAL_MIN_HOURS, int(auto_scan_interval_hours)),
+        )
         self._auto_scan_initial_delay = max(0.0, float(auto_scan_initial_delay))
         self._auto_scan_guard_minutes = max(0, int(auto_scan_guard_minutes))
         self._notifier = notifier or NullNotifier()
@@ -158,10 +166,26 @@ class Scheduler:
         return set(self._auto_scan_running)
 
     def load_persisted_state(self) -> None:
-        """从数据库恢复全局调度开关；应在数据库迁移完成后调用。"""
+        """从数据库恢复全局调度开关和会话同步周期。"""
         with Session(self._engine) as session:
-            setting = session.get(AppSetting, SCHEDULER_PAUSED_SETTING_KEY)
-            self._paused = setting is not None and setting.value == "1"
+            paused_setting = session.get(AppSetting, SCHEDULER_PAUSED_SETTING_KEY)
+            self._paused = paused_setting is not None and paused_setting.value == "1"
+            interval_setting = session.get(
+                AppSetting,
+                SCHEDULER_AUTO_SCAN_INTERVAL_SETTING_KEY,
+            )
+            if interval_setting is not None:
+                try:
+                    persisted_interval = int(interval_setting.value)
+                except (TypeError, ValueError):
+                    persisted_interval = None
+                if (
+                    persisted_interval is not None
+                    and AUTO_SCAN_INTERVAL_MIN_HOURS
+                    <= persisted_interval
+                    <= AUTO_SCAN_INTERVAL_MAX_HOURS
+                ):
+                    self._auto_scan_interval_hours = persisted_interval
 
     def _persist_paused(self, paused: bool) -> None:
         with Session(self._engine) as session:
@@ -176,6 +200,35 @@ class Scheduler:
                 setting.updated_at = utc_now()
             session.add(setting)
             session.commit()
+
+    def _persist_auto_scan_interval(self, hours: int) -> None:
+        with Session(self._engine) as session:
+            setting = session.get(AppSetting, SCHEDULER_AUTO_SCAN_INTERVAL_SETTING_KEY)
+            if setting is None:
+                setting = AppSetting(
+                    key=SCHEDULER_AUTO_SCAN_INTERVAL_SETTING_KEY,
+                    value=str(hours),
+                )
+            else:
+                setting.value = str(hours)
+                setting.updated_at = utc_now()
+            session.add(setting)
+            session.commit()
+
+    def update_auto_scan_interval(self, hours: int) -> None:
+        """持久化自动同步周期；下一次调度按新周期重新计算。"""
+        if isinstance(hours, bool) or not (
+            AUTO_SCAN_INTERVAL_MIN_HOURS <= hours <= AUTO_SCAN_INTERVAL_MAX_HOURS
+        ):
+            raise ValueError(
+                f"自动同步周期必须在 {AUTO_SCAN_INTERVAL_MIN_HOURS} 到 "
+                f"{AUTO_SCAN_INTERVAL_MAX_HOURS} 小时之间"
+            )
+        # 先写库再切换内存值，避免持久化失败时运行态与重启后的配置不一致。
+        self._persist_auto_scan_interval(hours)
+        self._auto_scan_interval_hours = hours
+        # 互斥冲突的短暂退避属于旧周期，设置变更后让数据库扫描时间重新决定下一次触发。
+        self._auto_scan_next_attempt_at.clear()
 
     def pause(self) -> None:
         self._paused = True
