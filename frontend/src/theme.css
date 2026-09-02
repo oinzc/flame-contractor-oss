@@ -704,6 +704,11 @@ body {
   min-width: 0;
   flex-wrap: wrap;
 }
+.target-scan-head {
+  align-items: flex-start;
+  gap: 12px;
+}
+.target-scan-head > .btn { flex: none; }
 .target-paused-toggle {
   display: inline-flex;
   align-items: center;
@@ -1631,6 +1636,8 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
     align-items: start;
   }
   .target-list-actions { justify-content: flex-start; }
+  .target-scan-head { display: grid; gap: 8px; }
+  .target-scan-head > .btn { justify-self: start; }
   .pick-row {
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
