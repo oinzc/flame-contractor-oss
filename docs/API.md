@@ -374,6 +374,24 @@ password, cookie, token, storageState, profilePath
 
 两种模式都必须通过登录、网络、模板、好友/群会话身份和发送终态确认；`unknown_requires_review` 会跨任务槽位阻止当天再次发送，必须先人工执行 `confirm-sent` 或 `release`。强制模式不会绕过身份存疑、未知结果、账号暂停、登录失效或网络不可用，也不会改变自动调度的发送策略。响应结构与普通 `SendRead` 相同。
 
+### 7.7 单好友强制发送
+
+- **接口说明**：对指定契约对象（好友/群聊）手动强制发送，可选择模板，也可直接输入文本（二选一）。始终绕过当天同账号/好友/业务日期的成功记录，并为本次运行创建独立 `:force:` 审计槽位。
+- **请求 URL**：`/accounts/{accountId}/targets/{targetId}/send`
+- **请求方式**：POST
+- **请求体**：`SendTargetPayload`（`template_id` 与 `content` 至少提供一项，且互斥）
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| template_id | string | 否 | 模板 ID；与 `content` 二选一 |
+| content | string | 否 | 直接输入的文本，最长 1000 字符；与 `template_id` 二选一 |
+
+当使用直接文本时，`SendJob` 不引用模板（`template_id` 为空），任务槽位以内容哈希命名（`raw:<sha1[:12]>:force:<runId>`），避免超出槽位长度上限。
+
+- **响应**：与 `SendRead` 相同。
+
+其余安全边界同 7.6：必须通过登录、网络、好友身份和发送终态确认；不绕过 `unknown_requires_review`、账号暂停、登录失效或网络不可用。
+
 ## 8. 枚举
 
 ### 7.1 AccountStatus

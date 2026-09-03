@@ -575,6 +575,44 @@ def test_dashboard_aggregates_real_data(client, engine):
     assert len(summary["recentJobs"]) == 2
 
 
+def test_dashboard_today_succeeded_counts_distinct_targets(settings):
+    """同一好友当天多次成功发送只计 1 个「已发好友」，不累加条数。"""
+    from app.core.database import build_engine
+    from app.core.migrations import run_migrations
+
+    run_migrations(settings.database_url)
+    db_engine = build_engine(settings.database_url)
+    account = Account(display_name="账号")
+    target = ContractTarget(
+        account_id=account.id, nickname_snapshot="好友A", template_id=None, enabled=True
+    )
+    with Session(db_engine) as session:
+        session.add(account)
+        session.add(target)
+        session.flush()
+        for slot in ("raw:aaa:force:1", "raw:bbb:force:2"):
+            session.add(
+                SendJob(
+                    account_id=account.id,
+                    target_id=target.id,
+                    template_id=None,
+                    business_date=date.today(),
+                    message_slot_id=slot,
+                    status=JobStatus.SUCCEEDED,
+                    attempt_count=1,
+                )
+            )
+        session.commit()
+
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+
+    app = create_app(settings)
+    with TestClient(app) as client:
+        summary = client.get("/api/dashboard").json()
+        assert summary["todaySucceeded"] == 1
+
+
 def test_send_job_daily_slot_is_unique(engine):
     with Session(engine) as session:
         account = Account(display_name="账号")

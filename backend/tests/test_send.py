@@ -514,3 +514,147 @@ def test_send_image_injects_path_into_file_input():
     assert page.attachment_clicked is True
     assert page.image_input_log == ["D:/some/image.png"]
     assert chat.last_bubble_seen is True
+
+
+# ---------------------------------------------------------------- 单好友强制发送
+
+
+def _target_with_template(client: TestClient, account: dict, template: dict) -> str:
+    resp = client.post(
+        "/api/targets",
+        json={
+            "accountId": account["id"],
+            "nicknameSnapshot": "好友A",
+            "templateId": template["id"],
+            "streakDays": 5,
+        },
+    )
+    return resp.json()["id"]
+
+
+def test_send_target_with_custom_text(settings):
+    """单好友手动发送：直接输入文本，绕过当天成功记录，成功并落库。"""
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = create_account(client)
+        target_id = client.post(
+            "/api/targets",
+            json={"accountId": account["id"], "nicknameSnapshot": "好友A", "streakDays": 3},
+        ).json()["id"]
+
+        result = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send",
+            json={"content": "你好 {{target_name}}，第 {{streak_days}} 天。"},
+        )
+        assert result.status_code == 200, result.text
+        payload = result.json()
+        assert payload["overall"] == "ok"
+        assert payload["results"][0]["status"] == "succeeded"
+        assert payload["results"][0]["message"] == "你好 好友A，第 3 天。"
+
+        with Session(app.state.engine) as session:
+            job = session.exec(select(SendJob)).one()
+            assert job.status == JobStatus.SUCCEEDED
+            assert job.template_id is None
+            assert ":force:" in job.message_slot_id
+        assert client.get("/api/targets").json()[0]["streakDays"] == 4
+
+
+def test_send_target_with_template(settings):
+    """单好友手动发送：指定模板，发送成功。"""
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = create_account(client)
+        tmpl = client.post(
+            "/api/templates", json={"name": "T", "content": "{{target_name}}，第 {{streak_days}} 天。"}
+        ).json()
+        target_id = _target_with_template(client, account, tmpl)
+
+        result = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send",
+            json={"templateId": tmpl["id"]},
+        )
+        assert result.status_code == 200, result.text
+        payload = result.json()
+        assert payload["overall"] == "ok"
+        assert payload["results"][0]["status"] == "succeeded"
+        assert payload["results"][0]["message"] == "好友A，第 5 天。"
+
+        with Session(app.state.engine) as session:
+            job = session.exec(select(SendJob)).one()
+            assert job.status == JobStatus.SUCCEEDED
+            assert job.template_id == tmpl["id"]
+            assert ":force:" in job.message_slot_id
+        assert client.get("/api/targets").json()[0]["streakDays"] == 6
+
+
+def test_send_target_requires_template_or_content(settings):
+    """模板与内容都不提供 -> 422；同时提供 -> 422。"""
+    app = make_app(settings, [])
+    with TestClient(app) as client:
+        account = create_account(client)
+        target_id = client.post(
+            "/api/targets", json={"accountId": account["id"], "nicknameSnapshot": "好友A"}
+        ).json()["id"]
+
+        neither = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send",
+            json={},
+        )
+        assert neither.status_code == 422
+
+        both = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send",
+            json={"templateId": "x", "content": "y"},
+        )
+        assert both.status_code == 422
+
+
+def test_send_target_again_same_day_creates_new_slot(settings):
+    """同一天再次强制发送单好友：生成独立 force 槽位，仍真实发送。"""
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = create_account(client)
+        target_id = client.post(
+            "/api/targets", json={"accountId": account["id"], "nicknameSnapshot": "好友A"}
+        ).json()["id"]
+
+        first = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send", json={"content": "一次"}
+        ).json()
+        assert first["results"][0]["status"] == "succeeded"
+
+        second = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send", json={"content": "二次"}
+        ).json()
+        assert second["results"][0]["status"] == "succeeded"
+
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+            assert len(jobs) == 2
+            assert len({job.message_slot_id for job in jobs}) == 2
+            assert all(":force:" in job.message_slot_id for job in jobs)
+        assert client.get("/api/targets").json()[0]["streakDays"] == 2
+
+
+def test_send_target_blocks_unknown_outcome(settings):
+    """强制模式也不能绕过当天未人工核对的未知结果。"""
+    app = make_app(
+        settings,
+        [_page_for_send(clear_on_enter=False), _page_for_send(clear_on_enter=False)],
+    )
+    with TestClient(app) as client:
+        account = create_account(client)
+        target_id = client.post(
+            "/api/targets", json={"accountId": account["id"], "nicknameSnapshot": "好友A"}
+        ).json()["id"]
+
+        first = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send", json={"content": "一次"}
+        ).json()
+        assert first["results"][0]["status"] == "unknown_requires_review"
+
+        second = client.post(
+            f"/api/accounts/{account['id']}/targets/{target_id}/send", json={"content": "二次"}
+        ).json()
+        assert second["results"][0]["status"] == "duplicate_unknown"

@@ -66,7 +66,7 @@ erDiagram
     string id PK
     string account_id FK
     string target_id FK
-    string template_id FK
+    string template_id FK  # 可空：单好友手动发送「直接输入文本」时不引用模板
     date business_date
     string message_slot_id
     string status
@@ -154,6 +154,9 @@ erDiagram
 - 文本内容只允许白名单变量，应用层验证；无任何凭据字段。
 
 ### send_job
+
+- `template_id` 允许为空：单好友手动「直接输入文本」发送时不引用模板（`message_slot_id` 使用内容哈希命名空间）；
+  普通发送、模板发送仍必须引用有效的启用模板。
 
 核心唯一约束：
 

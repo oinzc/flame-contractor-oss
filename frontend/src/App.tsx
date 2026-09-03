@@ -20,6 +20,7 @@ import TemplatesPage from './components/TemplatesPage'
 import JobsPage from './components/JobsPage'
 import ScanProgressDock from './components/ScanProgress'
 import SendModal from './components/SendModal'
+import SendTargetModal from './components/SendTargetModal'
 import IdentityHydrationProgress from './components/IdentityHydrationProgress'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
@@ -77,6 +78,7 @@ export default function App() {
   const [sendAccount, setSendAccount] = useState<Account | null>(null)
   const [sendMinimized, setSendMinimized] = useState(false)
   const [sendForce, setSendForce] = useState(false)
+  const [sendTarget, setSendTarget] = useState<{ account: Account; target: ContractTarget } | null>(null)
 
   const accounts = summary?.accounts ?? []
   const visibleDockKeys = [
@@ -775,6 +777,10 @@ export default function App() {
     setSendForce(force)
   }
 
+  function handleOpenSendTarget(account: Account, target: ContractTarget) {
+    setSendTarget({ account, target })
+  }
+
   const loading = health === null && error === null
 
   return (
@@ -891,6 +897,7 @@ export default function App() {
                   targets={targets}
                   templates={templates}
                   onChanged={() => void refresh()}
+                  onOpenSendTarget={handleOpenSendTarget}
                   scanTask={scanTask}
                   scanStarting={scanStarting}
                   onStartScan={handleStartScan}
@@ -953,6 +960,16 @@ export default function App() {
             }}
             onMinimize={() => setSendMinimized(true)}
             onRestore={() => setSendMinimized(false)}
+            onChanged={() => void refresh()}
+          />
+        )}
+
+        {sendTarget && (
+          <SendTargetModal
+            account={sendTarget.account}
+            target={sendTarget.target}
+            templates={templates}
+            onClose={() => setSendTarget(null)}
             onChanged={() => void refresh()}
           />
         )}

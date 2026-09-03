@@ -843,7 +843,7 @@ def get_dashboard(session: Session) -> DashboardSummary:
     today = date.today()
     today_succeeded = (
         session.scalar(
-            select(func.count())
+            select(func.count(func.distinct(SendJob.target_id)))
             .select_from(SendJob)
             .where(
                 SendJob.business_date == today,
