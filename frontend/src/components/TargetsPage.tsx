@@ -191,7 +191,11 @@ export default function TargetsPage({
   })
 
   async function handleDelete(target: ContractTarget) {
-    if (!window.confirm(`确定删除好友「${target.nicknameSnapshot}」？`)) {
+    if (
+      !window.confirm(
+        `确定删除好友「${target.nicknameSnapshot}」？\n\n已删除的好友会从列表、发送与扫描中隐藏，但保留历史任务记录。之后再次扫描或添加同名/同号好友会自动恢复。`,
+      )
+    ) {
       return
     }
     setActionError(null)

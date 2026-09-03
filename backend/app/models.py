@@ -187,6 +187,9 @@ class ContractTarget(SQLModel, table=True):
     streak_days: int = Field(default=0, ge=0)
     last_sent_at: datetime | None = None
     last_confirmed_at: datetime | None = None
+    # 软删除：删除好友=打标记而非物理删行，保留 SendJob 审计与昵称/身份唯一性。
+    # 列表与发送/扫描默认排除；批量导入命中删除行时自动复活。
+    deleted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

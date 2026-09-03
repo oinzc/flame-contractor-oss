@@ -125,6 +125,8 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
 
     SendSchedule 是调度器每日自动生成的派生数据（非用户数据），随账号一并清除，
     否则账号一经调度便永远无法删除。SendJob 是发送历史（审计数据），保留拦截。
+    软删除的好友（deleted_at 非空）不视为「活跃引用」：两者都无引用时才放行，
+    放行前会一并清除这些 job-less 的软删行，避免物理删账号触发外键约束。
     """
     account = session.get(Account, account_id)
     if account is None:
@@ -133,7 +135,10 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
         raise HTTPException(status_code=409, detail="账号正在执行任务，请稍后再删除")
 
     target_refs = session.exec(
-        select(func.count(ContractTarget.id)).where(ContractTarget.account_id == account_id)
+        select(func.count(ContractTarget.id)).where(
+            ContractTarget.account_id == account_id,
+            ContractTarget.deleted_at.is_(None),
+        )
     ).one()
     job_refs = session.exec(
         select(func.count(SendJob.id)).where(SendJob.account_id == account_id)
@@ -146,6 +151,13 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
             ),
         )
 
+    # 清除 soft-deleted 好友行（此路径下它们必然无 SendJob 引用，否则已被流水线拦截）
+    session.execute(
+        delete(ContractTarget).where(
+            ContractTarget.account_id == account_id,
+            ContractTarget.deleted_at.is_not(None),
+        )
+    )
     session.execute(delete(SendSchedule).where(SendSchedule.account_id == account_id))
     session.flush()
     session.delete(account)
@@ -401,11 +413,16 @@ def delete_template(session: Session, template_id: str) -> None:
 
 
 def list_targets(session: Session, account_id: str | None = None) -> list[TargetRead]:
+    """列出契约好友；默认排除软删除行（deleted_at 非空视为已删除）。"""
     statement = select(ContractTarget).order_by(ContractTarget.created_at)
     if account_id:
         statement = statement.where(ContractTarget.account_id == account_id)
     targets = session.exec(statement).all()
-    return [TargetRead.model_validate(target) for target in targets]
+    return [
+        TargetRead.model_validate(target)
+        for target in targets
+        if target.deleted_at is None
+    ]
 
 
 def create_target(session: Session, payload: TargetCreate) -> TargetRead:
@@ -422,6 +439,9 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
             )
         ).first()
         if same_platform_user is not None:
+            if same_platform_user.deleted_at is not None:
+                # 删除后重新添加同一好友：复活原行而非新建，保留审计与身份唯一性。
+                return _revive_target(session, same_platform_user)
             raise HTTPException(status_code=409, detail="该账号下已存在同一抖音用户")
     if payload.platform_conversation_id:
         same_platform_conversation = session.exec(
@@ -431,7 +451,20 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
             )
         ).first()
         if same_platform_conversation is not None:
+            if same_platform_conversation.deleted_at is not None:
+                return _revive_target(session, same_platform_conversation)
             raise HTTPException(status_code=409, detail="该账号下已存在同一群会话")
+
+    nickname_existing = session.exec(
+        select(ContractTarget).where(
+            ContractTarget.account_id == payload.account_id,
+            ContractTarget.nickname_snapshot == payload.nickname_snapshot,
+        )
+    ).first()
+    if nickname_existing is not None:
+        if nickname_existing.deleted_at is not None:
+            return _revive_target(session, nickname_existing)
+        raise HTTPException(status_code=409, detail="该账号下已存在同名契约对象")
 
     target = ContractTarget.model_validate(payload)
     session.add(target)
@@ -440,6 +473,17 @@ def create_target(session: Session, payload: TargetCreate) -> TargetRead:
     except IntegrityError:
         session.rollback()
         raise HTTPException(status_code=409, detail="该账号下已存在同名契约对象") from None
+    session.refresh(target)
+    return TargetRead.model_validate(target)
+
+
+def _revive_target(session: Session, target: ContractTarget) -> TargetRead:
+    """复活一枚软删除好友：清除标记并保持启用，返回读模型。"""
+    target.deleted_at = None
+    target.enabled = True
+    target.updated_at = utc_now()
+    session.add(target)
+    session.commit()
     session.refresh(target)
     return TargetRead.model_validate(target)
 
@@ -520,6 +564,15 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
         if existing is None:
             existing = nickname_existing
         if existing is not None:
+            # 命中软删除行：删除后同名/同号再次导入应复活该好友，而非因唯一约束跳过。
+            revived = existing.deleted_at is not None
+            if revived:
+                existing.deleted_at = None
+                existing.enabled = True
+                existing.updated_at = utc_now()
+                session.add(existing)
+                session.commit()
+                refreshed.append(f"{nickname}（已恢复）")
             if (
                 platform_user_id
                 and existing.platform_user_id
@@ -568,6 +621,9 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
                     session.rollback()
                     continue
                 existing.nickname_snapshot = nickname
+            if revived:
+                track_identity(item, nickname, platform_user_id, platform_conversation_id)
+                continue
             # 扫描导入可以刷新已有好友的官方徽标快照；本地累计天数保持不变。
             if (
                 platform_user_id
@@ -635,19 +691,20 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
 
 
 def delete_target(session: Session, target_id: str) -> None:
+    """软删除好友：打 deleted_at 标记而非物理删行。
+
+    SendJob 是发送历史（审计数据），物理删行会触发外键冲突或历史丢失。
+    软删除既保住审计与身份唯一性，也让好友真正从列表/发送/扫描中消失；
+    之后同名/同号再次导入会自动复活该行。deleted 行保留 enabled 原值不参与发送。
+    """
     target = session.get(ContractTarget, target_id)
-    if target is None:
+    if target is None or target.deleted_at is not None:
         raise HTTPException(status_code=404, detail="好友不存在")
 
-    session.delete(target)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="该好友已有任务记录，不能删除；可改为暂停使用",
-        ) from None
+    target.deleted_at = utc_now()
+    target.updated_at = utc_now()
+    session.add(target)
+    session.commit()
 
 
 def patch_target(session: Session, target_id: str, payload: TargetPatch) -> TargetRead:
@@ -761,6 +818,7 @@ def send_preview(session: Session, account_id: str) -> dict:
         .where(ContractTarget.account_id == account_id, ContractTarget.enabled)
         .order_by(ContractTarget.created_at)
     ).all()
+    targets = [t for t in targets if t.deleted_at is None]
     business_date = datetime.now(ZoneInfo(account.timezone)).date()
 
     items: list[dict] = []
@@ -835,7 +893,9 @@ def get_dashboard(session: Session) -> DashboardSummary:
     )
     active_contracts = (
         session.scalar(
-            select(func.count()).select_from(ContractTarget).where(ContractTarget.enabled)
+            select(func.count())
+            .select_from(ContractTarget)
+            .where(ContractTarget.enabled, ContractTarget.deleted_at.is_(None))
         )
         or 0
     )

@@ -449,6 +449,39 @@ def test_delete_target(client):
     missing = client.delete("/api/targets/not-a-real-id")
     assert missing.status_code == 404
 
+    # 已软删除的行再次删除应视为不存在
+    again = client.delete(f"/api/targets/{target['id']}")
+    assert again.status_code == 404
+
+
+def test_delete_target_revive_on_re_add(client):
+    """软删除后重新添加同一好友：复活原行而非新建，保留审计与身份唯一性。"""
+    account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
+    target = client.post(
+        "/api/targets",
+        json={
+            "accountId": account["id"],
+            "nicknameSnapshot": "好友A",
+            "platformUserId": "sec_uid_1",
+        },
+    ).json()
+
+    deleted = client.delete(f"/api/targets/{target['id']}")
+    assert deleted.status_code == 204
+    assert client.get("/api/targets", params={"accountId": account["id"]}).json() == []
+
+    # 相同稳定身份重新添加 → 复活，返回同一条目标
+    revived = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友A", "platformUserId": "sec_uid_1"},
+    ).json()
+    assert revived["id"] == target["id"]
+    assert revived["enabled"] is True
+    assert revived["deletedAt"] is None
+
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    assert [item["id"] for item in listing] == [target["id"]]
+
 
 def test_patch_target_streak(client):
     """火花天数手动校准：只改 streakDays，其余字段不变。"""
@@ -494,7 +527,11 @@ def test_patch_target_enabled(client):
     assert resumed.json()["enabled"] is True
 
 
-def test_delete_target_with_jobs_conflicts(client, engine):
+def test_delete_target_with_jobs_is_soft_and_preserves_history(client, engine):
+    """软删除的关键价值：即使好友已有历史任务，也能删除（而非物理删除被外键拦截）。
+
+    删除只是打 deleted_at 标记，SendJob 审计记录保留、target 行仍在库中。
+    """
     from datetime import date as date_cls
 
     from sqlmodel import Session
@@ -524,8 +561,19 @@ def test_delete_target_with_jobs_conflicts(client, engine):
         )
         session.commit()
 
-    blocked = client.delete(f"/api/targets/{target['id']}")
-    assert blocked.status_code == 409
+    # 有任务记录也能删除（软删除），不再返回 409「已有任务记录不能删除」
+    removed = client.delete(f"/api/targets/{target['id']}")
+    assert removed.status_code == 204
+
+    # 列表隐藏已删除好友
+    listing = client.get("/api/targets", params={"accountId": account["id"]}).json()
+    assert listing == []
+
+    # 审计记录仍保留，且仍指向该 target
+    with Session(engine) as session:
+        jobs = session.exec(select(SendJob).where(SendJob.target_id == target["id"])).all()
+        assert len(jobs) == 1
+        assert session.get(ContractTarget, target["id"]).deleted_at is not None
 
 
 def test_dashboard_aggregates_real_data(client, engine):

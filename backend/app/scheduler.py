@@ -707,7 +707,10 @@ class Scheduler:
             return (
                 session.exec(
                     select(ContractTarget.id)
-                    .where(ContractTarget.account_id == account_id)
+                    .where(
+                        ContractTarget.account_id == account_id,
+                        ContractTarget.deleted_at.is_(None),
+                    )
                     .limit(1)
                 ).first()
                 is not None
