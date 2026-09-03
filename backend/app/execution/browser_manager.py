@@ -643,6 +643,7 @@ class BrowserManager:
                 and targets_by_id[target_id].platform_conversation_id is None
                 and targets_by_id[target_id].conversation_type != "group"
             ]
+            eligible = [target for target in eligible if target.deleted_at is None]
 
         if not eligible:
             raise HTTPException(status_code=409, detail="所选好友中没有需要补采的普通好友")
@@ -1351,7 +1352,10 @@ class BrowserManager:
         """自动扫描只刷新已有契约对象，绝不把新会话静默导入好友列表。"""
         with Session(self._engine) as session:
             targets = session.exec(
-                select(ContractTarget).where(ContractTarget.account_id == account_id)
+                select(ContractTarget).where(
+                    ContractTarget.account_id == account_id,
+                    ContractTarget.deleted_at.is_(None),
+                )
             ).all()
             items: list[BatchTargetItem] = []
             for entry in entries:
@@ -1435,7 +1439,10 @@ class BrowserManager:
             if account is None:
                 raise HTTPException(status_code=404, detail="账号不存在")
             targets = session.exec(
-                select(ContractTarget).where(ContractTarget.account_id == account_id)
+                select(ContractTarget).where(
+                    ContractTarget.account_id == account_id,
+                    ContractTarget.deleted_at.is_(None),
+                )
             ).all()
         if not targets:
             raise HTTPException(status_code=409, detail="该账号还没有契约对象，请先添加好友")
@@ -1587,6 +1594,7 @@ class BrowserManager:
                 select(ContractTarget).where(
                     ContractTarget.account_id == account_id,
                     ContractTarget.enabled,
+                    ContractTarget.deleted_at.is_(None),
                 )
             ).all()
         if not targets:
@@ -1625,6 +1633,8 @@ class BrowserManager:
                 raise HTTPException(status_code=409, detail="账号已暂停")
             target = session.get(ContractTarget, target_id)
             if target is None or target.account_id != account_id:
+                raise HTTPException(status_code=404, detail="好友不存在")
+            if target.deleted_at is not None:
                 raise HTTPException(status_code=404, detail="好友不存在")
             if not target.enabled:
                 raise HTTPException(status_code=409, detail="好友已暂停，不能发送")
@@ -1817,7 +1827,7 @@ class BrowserManager:
         daily_jobs: list[SendJob] = []
         with Session(self._engine) as session:
             current = session.get(ContractTarget, target.id)
-            if current is None or not current.enabled:
+            if current is None or not current.enabled or current.deleted_at is not None:
                 return {"target": target.nickname_snapshot, "status": "skipped",
                         "detail": "好友已删除或暂停", "failure_class": None, "message": None}
             nickname = current.nickname_snapshot

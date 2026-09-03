@@ -113,6 +113,8 @@ export interface ContractTarget {
   streakDays: number
   lastSentAt: string | null
   lastConfirmedAt: string | null
+  /** 软删除标记：非空表示该好友已从列表隐藏，但历史任务保留审计。 */
+  deletedAt: string | null
   createdAt: string
   updatedAt: string
 }

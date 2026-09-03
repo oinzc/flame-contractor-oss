@@ -355,6 +355,7 @@ class TargetRead(APIBase):
     streak_days: int
     last_sent_at: datetime | None
     last_confirmed_at: datetime | None
+    deleted_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
