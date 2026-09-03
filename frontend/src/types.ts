@@ -379,6 +379,11 @@ export interface SendRead {
   artifactPath: string | null
 }
 
+export interface SendTargetInput {
+  templateId?: string
+  content?: string
+}
+
 export interface SendProgress {
   accountId: string
   status: 'idle' | 'running' | 'completed' | 'failed'

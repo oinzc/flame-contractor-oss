@@ -206,7 +206,8 @@ class SendJob(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     account_id: str = Field(foreign_key="account.id", index=True, ondelete="RESTRICT")
     target_id: str = Field(foreign_key="contract_target.id", index=True, ondelete="RESTRICT")
-    template_id: str = Field(foreign_key="message_template.id", ondelete="RESTRICT")
+    # 可为空：单好友手动发送「直接输入文本」时没有引用模板；仍严格校验身份与终态。
+    template_id: str | None = Field(default=None, foreign_key="message_template.id", ondelete="RESTRICT")
     business_date: date = Field(index=True)
     message_slot_id: str = Field(max_length=64)
     status: JobStatus = Field(default=JobStatus.SCHEDULED, index=True)

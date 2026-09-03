@@ -15,6 +15,7 @@ from ..schemas import (
     SendPreviewRead,
     SendProgressRead,
     SendRead,
+    SendTargetPayload,
 )
 from ..services import send_preview
 
@@ -202,6 +203,25 @@ async def send_now(
     _require_account(session, account_id)
     manager = request.app.state.browser_manager
     return await manager.run_send(account_id, force=force)
+
+
+@router.post("/targets/{target_id}/send", response_model=SendRead)
+async def send_target_now(
+    account_id: str,
+    target_id: str,
+    payload: SendTargetPayload,
+    request: Request,
+    session: SessionDep,
+) -> dict:
+    """对单个好友强制发送：选模板或直接输入文本（二选一）。始终绕过当天成功记录。"""
+    _require_account(session, account_id)
+    manager = request.app.state.browser_manager
+    return await manager.send_target(
+        account_id,
+        target_id,
+        template_id=payload.template_id,
+        content=payload.content,
+    )
 
 
 # ---------------------------------------------------------------- M8-4 截图扫码登录

@@ -18,6 +18,7 @@ interface Props {
   targets: ContractTarget[]
   templates: MessageTemplate[]
   onChanged: () => void
+  onOpenSendTarget: (account: Account, target: ContractTarget) => void
   scanTask: ScanTaskState | null
   scanStarting: boolean
   onStartScan: (accountId: string) => Promise<void>
@@ -71,6 +72,7 @@ export default function TargetsPage({
   targets,
   templates,
   onChanged,
+  onOpenSendTarget,
   scanTask,
   scanStarting,
   onStartScan,
@@ -526,6 +528,17 @@ export default function TargetsPage({
                           <button
                             className="btn ghost small"
                             type="button"
+                            onClick={() => {
+                              const account = accounts.find((item) => item.id === selectedAccountId)
+                              if (account) onOpenSendTarget(account, target)
+                            }}
+                          >
+                            发送
+                          </button>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            style={{ marginLeft: 6 }}
                             onClick={() => handleToggleEnabled(target)}
                           >
                             {target.enabled ? '暂停' : '启用'}

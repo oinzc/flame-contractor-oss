@@ -365,7 +365,8 @@ class JobRead(APIBase):
     id: str
     account_id: str
     target_id: str
-    template_id: str
+    # 单好友手动发送「直接输入文本」时不引用模板，故可空。
+    template_id: str | None
     business_date: date
     message_slot_id: str
     status: JobStatus
@@ -597,6 +598,23 @@ class SendTargetResultRead(APIBase):
     # M6-1 诊断字段：失败/未确认时的现场截图与当时页面 URL
     screenshot: str | None = None
     page_url: str | None = None
+
+
+class SendTargetPayload(APIBase):
+    """单好友手动强制发送的入参：选模板或直接输入文本（二选一）。"""
+
+    template_id: str | None = None
+    content: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _validate_template_or_content(self) -> "SendTargetPayload":
+        has_template = bool(self.template_id)
+        has_content = bool(self.content)
+        if not has_template and not has_content:
+            raise ValueError("模板与内容至少提供一项")
+        if has_template and has_content:
+            raise ValueError("模板与内容不能同时提供")
+        return self
 
 
 class SendRead(APIBase):

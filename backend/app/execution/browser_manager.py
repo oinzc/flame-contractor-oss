@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -1592,9 +1593,59 @@ class BrowserManager:
             raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
 
         self._start_send_progress(account_id, len(targets))
-        self._update_send_progress(account_id, stage="检查网络")
+        blocked = await self._preflight_network(account_id)
+        if blocked is not None:
+            return blocked
 
-        # M6-2 网络预检：离线时不开浏览器、不消耗任何当日任务（幂等键未触碰）
+        force_run_id = uuid4().hex[:12] if force else None
+        return await self._execute_send(account, targets, force_run_id=force_run_id)
+
+    async def send_target(
+        self,
+        account_id: str,
+        target_id: str,
+        *,
+        template_id: str | None = None,
+        content: str | None = None,
+    ) -> dict:
+        """对单个好友强制发送：可指定模板或直接输入文本（二选一），始终绕过当天成功记录。"""
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能发送")
+        existing_progress = self._send_progress.get(account_id)
+        if existing_progress is not None and existing_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号已有发送任务进行中")
+
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+            if not account.enabled:
+                raise HTTPException(status_code=409, detail="账号已暂停")
+            target = session.get(ContractTarget, target_id)
+            if target is None or target.account_id != account_id:
+                raise HTTPException(status_code=404, detail="好友不存在")
+            if not target.enabled:
+                raise HTTPException(status_code=409, detail="好友已暂停，不能发送")
+
+        self._start_send_progress(account_id, 1)
+        blocked = await self._preflight_network(account_id)
+        if blocked is not None:
+            return blocked
+
+        force_run_id = uuid4().hex[:12]
+        return await self._execute_send(
+            account,
+            [target],
+            force_run_id=force_run_id,
+            template_id_override=template_id,
+            content_override=content,
+        )
+
+    async def _preflight_network(self, account_id: str) -> dict | None:
+        """M6-2 网络预检：离线时不开浏览器、不消耗任何当日任务。返回响应体或 None（可继续）。"""
+        self._update_send_progress(account_id, stage="检查网络")
         checker = self._network_checker or self._default_network_ok
         try:
             network_ok = await checker()
@@ -1624,10 +1675,21 @@ class BrowserManager:
                 "results": [],
                 "artifact_path": None,
             }
+        return None
 
+    async def _execute_send(
+        self,
+        account: Account,
+        targets: list[ContractTarget],
+        *,
+        force_run_id: str | None = None,
+        template_id_override: str | None = None,
+        content_override: str | None = None,
+    ) -> dict:
+        """打开浏览器 + 登录检查 + 逐条发送 + 工件落盘。批量 run_send 与单好友 send_target 共用。"""
+        account_id = account.id
         profile_path = ensure_profile_dir(self._settings, account_id)
         results: list[dict] = []
-        force_run_id = uuid4().hex[:12] if force else None
         overall = "ok"
         detail: str | None = None
         context = None
@@ -1681,6 +1743,8 @@ class BrowserManager:
                         target,
                         business_date,
                         force_run_id=force_run_id,
+                        template_id_override=template_id_override,
+                        content_override=content_override,
                     )
                     results.append(result)
                     self._update_send_progress(
@@ -1747,6 +1811,8 @@ class BrowserManager:
         business_date: date,
         *,
         force_run_id: str | None = None,
+        template_id_override: str | None = None,
+        content_override: str | None = None,
     ) -> dict:
         daily_jobs: list[SendJob] = []
         with Session(self._engine) as session:
@@ -1754,9 +1820,21 @@ class BrowserManager:
             if current is None or not current.enabled:
                 return {"target": target.nickname_snapshot, "status": "skipped",
                         "detail": "好友已删除或暂停", "failure_class": None, "message": None}
-            template = session.get(MessageTemplate, current.template_id) if current.template_id else None
-            template_ok = template is not None and template.enabled
-            template_id = template.id if template_ok else None
+            nickname = current.nickname_snapshot
+            platform_user_id = current.platform_user_id
+            platform_conversation_id = current.platform_conversation_id
+            streak_days = current.streak_days
+            # 单好友手动发送可直接指定模板或输入文本；否则沿用好友当前绑定的模板。
+            effective_template_id = template_id_override or current.template_id
+            template = (
+                session.get(MessageTemplate, effective_template_id)
+                if effective_template_id
+                else None
+            )
+            # content_override 模式：直接输入文本（不依赖模板）。
+            raw_text = content_override is not None
+            template_ok = (not raw_text) and template is not None and template.enabled
+            template_id = template.id if template_ok else (None if raw_text else current.template_id)
             template_version = template.version if template_ok else None
             template_type = template.type if template_ok else TemplateType.TEXT
             template_content = template.content if template_ok else None
@@ -1765,11 +1843,7 @@ class BrowserManager:
             sticker_label = template.sticker_label if template_ok else None
             sticker_category = template.sticker_category if template_ok else None
             sticker_fallback_index = template.sticker_fallback_index if template_ok else None
-            nickname = current.nickname_snapshot
-            platform_user_id = current.platform_user_id
-            platform_conversation_id = current.platform_conversation_id
-            streak_days = current.streak_days
-            if template_ok:
+            if template_ok or raw_text:
                 daily_jobs = session.exec(
                     select(SendJob).where(
                         SendJob.account_id == account.id,
@@ -1785,7 +1859,7 @@ class BrowserManager:
                 pool_item = pick_pool_item(session, template.id, weekday_index, consume=True)
                 pool_content = pool_item.content if pool_item is not None else None
 
-        if not template_ok:
+        if not template_ok and not raw_text:
             return {"target": nickname, "status": "skipped",
                     "detail": "未绑定可用模板", "failure_class": None, "message": None}
         if any(job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW for job in daily_jobs):
@@ -1796,18 +1870,25 @@ class BrowserManager:
                 "failure_class": None,
                 "message": None,
             }
-        if template_type == TemplateType.IMAGE and not image_path:
+        if template_type == TemplateType.IMAGE and not raw_text and not image_path:
             return {"target": nickname, "status": "skipped",
                     "detail": "图片模板缺少图片路径", "failure_class": None, "message": None}
-        if template_type == TemplateType.STICKER and not sticker_name:
+        if template_type == TemplateType.STICKER and not raw_text and not sticker_name:
             return {"target": nickname, "status": "skipped",
                     "detail": "表情模板缺少表情名称", "failure_class": None, "message": None}
-        if template_type == TemplateType.POOL and pool_item is None:
+        if template_type == TemplateType.POOL and not raw_text and pool_item is None:
             return {"target": nickname, "status": "skipped",
                     "detail": "文案池今日无可用候选", "failure_class": None, "message": None}
 
         message = None
-        if template_type == TemplateType.TEXT:
+        if raw_text:
+            message = render_message(
+                content_override,
+                target_name=nickname,
+                streak_days=streak_days,
+                timezone=account.timezone,
+            )
+        elif template_type == TemplateType.TEXT:
             message = render_message(
                 template_content,
                 target_name=nickname,
@@ -1821,7 +1902,12 @@ class BrowserManager:
                 streak_days=streak_days,
                 timezone=account.timezone,
             )
-        base_slot = f"{template_id}:v{template_version}"
+        if raw_text:
+            # 直接输入的文本用内容哈希做槽位命名空间，避免过长（槽位上限 64 字符）。
+            digest = hashlib.sha1(content_override.encode("utf-8")).hexdigest()[:12]
+            base_slot = f"raw:{digest}"
+        else:
+            base_slot = f"{template_id}:v{template_version}"
         if force_run_id is None and any(
             job.status == JobStatus.SUCCEEDED
             and job.message_slot_id.startswith(f"{base_slot}:force:")

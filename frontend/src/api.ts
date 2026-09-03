@@ -138,6 +138,15 @@ export const api = {
       `/api/accounts/${id}/send${options.force ? '?force=true' : ''}`,
       { method: 'POST' },
     ),
+  sendTarget: (
+    accountId: string,
+    targetId: string,
+    body: import('./types').SendTargetInput,
+  ) =>
+    request<import('./types').SendRead>(
+      `/api/accounts/${accountId}/targets/${targetId}/send`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   templates: () => request<import('./types').MessageTemplate[]>('/api/templates'),
   createTemplate: (input: import('./types').TemplateCreateInput) =>
     request<import('./types').MessageTemplate>('/api/templates', {
