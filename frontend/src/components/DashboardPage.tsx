@@ -88,11 +88,14 @@ export default function DashboardPage({
   const rankedTargets = [...targets].sort((a, b) => b.streakDays - a.streakDays)
   const maxStreak = Math.max(1, ...targets.map((target) => target.streakDays))
 
-  const scheduleBands = summary.accounts.map((account) => ({
-    id: account.id,
-    start: hhmmToFraction(account.sendWindowStart),
-    end: hhmmToFraction(account.sendWindowEnd),
-  }))
+  // 账号设了固定发送时刻时不再渲染「随机窗口」band，只保留到点计划点，避免重复显示
+  const scheduleBands = summary.accounts
+    .filter((account) => !account.sendTimeHhmm)
+    .map((account) => ({
+      id: account.id,
+      start: hhmmToFraction(account.sendWindowStart),
+      end: hhmmToFraction(account.sendWindowEnd),
+    }))
 
   const schedulePoints = (schedulerStatus?.todaySchedules ?? []).map((schedule) => ({
     id: schedule.id,
