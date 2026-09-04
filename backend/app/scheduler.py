@@ -86,6 +86,7 @@ class Scheduler:
         settings: Settings,
         send_account: Callable[[str], Awaitable[dict]] | None = None,
         *,
+        send_targets: Callable[[str, list[str]], Awaitable[dict]] | None = None,
         scan_account: Callable[[str], Awaitable[dict]] | None = None,
         auto_scan_interval_hours: int = DEFAULT_AUTO_SCAN_INTERVAL_HOURS,
         auto_scan_initial_delay: float = DEFAULT_AUTO_SCAN_INITIAL_DELAY,
@@ -108,6 +109,7 @@ class Scheduler:
         self._engine = engine
         self._settings = settings
         self._send_account = send_account
+        self._send_targets = send_targets
         self._scan_account = scan_account
         self._auto_scan_interval_hours = min(
             AUTO_SCAN_INTERVAL_MAX_HOURS,
@@ -260,6 +262,15 @@ class Scheduler:
         return start_dt, end_dt
 
     def _pick_scheduled_at(self, account: Account) -> datetime:
+        # 账号设置了精确发送时刻：不再窗口随机，固定在该时刻（按账号时区换算到 UTC）
+        tz = ZoneInfo(account.timezone)
+        if account.send_time_hhmm:
+            chosen = datetime.combine(
+                self._clock().astimezone(tz).date(),
+                self._parse_hhmm(account.send_time_hhmm),
+                tzinfo=tz,
+            )
+            return chosen.astimezone(ZoneInfo("UTC"))
         start_dt, end_dt = self._window_for(account)
         if end_dt <= start_dt:
             return start_dt
@@ -375,6 +386,8 @@ class Scheduler:
                 continue
             dispatched += 1
             self._spawn_send(schedule.id, schedule.account_id)
+        # 好友级精确时刻派发（各自到点单独发），同样遵守同账号并发=1
+        await self._dispatch_due_targets(now)
         # 发送计划先派发，自动扫描随后检查账号租约，避免二者同时抢同一浏览器。
         self._dispatch_auto_scans(now)
         return {"dispatched": dispatched}
@@ -484,6 +497,101 @@ class Scheduler:
 
     # ---------------------------------------------------------------- 发送
 
+    def _target_time_aware(self, account: Account, hhmm: str, now: datetime) -> datetime:
+        """把好友本地时间 HH:MM（账号时区）换算到 UTC-naive 时刻，跨午夜取最近的一天。"""
+        tz = ZoneInfo(account.timezone)
+        aware_now = (
+            now.replace(tzinfo=ZoneInfo("UTC")) if now.tzinfo is None else now
+        ).astimezone(tz)
+        target = datetime.combine(aware_now.date(), self._parse_hhmm(hhmm), tzinfo=tz)
+        # 若该时刻在今天稍后（尚未到），则仍是「今天」的计划；已过去则视为已过
+        return target.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    async def _dispatch_due_targets(self, now: datetime) -> None:
+        """好友级精确发送时刻到点派发：各自到点单独发，遵守同账号并发=1与每日幂等。
+
+        只处理启用 + 非软删 + 设置独立 send_time_hhmm 的好友，且账号 healthy。
+        到点后走 send_targets 执行器（内部复用 run_send 的 SendJob 幂等，绝不重复发送）。
+        """
+        if self._send_targets is None:
+            return
+        with Session(self._engine) as session:
+            rows = session.exec(
+                select(ContractTarget, Account)
+                .join(Account, ContractTarget.account_id == Account.id)
+                .where(
+                    ContractTarget.enabled,
+                    ContractTarget.deleted_at.is_(None),
+                    ContractTarget.send_time_hhmm.is_not(None),
+                )
+            ).all()
+
+        for target, account in rows:
+            if self._stopping:
+                break
+            if account.id in self._running:
+                continue  # 同账号并发=1：正有发送/扫描占着浏览器
+            if not account.enabled or account.status != AccountStatus.HEALTHY:
+                continue
+            due_at = self._target_time_aware(account, target.send_time_hhmm, now)
+            if due_at is None or due_at > now:
+                continue
+            # 每日幂等：已有发送结果（成功/复核中）的不重发（与账号批量逻辑一致）
+            if self._target_done_today(account=account, target=target):
+                continue
+            self._running.add(account.id)
+            task = asyncio.create_task(
+                self._run_target_send(account.id, [target.id])
+            )
+            self._send_tasks.add(task)
+            task.add_done_callback(self._send_tasks.discard)
+
+    def _target_done_today(self, *, account, target) -> bool:
+        """该好友今天是否已有发送结果（成功/复核中）——有则不重复派发。"""
+        with Session(self._engine) as session:
+            business_date = self._clock().astimezone(ZoneInfo(account.timezone)).date()
+            job = session.exec(
+                select(SendJob).where(
+                    SendJob.account_id == account.id,
+                    SendJob.target_id == target.id,
+                    SendJob.business_date == business_date,
+                )
+            ).first()
+            return job is not None
+
+    async def _run_target_send(self, account_id: str, target_ids: list[str]) -> None:
+        try:
+            if self._send_targets is None:
+                raise RuntimeError("未配置单好友发送执行器")
+            await asyncio.wait_for(
+                self._send_targets(account_id, target_ids), timeout=self._run_timeout
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 单好友精确派发失败：不自动重发，交由人工/下一轮（幂等键兜底）
+            await self._notify(
+                "自动发送中断",
+                f"账号「{self._account_name(account_id)}」的好友级定时发送未成功，请人工复核。",
+                "timeSensitive",
+            )
+        finally:
+            self._running.discard(account_id)
+
+    def _call_send_account(self, account_id: str, *, exclude_scheduled: bool) -> Awaitable[dict]:
+        """调用发送执行器，兼容旧签名（send_account(account_id)）与新签名（支持 exclude_scheduled）。"""
+        if self._send_account is None:
+            raise RuntimeError("未配置发送执行器")
+        try:
+            # 新签名：browser_manager.run_send(account_id, exclude_scheduled=True)
+            result = self._send_account(account_id, exclude_scheduled=exclude_scheduled)
+        except TypeError:
+            # 旧签名：send_account(account_id)（测试替身等），忽略该参数
+            result = self._send_account(account_id)
+        if asyncio.iscoroutine(result):
+            return result
+        return asyncio.ensure_future(result)  # type: ignore[return-value]
+
     def _spawn_send(self, schedule_id: str, account_id: str) -> None:
         self._running.add(account_id)
         task = asyncio.create_task(self._run_send(schedule_id, account_id))
@@ -504,8 +612,10 @@ class Scheduler:
             if self._send_account is None:
                 raise RuntimeError("未配置发送执行器")
 
+            # 自动账号级批量只发「未设置独立精确时刻」的好友；独立时刻好友由 _dispatch_due_targets 单独派发。
             result = await asyncio.wait_for(
-                self._send_account(account_id), timeout=self._run_timeout
+                self._call_send_account(account_id, exclude_scheduled=True),
+                timeout=self._run_timeout,
             )
             await self._handle_result(schedule_id, account_id, result)
         except asyncio.CancelledError:

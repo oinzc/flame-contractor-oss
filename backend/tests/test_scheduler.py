@@ -51,6 +51,86 @@ def schedule_rows(engine) -> list[SendSchedule]:
         return session.exec(select(SendSchedule)).all()
 
 
+def test_generate_uses_account_exact_time_if_set(engine):
+    """账号设置 send_time_hhmm 后，当日计划固定在该时刻（按账号时区换 UTC），不再窗口随机。"""
+    make_account(engine, send_time_hhmm="21:30")
+    clock = make_clock(datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, sleep=asyncio.sleep, loop_interval=0)
+    sched.generate_due_schedules()
+    rows = schedule_rows(engine)
+    assert len(rows) == 1
+    # 21:30 Asia/Shanghai = 13:30 UTC（SQLite 读回为 naive UTC）
+    assert rows[0].scheduled_at == datetime(2026, 8, 27, 13, 30)
+
+
+def test_dispatch_due_targets_sends_only_exact_scheduled_target(engine):
+    """好友级精确时刻到点（且账号 healthy）时，单独派发该好友；未设时间好友不被派发。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="定时A", send_time_hhmm="09:00"))
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="普通B"))
+        session.commit()
+
+    # 时钟设在 09:00 Asia/Shanghai = 01:00 UTC，让「定时A」到点
+    clock = make_clock(datetime(2026, 8, 27, 1, 0, tzinfo=timezone.utc))
+    calls: list[tuple[str, list[str]]] = []
+
+    async def send_targets(account_id: str, target_ids: list[str]) -> dict:
+        calls.append((account_id, target_ids))
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    # 只有设置了精确时刻且到点的「定时A」被派发；「普通B」未被派发
+    assert len(calls) == 1
+    with Session(engine) as session:
+        ta = session.exec(
+            select(ContractTarget).where(ContractTarget.nickname_snapshot == "定时A")
+        ).first()
+        tb = session.exec(
+            select(ContractTarget).where(ContractTarget.nickname_snapshot == "普通B")
+        ).first()
+    assert calls[0][0] == account.id
+    assert calls[0][1] == [ta.id]
+    assert tb.id not in calls[0][1]
+
+
+def test_dispatch_due_targets_not_before_scheduled(engine):
+    """好友精确时刻未到（now < scheduled）不派发。"""
+    account = make_account(engine)
+    with Session(engine) as session:
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="定时A", send_time_hhmm="22:00"))
+        session.commit()
+
+    # 22:00 Asia/Shanghai = 14:00 UTC；现在 13:00 UTC 尚早
+    clock = make_clock(datetime(2026, 8, 27, 13, 0, tzinfo=timezone.utc))
+    calls: list[tuple[str, list[str]]] = []
+
+    async def send_targets(account_id: str, target_ids: list[str]) -> dict:
+        calls.append((account_id, target_ids))
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert calls == []
+
+
 # ---------------------------------------------------------------- 窗口与随机取时
 
 

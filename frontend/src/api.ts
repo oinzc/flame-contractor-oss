@@ -47,7 +47,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchAccount: (id: string, patch: { enabled?: boolean; displayName?: string }) =>
+  patchAccount: (
+    id: string,
+    patch: { enabled?: boolean; displayName?: string; sendWindowStart?: string; sendWindowEnd?: string; sendTimeHhmm?: string | null },
+  ) =>
     request<import('./types').Account>(`/api/accounts/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
@@ -60,7 +63,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean; templateId?: string | null }) =>
+  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean; templateId?: string | null; sendTimeHhmm?: string | null }) =>
     request<import('./types').ContractTarget>(`/api/targets/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),

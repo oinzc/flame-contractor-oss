@@ -86,6 +86,8 @@ export interface Account {
   timezone: string
   sendWindowStart: string
   sendWindowEnd: string
+  /** 账号级精确发送时刻 HH:MM；为空=在发送窗口内随机取时 */
+  sendTimeHhmm: string | null
   lastVerifiedAt: string | null
   lastSuccessAt: string | null
   /** 登录成功后读到的抖音身份昵称（与平台标签 display_name 的对照） */
@@ -106,6 +108,8 @@ export interface ContractTarget {
   nicknameSnapshot: string
   templateId: string | null
   enabled: boolean
+  /** 好友级精确发送时刻 HH:MM；为空=跟随账号（账号精确时刻或发送窗口随机） */
+  sendTimeHhmm: string | null
   /** 抖音会话列表最近一次扫描到的官方展示状态，不参与发送决策 */
   sparkKind: string | null
   sparkLabel: string | null
@@ -297,6 +301,7 @@ export interface AccountCreateInput {
   timezone: string
   sendWindowStart: string
   sendWindowEnd: string
+  sendTimeHhmm?: string | null
 }
 
 export type LoginState = 'idle' | 'waiting_scan' | 'succeeded' | 'failed' | 'expired'

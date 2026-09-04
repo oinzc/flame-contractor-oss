@@ -3,6 +3,7 @@ import { api, ApiError } from '../api'
 import type { Account, DryRunRead, LoginStatus } from '../types'
 import { ACCOUNT_STATUS_LABELS, ACCOUNT_STATUS_TONES, formatDateTime } from '../lib/format'
 import StatusBadge from './StatusBadge'
+import EditAccountModal from './EditAccountModal'
 
 const DRY_RUN_LABELS: Record<string, string> = {
   found: '已定位 · 未发送',
@@ -25,6 +26,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
   const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const timersRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
@@ -211,6 +213,22 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
     }
   }
 
+  async function handleSaveEdit(account: Account, patch: {
+    sendWindowStart: string
+    sendWindowEnd: string
+    sendTimeHhmm: string | null
+  }) {
+    clearError(account.id)
+    try {
+      await api.patchAccount(account.id, patch)
+      setEditingAccount(null)
+      onChanged()
+    } catch (err) {
+      setError(account.id, err instanceof ApiError ? err.message : '保存失败')
+      throw err
+    }
+  }
+
   async function handleDeleteAccount(account: Account) {
     const confirmed = window.confirm(
       `确定删除账号「${account.displayName}」？\n有好友或发送记录的账号无法删除，登录数据会一并清理。`,
@@ -282,8 +300,18 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                   <div className="kv-row">
                     <span className="k">发送时段</span>
                     <span className="v">
-                      {account.sendWindowStart}–{account.sendWindowEnd}
+                      {account.sendTimeHhmm
+                        ? `固定 ${account.sendTimeHhmm}`
+                        : `${account.sendWindowStart}–${account.sendWindowEnd} 随机`}
                     </span>
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      style={{ marginLeft: 6 }}
+                      onClick={() => setEditingAccount(account)}
+                    >
+                      编辑
+                    </button>
                   </div>
                   <div className="kv-row">
                     <span className="k">时区</span>
@@ -493,7 +521,13 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
           })}
         </div>
       )}
-
+      {editingAccount && (
+        <EditAccountModal
+          account={editingAccount}
+          onSubmit={(patch) => handleSaveEdit(editingAccount, patch)}
+          onClose={() => setEditingAccount(null)}
+        />
+      )}
     </div>
   )
 }

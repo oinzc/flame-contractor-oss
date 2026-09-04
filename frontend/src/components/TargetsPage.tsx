@@ -223,6 +223,26 @@ export default function TargetsPage({
     }
   }
 
+  async function handleSetSendTime(target: ContractTarget) {
+    const promptText = target.sendTimeHhmm
+      ? `好友「${target.nicknameSnapshot}」当前固定发送时刻：${target.sendTimeHhmm}\n留空则跟随账号设置（账号精确时刻或发送窗口随机）：`
+      : `好友「${target.nicknameSnapshot}」当前跟随账号设置。\n填写 HH:MM 精确发送时刻（如 21:00），留空则跟随账号：`
+    const input = window.prompt(promptText, target.sendTimeHhmm ?? '')
+    if (input === null) return
+    const value = input.trim()
+    if (value !== '' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+      setActionError('时间格式应为 HH:MM（如 21:00）')
+      return
+    }
+    setActionError(null)
+    try {
+      await api.patchTarget(target.id, { sendTimeHhmm: value === '' ? null : value })
+      onChanged()
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : '设置失败，请重试')
+    }
+  }
+
   async function handleToggleEnabled(target: ContractTarget) {
     const verb = target.enabled ? '暂停' : '启用'
     setActionError(null)
@@ -532,6 +552,15 @@ export default function TargetsPage({
                           <button
                             className="btn ghost small"
                             type="button"
+                            onClick={() => handleSetSendTime(target)}
+                            title={target.sendTimeHhmm ? `固定 ${target.sendTimeHhmm} 发送` : '跟随账号设置'}
+                          >
+                            {target.sendTimeHhmm ? target.sendTimeHhmm : '定时'}
+                          </button>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            style={{ marginLeft: 6 }}
                             onClick={() => {
                               const account = accounts.find((item) => item.id === selectedAccountId)
                               if (account) onOpenSendTarget(account, target)

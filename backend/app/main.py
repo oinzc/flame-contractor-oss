@@ -46,6 +46,7 @@ def create_app(
                 engine,
                 settings,
                 send_account=browser_manager.run_send,
+                send_targets=browser_manager.run_send_for_targets,
                 scan_account=browser_manager.run_auto_scan,
                 auto_scan_interval_hours=settings.auto_scan_interval_hours,
                 notifier=BarkNotifier(base_url=settings.bark_url),
