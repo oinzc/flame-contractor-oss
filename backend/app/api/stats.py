@@ -9,7 +9,8 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import Session, func, select
 
 from ..core.database import SessionDep
-from ..models import JobStatus, SendJob
+from ..models import Account, JobStatus, SendJob
+from .deps import CurrentUser
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -19,9 +20,17 @@ _UNKNOWN_STATUSES = (JobStatus.UNKNOWN_REQUIRES_REVIEW,)
 _DEFAULT_WINDOW_DAYS = 30
 
 
-def _daily_rows(session: Session, since: date) -> list[dict]:
+def _user_account_ids(session: Session, user_id: str) -> list[str]:
+    return [row for row in session.exec(select(Account.id).where(Account.user_id == user_id))]
+
+
+def _daily_rows(session: Session, since: date, account_ids: list[str]) -> list[dict]:
+    if not account_ids:
+        return []
     rows = session.exec(
-        select(SendJob).where(SendJob.business_date >= since).order_by(SendJob.business_date)
+        select(SendJob)
+        .where(SendJob.business_date >= since, SendJob.account_id.in_(account_ids))
+        .order_by(SendJob.business_date)
     ).all()
     buckets: dict[date, dict] = {}
     for job in rows:
@@ -60,9 +69,9 @@ def _success_streaks(daily: list[dict]) -> tuple[int, int]:
 
 
 @router.get("/summary")
-def stats_summary(session: SessionDep, days: int = _DEFAULT_WINDOW_DAYS) -> dict:
+def stats_summary(session: SessionDep, user: CurrentUser, days: int = _DEFAULT_WINDOW_DAYS) -> dict:
     since = date.today() - timedelta(days=max(1, min(days, 365)))
-    daily = _daily_rows(session, since)
+    daily = _daily_rows(session, since, _user_account_ids(session, user.id))
     current_streak, best_streak = _success_streaks(daily)
     total = sum(row["total"] for row in daily)
     succeeded = sum(row["succeeded"] for row in daily)
@@ -78,11 +87,17 @@ def stats_summary(session: SessionDep, days: int = _DEFAULT_WINDOW_DAYS) -> dict
 
 
 @router.get("/export.csv")
-def export_jobs_csv(session: SessionDep) -> StreamingResponse:
+def export_jobs_csv(session: SessionDep, user: CurrentUser) -> StreamingResponse:
     """任务记录 CSV 导出（按业务日期排序，含失败分类与确认时间）。"""
-    rows = session.exec(
-        select(SendJob).order_by(SendJob.business_date, SendJob.created_at)
-    ).all()
+    account_ids = _user_account_ids(session, user.id)
+    if not account_ids:
+        rows = []
+    else:
+        rows = session.exec(
+            select(SendJob)
+            .where(SendJob.account_id.in_(account_ids))
+            .order_by(SendJob.business_date, SendJob.created_at)
+        ).all()
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(

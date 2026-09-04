@@ -18,10 +18,30 @@ def settings(tmp_path) -> Settings:
     )
 
 
+@pytest.fixture(autouse=True)
+def _authed_testclient(monkeypatch):
+    """让所有直接用 `with TestClient(app) as client:` 的测试也自动登录 admin。
+
+    业务 API 现要求 Bearer token；统一在 TestClient 进入上下文（lifespan 已跑、
+    admin 已种子）后自动带上 admin 的 Authorization 头，避免逐个测试文件手动加。
+    """
+    original_enter = TestClient.__enter__
+
+    def patched_enter(self):
+        result = original_enter(self)
+        resp = self.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        if resp.status_code == 200:
+            self.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+        return result
+
+    monkeypatch.setattr("fastapi.testclient.TestClient.__enter__", patched_enter)
+
+
 @pytest.fixture
 def client(settings) -> Generator[TestClient, None, None]:
     app = create_app(settings)
     with TestClient(app) as test_client:
+        # 依赖 autouse fixture 自动带上 admin token
         yield test_client
 
 

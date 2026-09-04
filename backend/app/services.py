@@ -74,19 +74,31 @@ def _validate_template_content(content: str) -> None:
 # ---------------------------------------------------------------- accounts
 
 
-def list_accounts(session: Session) -> list[AccountRead]:
-    accounts = session.exec(select(Account).order_by(Account.created_at)).all()
+def list_accounts(session: Session, user_id: str) -> list[AccountRead]:
+    accounts = session.exec(
+        select(Account).where(Account.user_id == user_id).order_by(Account.created_at)
+    ).all()
     return [AccountRead.model_validate(account) for account in accounts]
 
 
-def create_account(session: Session, payload: AccountCreate) -> AccountRead:
+def create_account(session: Session, payload: AccountCreate, user_id: str) -> AccountRead:
     existing = session.exec(
-        select(Account).where(Account.display_name == payload.display_name)
+        select(Account).where(
+            Account.user_id == user_id,
+            Account.display_name == payload.display_name,
+        )
     ).first()
     if existing:
         raise HTTPException(status_code=409, detail="账号显示名称已存在")
 
-    account = Account.model_validate(payload)
+    account = Account(
+        user_id=user_id,
+        display_name=payload.display_name,
+        timezone=payload.timezone,
+        send_window_start=payload.send_window_start,
+        send_window_end=payload.send_window_end,
+        send_time_hhmm=payload.send_time_hhmm,
+    )
     session.add(account)
     try:
         session.commit()
@@ -97,15 +109,20 @@ def create_account(session: Session, payload: AccountCreate) -> AccountRead:
     return AccountRead.model_validate(account)
 
 
-def patch_account(session: Session, account_id: str, payload: AccountPatch) -> AccountRead:
+def patch_account(
+    session: Session, account_id: str, payload: AccountPatch, user_id: str
+) -> AccountRead:
     account = session.get(Account, account_id)
-    if account is None:
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="账号不存在")
 
     data = payload.model_dump(exclude_unset=True)
     if "display_name" in data:
         existing = session.exec(
-            select(Account).where(Account.display_name == data["display_name"])
+            select(Account).where(
+                Account.user_id == user_id,
+                Account.display_name == data["display_name"],
+            )
         ).first()
         if existing and existing.id != account_id:
             raise HTTPException(status_code=409, detail="账号显示名称已存在")
@@ -120,7 +137,9 @@ def patch_account(session: Session, account_id: str, payload: AccountPatch) -> A
     return AccountRead.model_validate(account)
 
 
-def delete_account(session: Session, account_id: str, settings: Settings) -> None:
+def delete_account(
+    session: Session, account_id: str, settings: Settings, user_id: str
+) -> None:
     """删除账号。被好友/任务引用时拒绝；无引用物理删除并清理浏览器档案。
 
     SendSchedule 是调度器每日自动生成的派生数据（非用户数据），随账号一并清除，
@@ -129,7 +148,7 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
     放行前会一并清除这些 job-less 的软删行，避免物理删账号触发外键约束。
     """
     account = session.get(Account, account_id)
-    if account is None:
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="账号不存在")
     if account.status == AccountStatus.RUNNING:
         raise HTTPException(status_code=409, detail="账号正在执行任务，请稍后再删除")
@@ -168,8 +187,12 @@ def delete_account(session: Session, account_id: str, settings: Settings) -> Non
 # ---------------------------------------------------------------- templates
 
 
-def list_templates(session: Session) -> list[TemplateRead]:
-    templates = session.exec(select(MessageTemplate).order_by(MessageTemplate.created_at)).all()
+def list_templates(session: Session, user_id: str) -> list[TemplateRead]:
+    templates = session.exec(
+        select(MessageTemplate)
+        .where(MessageTemplate.user_id == user_id)
+        .order_by(MessageTemplate.created_at)
+    ).all()
     pool_items_by_template: dict[str, list[TemplatePoolItem]] = {}
     template_ids = [template.id for template in templates]
     if template_ids:
@@ -225,9 +248,14 @@ def _validate_template_fields(
         _validate_pool_items(pool_items)
 
 
-def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
+def create_template(
+    session: Session, payload: TemplateCreate, user_id: str
+) -> TemplateRead:
     existing = session.exec(
-        select(MessageTemplate).where(MessageTemplate.name == payload.name)
+        select(MessageTemplate).where(
+            MessageTemplate.user_id == user_id,
+            MessageTemplate.name == payload.name,
+        )
     ).first()
     if existing:
         raise HTTPException(status_code=409, detail="模板名称已存在")
@@ -240,7 +268,17 @@ def create_template(session: Session, payload: TemplateCreate) -> TemplateRead:
         pool_items=payload.pool_items,
     )
 
-    template = MessageTemplate.model_validate(payload)
+    template = MessageTemplate(
+        user_id=user_id,
+        name=payload.name,
+        type=payload.type,
+        content=payload.content,
+        image_path=payload.image_path,
+        sticker_name=payload.sticker_name,
+        sticker_label=payload.sticker_label,
+        sticker_category=payload.sticker_category,
+        sticker_fallback_index=payload.sticker_fallback_index,
+    )
     session.add(template)
     session.flush()  # 先取 template.id 再挂文案池候选
     for item in payload.pool_items or []:
@@ -303,16 +341,21 @@ _TEMPLATE_CONTENT_FIELDS = (
 )
 
 
-def patch_template(session: Session, template_id: str, payload: TemplatePatch) -> TemplateRead:
+def patch_template(
+    session: Session, template_id: str, payload: TemplatePatch, user_id: str
+) -> TemplateRead:
     template = session.get(MessageTemplate, template_id)
-    if template is None:
+    if template is None or template.user_id != user_id:
         raise HTTPException(status_code=404, detail="模板不存在")
 
     fields_set = payload.model_fields_set
 
     if "name" in fields_set:
         dup = session.exec(
-            select(MessageTemplate).where(MessageTemplate.name == payload.name)
+            select(MessageTemplate).where(
+                MessageTemplate.user_id == user_id,
+                MessageTemplate.name == payload.name,
+            )
         ).first()
         if dup and dup.id != template_id:
             raise HTTPException(status_code=409, detail="模板名称已存在")
@@ -384,9 +427,9 @@ def patch_template(session: Session, template_id: str, payload: TemplatePatch) -
     return read
 
 
-def delete_template(session: Session, template_id: str) -> None:
+def delete_template(session: Session, template_id: str, user_id: str) -> None:
     template = session.get(MessageTemplate, template_id)
-    if template is None:
+    if template is None or template.user_id != user_id:
         raise HTTPException(status_code=404, detail="模板不存在")
 
     target_refs = session.exec(
@@ -412,9 +455,16 @@ def delete_template(session: Session, template_id: str) -> None:
 # ---------------------------------------------------------------- targets
 
 
-def list_targets(session: Session, account_id: str | None = None) -> list[TargetRead]:
-    """列出契约好友；默认排除软删除行（deleted_at 非空视为已删除）。"""
-    statement = select(ContractTarget).order_by(ContractTarget.created_at)
+def list_targets(
+    session: Session, user_id: str, account_id: str | None = None
+) -> list[TargetRead]:
+    """列出当前用户可见的契约好友；默认排除软删除行（deleted_at 非空视为已删除）。"""
+    statement = (
+        select(ContractTarget)
+        .join(Account, ContractTarget.account_id == Account.id)
+        .where(Account.user_id == user_id)
+        .order_by(ContractTarget.created_at)
+    )
     if account_id:
         statement = statement.where(ContractTarget.account_id == account_id)
     targets = session.exec(statement).all()
@@ -425,11 +475,27 @@ def list_targets(session: Session, account_id: str | None = None) -> list[Target
     ]
 
 
-def create_target(session: Session, payload: TargetCreate) -> TargetRead:
+def _account_belongs_to_user(session: Session, account_id: str, user_id: str) -> bool:
+    account = session.get(Account, account_id)
+    return account is not None and account.user_id == user_id
+
+
+def _template_belongs_to_user(
+    session: Session, template_id: str, user_id: str
+) -> bool:
+    template = session.get(MessageTemplate, template_id)
+    return template is not None and template.user_id == user_id
+
+
+def create_target(
+    session: Session, payload: TargetCreate, user_id: str
+) -> TargetRead:
     account = session.get(Account, payload.account_id)
-    if account is None:
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="账号不存在")
-    if payload.template_id and session.get(MessageTemplate, payload.template_id) is None:
+    if payload.template_id and not _template_belongs_to_user(
+        session, payload.template_id, user_id
+    ):
         raise HTTPException(status_code=404, detail="模板不存在")
     if payload.platform_user_id:
         same_platform_user = session.exec(
@@ -488,11 +554,16 @@ def _revive_target(session: Session, target: ContractTarget) -> TargetRead:
     return TargetRead.model_validate(target)
 
 
-def create_targets_batch(session: Session, payload: TargetBatchCreate) -> TargetBatchRead:
+def create_targets_batch(
+    session: Session, payload: TargetBatchCreate, user_id: str
+) -> TargetBatchRead:
     """批量添加好友。逐条独立提交：重复项跳过记录，其余失败也不中断整批。"""
-    if session.get(Account, payload.account_id) is None:
+    account = session.get(Account, payload.account_id)
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="账号不存在")
-    if payload.template_id and session.get(MessageTemplate, payload.template_id) is None:
+    if payload.template_id and not _template_belongs_to_user(
+        session, payload.template_id, user_id
+    ):
         raise HTTPException(status_code=404, detail="模板不存在")
 
     created: list[str] = []
@@ -690,7 +761,14 @@ def create_targets_batch(session: Session, payload: TargetBatchCreate) -> Target
     )
 
 
-def delete_target(session: Session, target_id: str) -> None:
+def _target_belongs_to_user(
+    session: Session, target: ContractTarget, user_id: str
+) -> bool:
+    account = session.get(Account, target.account_id)
+    return account is not None and account.user_id == user_id
+
+
+def delete_target(session: Session, target_id: str, user_id: str) -> None:
     """软删除好友：打 deleted_at 标记而非物理删行。
 
     SendJob 是发送历史（审计数据），物理删行会触发外键冲突或历史丢失。
@@ -700,6 +778,8 @@ def delete_target(session: Session, target_id: str) -> None:
     target = session.get(ContractTarget, target_id)
     if target is None or target.deleted_at is not None:
         raise HTTPException(status_code=404, detail="好友不存在")
+    if not _target_belongs_to_user(session, target, user_id):
+        raise HTTPException(status_code=404, detail="好友不存在")
 
     target.deleted_at = utc_now()
     target.updated_at = utc_now()
@@ -707,10 +787,12 @@ def delete_target(session: Session, target_id: str) -> None:
     session.commit()
 
 
-def patch_target(session: Session, target_id: str, payload: TargetPatch) -> TargetRead:
+def patch_target(
+    session: Session, target_id: str, payload: TargetPatch, user_id: str
+) -> TargetRead:
     """局部更新契约对象：火花天数校准、启停、换绑模板（templateId=null 解绑）。"""
     target = session.get(ContractTarget, target_id)
-    if target is None:
+    if target is None or not _target_belongs_to_user(session, target, user_id):
         raise HTTPException(status_code=404, detail="好友不存在")
 
     data = payload.model_dump(exclude_unset=True)
@@ -748,9 +830,12 @@ def _record_manual_action(session: Session, job_id: str, stage: str) -> None:
     )
 
 
-def _get_unknown_job(session: Session, job_id: str) -> SendJob:
+def _get_unknown_job(session: Session, job_id: str, user_id: str) -> SendJob:
     job = session.get(SendJob, job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    account = session.get(Account, job.account_id)
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="任务不存在")
     if job.status != JobStatus.UNKNOWN_REQUIRES_REVIEW:
         raise HTTPException(
@@ -759,9 +844,9 @@ def _get_unknown_job(session: Session, job_id: str) -> SendJob:
     return job
 
 
-def confirm_job_sent(session: Session, job_id: str) -> JobRead:
+def confirm_job_sent(session: Session, job_id: str, user_id: str) -> JobRead:
     """人工确认 unknown 任务的消息已实际发出：对齐自动成功路径，补齐统计与火花。"""
-    job = _get_unknown_job(session, job_id)
+    job = _get_unknown_job(session, job_id, user_id)
 
     now = utc_now()
     job.status = JobStatus.SUCCEEDED
@@ -788,9 +873,9 @@ def confirm_job_sent(session: Session, job_id: str) -> JobRead:
     return JobRead.model_validate(job)
 
 
-def release_job(session: Session, job_id: str) -> JobRead:
+def release_job(session: Session, job_id: str, user_id: str) -> JobRead:
     """人工确认消息未发出，放行重试：任务回到 SCHEDULED，由「立即发送」重新执行。"""
-    job = _get_unknown_job(session, job_id)
+    job = _get_unknown_job(session, job_id, user_id)
 
     now = utc_now()
     job.status = JobStatus.SCHEDULED
@@ -808,9 +893,9 @@ def release_job(session: Session, job_id: str) -> JobRead:
 # ---------------------------------------------------------------- send preview
 
 
-def send_preview(session: Session, account_id: str) -> dict:
+def send_preview(session: Session, account_id: str, user_id: str) -> dict:
     account = session.get(Account, account_id)
-    if account is None:
+    if account is None or account.user_id != user_id:
         raise HTTPException(status_code=404, detail="账号不存在")
 
     targets = session.exec(
@@ -881,24 +966,32 @@ def send_preview(session: Session, account_id: str) -> dict:
 # ---------------------------------------------------------------- dashboard
 
 
-def get_dashboard(session: Session) -> DashboardSummary:
-    account_count = session.scalar(select(func.count()).select_from(Account)) or 0
+def get_dashboard(session: Session, user_id: str) -> DashboardSummary:
+    account_ids = session.exec(select(Account.id).where(Account.user_id == user_id)).all()
+    account_count = len(account_ids)
     healthy_count = (
         session.scalar(
             select(func.count())
             .select_from(Account)
-            .where(Account.status == AccountStatus.HEALTHY)
+            .where(Account.user_id == user_id, Account.status == AccountStatus.HEALTHY)
         )
         or 0
     )
-    active_contracts = (
-        session.scalar(
-            select(func.count())
-            .select_from(ContractTarget)
-            .where(ContractTarget.enabled, ContractTarget.deleted_at.is_(None))
+    if account_ids:
+        active_contracts = (
+            session.scalar(
+                select(func.count())
+                .select_from(ContractTarget)
+                .where(
+                    ContractTarget.account_id.in_(account_ids),
+                    ContractTarget.enabled,
+                    ContractTarget.deleted_at.is_(None),
+                )
+            )
+            or 0
         )
-        or 0
-    )
+    else:
+        active_contracts = 0
 
     today = date.today()
     today_succeeded = (
@@ -927,7 +1020,10 @@ def get_dashboard(session: Session) -> DashboardSummary:
         session.scalar(
             select(func.count())
             .select_from(Account)
-            .where(Account.status.in_(ATTENTION_ACCOUNT_STATUSES))
+            .where(
+                Account.user_id == user_id,
+                Account.status.in_(ATTENTION_ACCOUNT_STATUSES),
+            )
         )
         or 0
     )
@@ -940,10 +1036,21 @@ def get_dashboard(session: Session) -> DashboardSummary:
         or 0
     )
 
-    accounts = session.exec(select(Account).order_by(Account.created_at)).all()
-    recent_jobs = session.exec(
-        select(SendJob).order_by(SendJob.updated_at.desc()).limit(8)
-    ).all()
+    if account_ids:
+        accounts = session.exec(
+            select(Account)
+            .where(Account.user_id == user_id)
+            .order_by(Account.created_at)
+        ).all()
+        recent_jobs = session.exec(
+            select(SendJob)
+            .where(SendJob.account_id.in_(account_ids))
+            .order_by(SendJob.updated_at.desc())
+            .limit(8)
+        ).all()
+    else:
+        accounts = []
+        recent_jobs = []
 
     return DashboardSummary(
         account_count=account_count,

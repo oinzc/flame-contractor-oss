@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ..execution import selectors as _selectors
+from .deps import CurrentUser
 
 router = APIRouter(prefix="/selectors", tags=["selectors"])
 
@@ -38,13 +39,13 @@ def _bundle_view() -> dict:
 
 
 @router.get("")
-def read_selectors() -> dict:
+def read_selectors(user: CurrentUser) -> dict:
     """返回当前 selector bundle 全量快照（只读，不含任何凭据）。"""
     return _bundle_view()
 
 
 @router.post("/reload")
-def reload_selectors() -> dict:
+def reload_selectors(user: CurrentUser) -> dict:
     """强制重新加载 bundle 文件，返回重载后的全量快照。
 
     若运维直接编辑了 `selectors_bundle.json`，调用本端点即可生效（无需重启）。

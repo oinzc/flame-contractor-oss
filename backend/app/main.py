@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session, select
 
 from .api.health import router as health_router
 from .api.router import api_router
@@ -9,9 +10,52 @@ from .core.artifacts import prune_old_artifacts
 from .core.config import Settings, get_settings
 from .core.database import build_engine
 from .core.migrations import run_migrations
+from .core.security import hash_password
 from .execution.browser_manager import BrowserManager
+from .models import Account, MessageTemplate, User
 from .notifications import BarkNotifier
 from .scheduler import Scheduler
+
+
+def seed_default_user(settings: Settings, engine) -> None:
+    """启动时种一个默认平台账号，并把无属主的旧账号/模板回填到该账号。
+
+    User 表为空时创建 admin（本地第一次登录 admin/admin，密码可覆盖）。
+    旧库升级后，此前不含 user_id 的 account / message_template 行会被回填到
+    admin，保证多租户隔离不丢历史数据。
+    """
+    with Session(engine) as session:
+        admin = session.exec(
+            select(User).where(User.username == settings.bootstrap_username)
+        ).first()
+        if admin is None:
+            admin = User(
+                username=settings.bootstrap_username,
+                password_hash=hash_password(settings.bootstrap_password),
+            )
+            session.add(admin)
+            try:
+                session.commit()
+                session.refresh(admin)
+            except Exception:
+                session.rollback()
+                return
+
+        # 回填无属主的旧账号/模板到 admin，避免历史数据成为孤儿
+        orphan_accounts = session.exec(
+            select(Account).where(Account.user_id.is_(None))
+        ).all()
+        for account in orphan_accounts:
+            account.user_id = admin.id
+            session.add(account)
+        orphan_templates = session.exec(
+            select(MessageTemplate).where(MessageTemplate.user_id.is_(None))
+        ).all()
+        for template in orphan_templates:
+            template.user_id = admin.id
+            session.add(template)
+        if orphan_accounts or orphan_templates:
+            session.commit()
 
 
 def create_app(
@@ -30,6 +74,7 @@ def create_app(
         app.state.browser_manager = browser_manager
         app.state.settings = settings
         run_migrations(settings.database_url)
+        seed_default_user(app.state.settings, engine)
         # 扫描进度写入 SQLite；进程重启后只收束遗留任务，不自动重开浏览器或重复扫描。
         recover_scan_tasks = getattr(browser_manager, "recover_persisted_scan_tasks", None)
         if callable(recover_scan_tasks):

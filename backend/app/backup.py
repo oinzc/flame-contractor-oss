@@ -39,12 +39,72 @@ _IMPORT_ORDER = [
 ]
 
 
-def export_backup(session: Session) -> BackupRead:
+def _user_scoped(session: Session, user_id: str) -> dict[str, set]:
+    """按当前用户收集可见数据的外键集合，用于导出/导入隔离。
+
+    accounts/templates 直接按 user_id；targets/schedules/jobs/attempts/pool_items
+    通过所属 account/template 的 user_id 派生。返回各表可导出的行 id 集合的映射。
+    """
+    accounts = session.exec(
+        select(Account.id).where(Account.user_id == user_id)
+    ).all()
+    templates = session.exec(
+        select(MessageTemplate.id).where(MessageTemplate.user_id == user_id)
+    ).all()
+    targets = (
+        session.exec(
+            select(ContractTarget.id).where(ContractTarget.account_id.in_(accounts))
+        ).all()
+        if accounts
+        else []
+    )
+    schedules = (
+        session.exec(
+            select(SendSchedule.id).where(SendSchedule.account_id.in_(accounts))
+        ).all()
+        if accounts
+        else []
+    )
+    jobs = (
+        session.exec(
+            select(SendJob.id).where(SendJob.account_id.in_(accounts))
+        ).all()
+        if accounts
+        else []
+    )
+    attempts = (
+        session.exec(
+            select(SendAttempt.id).where(SendAttempt.job_id.in_(jobs))
+        ).all()
+        if jobs
+        else []
+    )
+    pool_items = (
+        session.exec(
+            select(TemplatePoolItem.id).where(TemplatePoolItem.template_id.in_(templates))
+        ).all()
+        if templates
+        else []
+    )
+    return {
+        "accounts": set(accounts),
+        "templates": set(templates),
+        "pool_items": set(pool_items),
+        "targets": set(targets),
+        "schedules": set(schedules),
+        "jobs": set(jobs),
+        "attempts": set(attempts),
+    }
+
+
+def export_backup(session: Session, user_id: str) -> BackupRead:
     data = {}
+    scope = _user_scoped(session, user_id)
     for key, model in _IMPORT_ORDER:
+        allowed = scope.get(key, set())
         rows = session.exec(select(model)).all()
         data[key] = [
-            row.model_dump(mode="json") for row in rows
+            row.model_dump(mode="json") for row in rows if row.id in allowed
         ]
     return BackupRead(
         app="flame-contractor",
@@ -68,7 +128,7 @@ def _coerce_row(model, row: dict) -> dict:
     return row
 
 
-def import_backup(session: Session, backup: BackupRead) -> BackupImportResult:
+def import_backup(session: Session, backup: BackupRead, user_id: str) -> BackupImportResult:
     if backup.schema_version != BACKUP_SCHEMA_VERSION:
         raise ValueError(f"不支持的备份版本: {backup.schema_version}")
 
@@ -79,9 +139,14 @@ def import_backup(session: Session, backup: BackupRead) -> BackupImportResult:
     for key, model in _IMPORT_ORDER:
         for row in payload.get(key) or []:
             row = _coerce_row(model, dict(row))
+            # 导入账号/模板时强制归属当前用户，避免数据串主
+            if key in ("accounts", "templates"):
+                row["user_id"] = user_id
             row_id = row.get("id")
             existing = session.get(model, row_id) if row_id else None
             if existing is not None:
+                if getattr(existing, "user_id", None) != user_id:
+                    continue  # 跳过非当前用户的数据，防串主
                 for field, value in row.items():
                     setattr(existing, field, value)
                 session.add(existing)

@@ -296,6 +296,18 @@ export interface Health {
   database: string
 }
 
+export interface User {
+  id: string
+  username: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AuthRead {
+  token: string
+  user: User
+}
+
 export interface AccountCreateInput {
   displayName: string
   timezone: string

@@ -3,10 +3,11 @@ from fastapi import APIRouter
 from ..core.database import SessionDep
 from ..schemas import DashboardSummary
 from ..services import get_dashboard
+from .deps import CurrentUser
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
 @router.get("", response_model=DashboardSummary)
-def read_dashboard(session: SessionDep) -> DashboardSummary:
-    return get_dashboard(session)
+def read_dashboard(session: SessionDep, user: CurrentUser) -> DashboardSummary:
+    return get_dashboard(session, user.id)

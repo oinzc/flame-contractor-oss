@@ -1,3 +1,17 @@
+const TOKEN_STORAGE_KEY = 'flame_auth_token'
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_STORAGE_KEY)
+}
+
+export function setToken(token: string | null): void {
+  if (token) {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token)
+  } else {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -24,8 +38,13 @@ async function readDetail(response: Response): Promise<string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     ...init,
   })
   if (!response.ok) {
@@ -40,6 +59,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<import('./types').Health>('/health'),
+  authRegister: (input: { username: string; password: string }) =>
+    request<import('./types').AuthRead>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  authLogin: (input: { username: string; password: string }) =>
+    request<import('./types').AuthRead>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  authMe: () => request<import('./types').User>('/api/auth/me'),
   dashboard: () => request<import('./types').DashboardSummary>('/api/dashboard'),
   accounts: () => request<import('./types').Account[]>('/api/accounts'),
   createAccount: (input: import('./types').AccountCreateInput) =>
