@@ -817,29 +817,35 @@ export default function App() {
 
   const loading = health === null && error === null
 
+  if (authInitializing) {
+    return (
+      <div className="login-page">
+        <div className="login-card">
+          <p className="login-sub">正在确认登录状态…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (currentUser === null) {
+    return (
+      <LoginPage
+        onAuthed={() => {
+          // 登录成功后读取当前用户并进入控制台，随后拉取一次全量数据
+          void api
+            .authMe()
+            .then((user) => {
+              setCurrentUser(user)
+            })
+            .catch(() => setCurrentUser(null))
+          void refresh()
+        }}
+      />
+    )
+  }
+
   return (
     <div className="app">
-      {authInitializing ? (
-        <div className="login-page">
-          <div className="login-card">
-            <p className="login-sub">正在确认登录状态…</p>
-          </div>
-        </div>
-      ) : currentUser === null ? (
-        <LoginPage
-          onAuthed={() => {
-            // 登录成功后读取当前用户并进入控制台，随后拉取一次全量数据
-            void api
-              .authMe()
-              .then((user) => {
-                setCurrentUser(user)
-              })
-              .catch(() => setCurrentUser(null))
-            void refresh()
-          }}
-        />
-      ) : (
-        <>
       <aside className="sidebar">
         <div className="side-brand">
           <span className="side-glyph" aria-hidden="true">
@@ -1069,8 +1075,6 @@ export default function App() {
           />
         )}
       </div>
-        </>
-      )}
     </div>
   )
 }
