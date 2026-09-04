@@ -299,6 +299,9 @@ export interface Health {
 export interface User {
   id: string
   username: string
+  displayName: string | null
+  email: string | null
+  isSuperuser: boolean
   createdAt: string
   updatedAt: string
 }
@@ -306,6 +309,17 @@ export interface User {
 export interface AuthRead {
   token: string
   user: User
+}
+
+export interface AuthSessionRead {
+  id: string
+  createdAt: string
+  lastSeenAt: string | null
+  expiresAt: string
+  current: boolean
+  userAgent: string | null
+  ipAddress: string | null
+  revokedAt: string | null
 }
 
 export interface AccountCreateInput {

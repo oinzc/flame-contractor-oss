@@ -31,6 +31,8 @@ class APIBase(BaseModel):
 class UserRegister(APIBase):
     username: str = Field(min_length=1, max_length=60)
     password: str = Field(min_length=1, max_length=128)
+    display_name: str | None = Field(default=None, max_length=60)
+    email: str | None = Field(default=None, max_length=255)
 
     @field_validator("username")
     @classmethod
@@ -39,6 +41,22 @@ class UserRegister(APIBase):
         if not value:
             raise ValueError("用户名不能为空")
         return value
+
+    @field_validator("display_name")
+    @classmethod
+    def _strip_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return value or None
+
+    @field_validator("email")
+    @classmethod
+    def _strip_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip().lower()
+        return value or None
 
 
 class UserLogin(APIBase):
@@ -55,13 +73,112 @@ class UserLogin(APIBase):
 class UserRead(APIBase):
     id: str
     username: str
+    display_name: str | None = None
+    email: str | None = None
+    is_superuser: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class UserUpdateMe(APIBase):
+    """更新当前用户资料（昵称/邮箱）。密码走专门的 /me/password 路由。"""
+
+    display_name: str | None = Field(default=None, max_length=60)
+    email: str | None = Field(default=None, max_length=255)
+
+    @field_validator("display_name")
+    @classmethod
+    def _strip_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return value or None
+
+    @field_validator("email")
+    @classmethod
+    def _strip_email(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip().lower()
+        return value or None
+
+
+class UpdatePassword(APIBase):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=1, max_length=128)
+
+
+class UserUpdateAdmin(APIBase):
+    """管理员编辑某用户：可重置密码、调整管理员标记。"""
+
+    password: str | None = Field(default=None, min_length=1, max_length=128)
+    is_superuser: bool | None = None
 
 
 class AuthRead(APIBase):
     token: str
     user: UserRead
+
+
+class AuthSessionRead(APIBase):
+    """服务端登录会话的可读视图；current 由 deps 当前会话比对填充。"""
+
+    id: str
+    created_at: datetime
+    last_seen_at: datetime | None = None
+    expires_at: datetime
+    current: bool = False
+    user_agent: str | None = None
+    ip_address: str | None = None
+    revoked_at: datetime | None = None
+
+
+class PasswordRecoveryRequest(APIBase):
+    """找回密码入口：按 username 定位账号。自托管下不签发重置 token。"""
+
+    username: str = Field(min_length=1, max_length=60)
+
+    @field_validator("username")
+    @classmethod
+    def _strip_username(cls, value: str) -> str:
+        value = value.strip()
+        return value
+
+
+class Message(APIBase):
+    message: str
+
+
+class AuthSessionRead(APIBase):
+    id: str
+    created_at: datetime
+    last_seen_at: datetime | None = None
+    expires_at: datetime
+    # 当前请求是否正是本会话（供前端高亮「本机」）
+    current: bool = False
+    user_agent: str | None = None
+    ip_address: str | None = None
+
+
+class PasswordRecoveryRequest(APIBase):
+    """找回密码：按 username 定位账号，发送重置链接（或返回提示）。"""
+
+    username: str = Field(min_length=1, max_length=60)
+
+    @field_validator("username")
+    @classmethod
+    def _strip_username(cls, value: str) -> str:
+        value = value.strip()
+        return value
+
+
+class PasswordReset(APIBase):
+    token: str
+    new_password: str = Field(min_length=1, max_length=128)
+
+
+class Message(APIBase):
+    message: str
 
 
 class AccountCreate(APIBase):

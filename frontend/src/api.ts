@@ -59,7 +59,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<import('./types').Health>('/health'),
-  authRegister: (input: { username: string; password: string }) =>
+  authRegister: (input: { username: string; password: string; displayName?: string; email?: string }) =>
     request<import('./types').AuthRead>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(input),
@@ -70,6 +70,31 @@ export const api = {
       body: JSON.stringify(input),
     }),
   authMe: () => request<import('./types').User>('/api/auth/me'),
+  authUpdateMe: (input: { displayName?: string | null; email?: string | null }) =>
+    request<import('./types').User>('/api/auth/me', {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  authChangePassword: (input: { currentPassword: string; newPassword: string }) =>
+    request<{ message: string }>('/api/auth/me/password', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  authLogout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  authSessions: () => request<import('./types').AuthSessionRead[]>('/api/auth/sessions'),
+  authRevokeSession: (id: string) =>
+    request<void>(`/api/auth/sessions/${id}`, { method: 'DELETE' }),
+  authRecoverPassword: (input: { username: string }) =>
+    request<{ message: string }>('/api/auth/password-recovery', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  authListUsers: () => request<import('./types').User[]>('/api/auth/users'),
+  authAdminUpdateUser: (id: string, input: { password?: string; isSuperuser?: boolean }) =>
+    request<import('./types').User>(`/api/auth/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
   dashboard: () => request<import('./types').DashboardSummary>('/api/dashboard'),
   accounts: () => request<import('./types').Account[]>('/api/accounts'),
   createAccount: (input: import('./types').AccountCreateInput) =>
