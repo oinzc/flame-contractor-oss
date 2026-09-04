@@ -397,9 +397,20 @@ class Scheduler:
         return account.status == AccountStatus.HEALTHY
 
     def _window_expired(self, account: Account) -> bool:
-        """当前账号本地时间是否已过发送窗口终点。"""
+        """当前账号本地时间是否已过发送窗口终点。
+
+        账号设置固定发送时刻时，该时刻本身即为「窗口终点」：一旦已过且仍未派发，
+        今天这个固定槽位即视为错过，不深夜补发（与窗口随机语义一致的 skip 策略）。
+        """
+        tz = ZoneInfo(account.timezone)
+        local_now = self._clock().astimezone(tz)
+        if account.send_time_hhmm:
+            fixed = datetime.combine(
+                local_now.date(), self._parse_hhmm(account.send_time_hhmm), tzinfo=tz
+            )
+            return local_now >= fixed
         _, end_dt = self._window_for(account)
-        return self._clock().astimezone(ZoneInfo(account.timezone)) >= end_dt
+        return local_now >= end_dt
 
     def _load_account(self, account_id: str) -> Account | None:
         with Session(self._engine) as session:

@@ -63,6 +63,33 @@ def test_generate_uses_account_exact_time_if_set(engine):
     assert rows[0].scheduled_at == datetime(2026, 8, 27, 13, 30)
 
 
+def test_account_exact_time_skipped_when_already_past(engine):
+    """账号设置固定发送时刻后，该时刻已过仍未派发 → 今天不再补发，转 SKIPPED。"""
+    # 固定 21:30（= 13:30 UTC）；时钟设在 15:00 UTC（本地 23:00）已过该时刻
+    make_account(engine, send_time_hhmm="21:30")
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    sched.generate_due_schedules()  # 计划 = 21:30
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    rows = schedule_rows(engine)
+    assert rows[0].status == ScheduleStatus.SKIPPED  # 不补发
+    assert calls == []  # 发送执行器未被调用
+
+
 def test_dispatch_due_targets_sends_only_exact_scheduled_target(engine):
     """好友级精确时刻到点（且账号 healthy）时，单独派发该好友；未设时间好友不被派发。"""
     account = make_account(engine)
