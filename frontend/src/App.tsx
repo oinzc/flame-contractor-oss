@@ -24,8 +24,9 @@ import SendModal from './components/SendModal'
 import SendTargetModal from './components/SendTargetModal'
 import IdentityHydrationProgress from './components/IdentityHydrationProgress'
 import LoginPage from './components/LoginPage'
+import AccountPage from './components/AccountPage'
 
-type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
+type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs' | 'me'
 
 const NAV_ITEMS: { key: Page; ico: string; label: string }[] = [
   { key: 'dashboard', ico: '01', label: '总览' },
@@ -33,6 +34,7 @@ const NAV_ITEMS: { key: Page; ico: string; label: string }[] = [
   { key: 'accounts', ico: '03', label: '账号' },
   { key: 'targets', ico: '04', label: '好友' },
   { key: 'templates', ico: '05', label: '模板' },
+  { key: 'me', ico: 'ME', label: '我的' },
 ]
 
 const LAMP_TONES: Record<AccountStatus, string> = {
@@ -914,6 +916,7 @@ export default function App() {
               className="btn ghost small"
               type="button"
               onClick={() => {
+                void api.authLogout().catch(() => undefined)
                 setToken(null)
                 setCurrentUser(null)
               }}
@@ -992,6 +995,16 @@ export default function App() {
                   onChanged={() => void refresh()}
                 />
               )}
+              {page === 'me' && (
+                <AccountPage
+                  user={currentUser}
+                  onLogout={() => {
+                    void api.authLogout().catch(() => undefined)
+                    setToken(null)
+                    setCurrentUser(null)
+                  }}
+                />
+              )}
             </main>
           )
         )}
@@ -1064,7 +1077,9 @@ export default function App() {
 
         {!loading && (
           <footer className="footer-note">
-            本机优先 · 登录凭据只保存在本机浏览器 Profile，不入库、不上传
+            本机优先 · 登录凭据只保存在本机浏览器 Profile，不入库、不上传 · 当前平台账号：
+            {currentUser?.username}
+            {currentUser?.isSuperuser ? '（管理员）' : ''}
           </footer>
         )}
 

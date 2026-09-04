@@ -17,8 +17,9 @@ def new_uuid() -> str:
 class User(SQLModel, table=True):
     """续火平台账号：一个 User 可管理多个抖音账号(Account)，数据按人隔离。
 
-    username 全局唯一；密码使用 pbkdf2 哈希（app/core/security.py）。首启为空时
-    由 lifespan 自动种子一个默认账号（admin），详见 app/main.py。
+    username 全局唯一（登录标识）；密码使用 pbkdf2 哈希（app/core/security.py）。
+    email/display_name 为可选的资料字段；is_superuser 决定是否是平台管理员
+    （首启种子的 admin 默认为超管，可重设其它用户密码、查看全部平台账号）。
     """
 
     __tablename__ = "user"
@@ -26,8 +27,32 @@ class User(SQLModel, table=True):
     id: str = Field(default_factory=new_uuid, primary_key=True)
     username: str = Field(min_length=1, max_length=60, unique=True, index=True)
     password_hash: str = Field(max_length=256)
+    display_name: str | None = Field(default=None, max_length=60)
+    email: str | None = Field(default=None, max_length=255, index=True)
+    is_superuser: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class AuthSession(SQLModel, table=True):
+    """服务端登录会话：让 token 可撤销、可列出、可逐个登出。
+
+    token 由 `create_token(user_id, session_id, secret)` 签名而来，payload 携带
+    本会话的 id；<sid> 即本表主键。校验时用 session_id 反查本表，revoked_at 非空
+    或已过期则拒绝——因此改密/登出/管理员踢人可让既有 token 立即失效。
+    """
+
+    __tablename__ = "auth_session"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    user_id: str = Field(foreign_key="user.id", index=True, ondelete="CASCADE")
+    created_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime | None = None
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    # 登录设备指纹（仅记录，便于用户辨认「这台设备」）
+    user_agent: str | None = Field(default=None, max_length=255)
+    ip_address: str | None = Field(default=None, max_length=64)
 
 
 class AccountStatus(str, Enum):

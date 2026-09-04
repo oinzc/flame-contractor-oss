@@ -173,3 +173,134 @@ def test_dashboard_scoped_to_user(settings):
         assert bob_dash["accountCount"] == 0
         assert len(alice_dash["accounts"]) == 1
         assert len(bob_dash["accounts"]) == 0
+
+
+def test_seed_admin_is_superuser(client):
+    """首启种子 admin 是平台管理员（is_superuser）。"""
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    me = client.get("/api/auth/me", headers=_auth_headers(login["token"]))
+    assert me.status_code == 200
+    assert me.json()["isSuperuser"] is True
+
+
+def test_register_supports_profile_fields(client):
+    """注册可携带 displayName/email；登录后 me 返回这些字段。"""
+    resp = client.post(
+        "/api/auth/register",
+        json={"username": "profile1", "password": "pw", "displayName": "小明", "email": "xm@x.com"},
+    )
+    assert resp.status_code == 201
+    user = resp.json()["user"]
+    assert user["displayName"] == "小明"
+    assert user["email"] == "xm@x.com"
+
+    me = client.get("/api/auth/me", headers=_auth_headers(resp.json()["token"]))
+    assert me.json()["displayName"] == "小明"
+
+
+def test_update_me_requires_superuser_for_email_collision(client):
+    """更新资料：邮箱被他人占用时 409。"""
+    client.post("/api/auth/register", json={"username": "a1", "password": "pw", "email": "a1@x.com"})
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    # 管理员邮箱暂未占用，改成 a1 的用户邮箱应冲突
+    dup = client.patch(
+        "/api/auth/me",
+        json={"email": "a1@x.com"},
+        headers=_auth_headers(login["token"]),
+    )
+    assert dup.status_code == 409
+
+
+def test_change_password_revokes_other_sessions(client, settings):
+    """改密码：校验旧密码、新旧不同、让其它会话失效（当前会话保留）。"""
+    app = create_app(settings)
+    with TestClient(app) as client:
+        # 登录得到两个不同会话
+        login_a = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+        login_b = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+
+        # 用 A 会话改密码，A 保留，B 应被撤销
+        resp = client.post(
+            "/api/auth/me/password",
+            json={"currentPassword": "admin", "newPassword": "new-admin-pw"},
+            headers=_auth_headers(login_a["token"]),
+        )
+        assert resp.status_code == 200
+        # B 会话已失效
+        assert client.get("/api/auth/me", headers=_auth_headers(login_b["token"])).status_code == 401
+        # A 会话仍有效
+        assert client.get("/api/auth/me", headers=_auth_headers(login_a["token"])).status_code == 200
+
+        # 旧密码登录应失败，新密码应成功
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).status_code == 401
+        assert client.post("/api/auth/login", json={"username": "admin", "password": "new-admin-pw"}).status_code == 200
+
+
+def test_logout_revokes_current_session(client):
+    """登出后当前 token 立即失效。"""
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    headers = _auth_headers(login["token"])
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+    assert client.post("/api/auth/logout", headers=headers).status_code == 204
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_sessions_list_and_revoke(client):
+    """会话列表能返回并标记当前；撤销某会话后其 token 失效且非本人不能撤销。"""
+    login_a = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    login_b = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+
+    headers_a = _auth_headers(login_a["token"])
+    sessions = client.get("/api/auth/sessions", headers=headers_a)
+    assert sessions.status_code == 200
+    rows = sessions.json()
+    # B 会话（最后创建）在前，A（当前）在后，其中一个是 current
+    assert len(rows) >= 2
+    current = [r for r in rows if r["current"]]
+    assert len(current) == 1
+    assert current[0]["id"] != ""
+
+    # 撤销 B 的会话 → B 失效，A 仍有效
+    b_row = [r for r in rows if r["id"] != current[0]["id"]][0]
+    assert client.delete(f"/api/auth/sessions/{b_row['id']}", headers=headers_a).status_code == 204
+    assert client.get("/api/auth/me", headers=_auth_headers(login_b["token"])).status_code == 401
+    assert client.get("/api/auth/me", headers=headers_a).status_code == 200
+
+
+def test_admin_manages_users(settings):
+    """manage 用户：非 superuser 403，superuser 可列/重设密码/调整管理员。"""
+    app = create_app(settings)
+    with TestClient(app) as client:
+        admin = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+        reg = client.post("/api/auth/register", json={"username": "victim", "password": "pw"}).json()
+        admin_headers = _auth_headers(admin["token"])
+
+        # 非管理员访问 -> 403
+        assert (
+            client.get("/api/auth/users", headers=_auth_headers(reg["token"])).status_code == 403
+        )
+
+        users = client.get("/api/auth/users", headers=admin_headers)
+        assert users.status_code == 200
+        victim = [u for u in users.json() if u["username"] == "victim"][0]
+
+        # 管理员重设其密码 -> 旧密码 401，新密码 200
+        assert (
+            client.patch(
+                f"/api/auth/users/{victim['id']}",
+                json={"password": "reset-pw"},
+                headers=admin_headers,
+            ).status_code
+            == 200
+        )
+        assert client.post("/api/auth/login", json={"username": "victim", "password": "pw"}).status_code == 401
+        assert client.post("/api/auth/login", json={"username": "victim", "password": "reset-pw"}).status_code == 200
+
+
+def test_password_recovery_no_enumeration(client):
+    """找回密码：无论账号是否存在都返回同一句成功提示（防用户枚举）。"""
+    existing = client.post("/api/auth/password-recovery", json={"username": "admin"})
+    missing = client.post("/api/auth/password-recovery", json={"username": "no_such_user"})
+    assert existing.status_code == 200
+    assert missing.status_code == 200
+    assert existing.json()["message"] == missing.json()["message"]

@@ -32,6 +32,8 @@ def seed_default_user(settings: Settings, engine) -> None:
             admin = User(
                 username=settings.bootstrap_username,
                 password_hash=hash_password(settings.bootstrap_password),
+                display_name=settings.bootstrap_username,
+                is_superuser=True,  # 首启种子账号即平台管理员
             )
             session.add(admin)
             try:
@@ -40,6 +42,11 @@ def seed_default_user(settings: Settings, engine) -> None:
             except Exception:
                 session.rollback()
                 return
+        elif not admin.is_superuser:
+            # 既有库升级：把种子账号提升为平台管理员，幂等修复迁移时的默认值。
+            admin.is_superuser = True
+            session.add(admin)
+            session.commit()
 
         # 回填无属主的旧账号/模板到 admin，避免历史数据成为孤儿
         orphan_accounts = session.exec(

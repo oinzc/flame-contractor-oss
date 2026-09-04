@@ -1858,3 +1858,60 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
   color: var(--text-3);
   text-align: center;
 }
+
+/* 「我的」账号页：分区标签 + 卡片块 + 会话表 */
+.account-profile-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--seam);
+  border-radius: 10px;
+  width: fit-content;
+}
+
+.account-profile-tab {
+  padding: 7px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.account-profile-tab.active {
+  background: var(--ember);
+  color: #1a120c;
+  font-weight: 600;
+}
+
+.card-block {
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--seam);
+  border-radius: 12px;
+  padding: 16px 16px 18px;
+}
+
+.card-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: var(--text-1);
+}
+
+.session-current {
+  color: var(--flame);
+  font-weight: 600;
+}
+
+.admin-user-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-user-row input {
+  width: 120px;
+}
