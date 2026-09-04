@@ -1575,7 +1575,61 @@ class BrowserManager:
 
     # ------------------------------------------------------------ send
 
-    async def run_send(self, account_id: str, *, force: bool = False) -> dict:
+    async def run_send(
+        self, account_id: str, *, force: bool = False, exclude_scheduled: bool = False
+    ) -> dict:
+        """对账号批量发送。手动「立即发送/强制发送全部」包含全部启用好友；
+        自动账号级调度传 exclude_scheduled=True，只发「未设置独立发送时刻」的好友
+        （这些好友由 scheduler 按各自精确时刻单独派发）。
+        """
+        if self._active_flow(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
+        if self._active_scan(account_id) is not None:
+            raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能发送")
+        existing_progress = self._send_progress.get(account_id)
+        if existing_progress is not None and existing_progress.status == "running":
+            raise HTTPException(status_code=409, detail="账号已有发送任务进行中")
+
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            if account is None:
+                raise HTTPException(status_code=404, detail="账号不存在")
+            if not account.enabled:
+                raise HTTPException(status_code=409, detail="账号已暂停")
+            query = (
+                select(ContractTarget)
+                .where(
+                    ContractTarget.account_id == account_id,
+                    ContractTarget.enabled,
+                    ContractTarget.deleted_at.is_(None),
+                )
+            )
+            if exclude_scheduled:
+                # 自动账号级批量：剔除已设置独立精确发送时刻的好友（他们各自到点单独发）
+                query = query.where(ContractTarget.send_time_hhmm.is_(None))
+            targets = session.exec(query).all()
+        if not targets:
+            if exclude_scheduled:
+                # 自动账号批量为空：通常意味着全部好友都设置了独立时刻，由各自派发处理
+                return {
+                    "account_id": account_id,
+                    "overall": "ok",
+                    "detail": "全部好友设置独立发送时刻，账号批量无需发送",
+                    "results": [],
+                    "artifact_path": None,
+                }
+            raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
+
+        self._start_send_progress(account_id, len(targets))
+        blocked = await self._preflight_network(account_id)
+        if blocked is not None:
+            return blocked
+
+        force_run_id = uuid4().hex[:12] if force else None
+        return await self._execute_send(account, targets, force_run_id=force_run_id)
+
+    async def run_send_for_targets(self, account_id: str, target_ids: list[str]) -> dict:
+        """对指定好友集发送（自动按好友精确时刻派发用）。尊重每日幂等，不强制、不绕过成功记录。"""
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
         if self._active_scan(account_id) is not None:
@@ -1593,20 +1647,20 @@ class BrowserManager:
             targets = session.exec(
                 select(ContractTarget).where(
                     ContractTarget.account_id == account_id,
+                    ContractTarget.id.in_(target_ids),
                     ContractTarget.enabled,
                     ContractTarget.deleted_at.is_(None),
                 )
             ).all()
         if not targets:
-            raise HTTPException(status_code=409, detail="没有启用中的好友，请先到好友页添加")
+            raise HTTPException(status_code=409, detail="没有可发送的好友")
 
         self._start_send_progress(account_id, len(targets))
         blocked = await self._preflight_network(account_id)
         if blocked is not None:
             return blocked
 
-        force_run_id = uuid4().hex[:12] if force else None
-        return await self._execute_send(account, targets, force_run_id=force_run_id)
+        return await self._execute_send(account, targets)
 
     async def send_target(
         self,

@@ -90,6 +90,8 @@ class Account(SQLModel, table=True):
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     send_window_start: str = Field(default="20:00", max_length=5)
     send_window_end: str = Field(default="22:00", max_length=5)
+    # 账号级精确发送时刻（HH:MM）；为空=在发送窗口内随机取时，非空=固定在该时刻发送
+    send_time_hhmm: str | None = Field(default=None, max_length=5)
     last_verified_at: datetime | None = None
     last_success_at: datetime | None = None
     # M6-3 连续失败计数：每次自动发送终态失败（含重试耗尽）+1，成功清零；
@@ -180,6 +182,8 @@ class ContractTarget(SQLModel, table=True):
         default=None, foreign_key="message_template.id", ondelete="RESTRICT"
     )
     enabled: bool = Field(default=True, index=True)
+    # 好友级精确发送时刻（HH:MM，账号本地时间）；为空=跟随账号（账号精确时刻或窗口随机）
+    send_time_hhmm: str | None = Field(default=None, max_length=5)
     # 抖音会话列表最近一次扫描到的官方火花状态；仅用于展示，不参与发送决策。
     spark_kind: str | None = Field(default=None, max_length=16)
     spark_label: str | None = Field(default=None, max_length=64)

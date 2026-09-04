@@ -33,6 +33,8 @@ class AccountCreate(APIBase):
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
     send_window_start: str = Field(default="20:00", pattern=TIME_RE.pattern)
     send_window_end: str = Field(default="22:00", pattern=TIME_RE.pattern)
+    # 账号级精确发送时刻（HH:MM）；为空=在发送窗口内随机取时
+    send_time_hhmm: str | None = Field(default=None, pattern=TIME_RE.pattern)
 
     @field_validator("display_name")
     @classmethod
@@ -51,6 +53,14 @@ class AccountCreate(APIBase):
             raise ValueError("未知时区") from None
         return value
 
+    @field_validator("send_time_hhmm")
+    @classmethod
+    def _strip_send_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
     @model_validator(mode="after")
     def _validate_window(self) -> "AccountCreate":
         if self.send_window_start == self.send_window_end:
@@ -64,6 +74,7 @@ class AccountPatch(APIBase):
     status: Literal[AccountStatus.PENDING_LOGIN, AccountStatus.PAUSED] | None = None
     send_window_start: str | None = Field(default=None, pattern=TIME_RE.pattern)
     send_window_end: str | None = Field(default=None, pattern=TIME_RE.pattern)
+    send_time_hhmm: str | None = Field(default=None, pattern=TIME_RE.pattern)
 
     @field_validator("display_name")
     @classmethod
@@ -74,6 +85,14 @@ class AccountPatch(APIBase):
         if not value:
             raise ValueError("显示名称不能为空")
         return value
+
+    @field_validator("send_time_hhmm")
+    @classmethod
+    def _strip_send_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
     @model_validator(mode="after")
     def _validate_window(self) -> "AccountPatch":
@@ -92,6 +111,7 @@ class AccountRead(APIBase):
     timezone: str
     send_window_start: str
     send_window_end: str
+    send_time_hhmm: str | None
     last_verified_at: datetime | None
     last_success_at: datetime | None
     # 登录成功后读到的抖音身份昵称（与 display_name 的对照）
@@ -196,6 +216,8 @@ class TargetCreate(APIBase):
     conversation_type: ConversationType | None = None
     template_id: str | None = None
     streak_days: int = Field(default=0, ge=0)
+    # 好友级精确发送时刻（HH:MM）；为空=跟随账号（账号精确时刻或窗口随机）
+    send_time_hhmm: str | None = Field(default=None, pattern=TIME_RE.pattern)
 
     @field_validator("nickname_snapshot")
     @classmethod
@@ -204,6 +226,14 @@ class TargetCreate(APIBase):
         if not value:
             raise ValueError("昵称不能为空")
         return value
+
+    @field_validator("send_time_hhmm")
+    @classmethod
+    def _strip_send_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
     @field_validator("platform_user_id")
     @classmethod
@@ -237,11 +267,20 @@ class TargetCreate(APIBase):
 
 
 class TargetPatch(APIBase):
-    """局部更新契约对象。开放火花天数校准、启停与换绑模板（None=解绑）。"""
+    """局部更新契约对象。开放火花天数校准、启停、换绑模板与精确发送时刻（None=解绑）。"""
 
     streak_days: int | None = Field(default=None, ge=0)
     enabled: bool | None = None
     template_id: str | None = None
+    send_time_hhmm: str | None = Field(default=None, pattern=TIME_RE.pattern)
+
+    @field_validator("send_time_hhmm")
+    @classmethod
+    def _strip_send_time(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
 
 class BatchTargetItem(APIBase):
@@ -349,6 +388,8 @@ class TargetRead(APIBase):
     nickname_snapshot: str
     template_id: str | None
     enabled: bool
+    # 好友级精确发送时刻（HH:MM）；为空=跟随账号
+    send_time_hhmm: str | None
     spark_kind: str | None
     spark_label: str | None
     spark_scanned_at: datetime | None
