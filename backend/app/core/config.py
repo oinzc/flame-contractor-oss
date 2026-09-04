@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:5173",
     )
+    # 认证：签名 token 的密钥（上线务必用 FLAME_SECRET_KEY 覆盖默认值）
+    secret_key: str = "flame-contractor-dev-secret-change-me"
+    # 首启种子平台账号：User 表为空时自动创建（本地第一次登录 admin/admin）
+    bootstrap_username: str = "admin"
+    bootstrap_password: str = "admin"
 
     model_config = SettingsConfigDict(
         env_prefix="FLAME_",

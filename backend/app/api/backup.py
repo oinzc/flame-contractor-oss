@@ -3,20 +3,21 @@ from fastapi import APIRouter, HTTPException
 from ..backup import export_backup, import_backup
 from ..core.database import SessionDep
 from ..schemas import BackupImportResult, BackupRead
+from .deps import CurrentUser
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
 
 @router.get("", response_model=BackupRead)
-def read_backup(session: SessionDep) -> BackupRead:
-    """导出全量契约与运行记录 JSON（不含任何凭据；Profile 登录态走文件系统备份）。"""
-    return export_backup(session)
+def read_backup(session: SessionDep, user: CurrentUser) -> BackupRead:
+    """导出当前平台账号的契约与运行记录 JSON（不含任何凭据；Profile 登录态走文件系统备份）。"""
+    return export_backup(session, user.id)
 
 
 @router.post("/import", response_model=BackupImportResult)
-def restore_backup(payload: BackupRead, session: SessionDep) -> BackupImportResult:
-    """按 id upsert 导入：空库=完整恢复，已有库=无损合并。"""
+def restore_backup(payload: BackupRead, session: SessionDep, user: CurrentUser) -> BackupImportResult:
+    """按 id upsert 导入：空库=完整恢复，已有库=无损合并。导入数据归属当前用户。"""
     try:
-        return import_backup(session, payload)
+        return import_backup(session, payload, user.id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

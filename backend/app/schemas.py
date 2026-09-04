@@ -28,6 +28,42 @@ class APIBase(BaseModel):
 # ---------------------------------------------------------------- account
 
 
+class UserRegister(APIBase):
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def _strip_username(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("用户名不能为空")
+        return value
+
+
+class UserLogin(APIBase):
+    username: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def _strip_username(cls, value: str) -> str:
+        value = value.strip()
+        return value
+
+
+class UserRead(APIBase):
+    id: str
+    username: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AuthRead(APIBase):
+    token: str
+    user: UserRead
+
+
 class AccountCreate(APIBase):
     display_name: str = Field(min_length=1, max_length=60)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)

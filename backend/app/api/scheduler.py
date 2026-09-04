@@ -7,14 +7,19 @@ from sqlmodel import select
 from ..core.database import SessionDep
 from ..models import Account, SendSchedule
 from ..schemas import SchedulerSettingsPatch, SchedulerStatusRead, SendScheduleRead
+from .deps import CurrentUser
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
-def _today_schedules(session: SessionDep, scheduler) -> list[SendScheduleRead]:
-    """聚合今日各账号的调度计划（按账号本地时区的 business_date）。"""
+def _today_schedules(
+    session: SessionDep, scheduler, user_id: str
+) -> list[SendScheduleRead]:
+    """聚合当前用户各账号今日的调度计划（按账号本地时区的 business_date）。"""
     records: list[SendScheduleRead] = []
-    accounts = session.exec(select(Account)).all()
+    accounts = session.exec(
+        select(Account).where(Account.user_id == user_id)
+    ).all()
     for account in accounts:
         business_date = datetime.now(ZoneInfo(account.timezone)).date()
         schedule = session.exec(
@@ -29,22 +34,26 @@ def _today_schedules(session: SessionDep, scheduler) -> list[SendScheduleRead]:
     return records
 
 
-def _scheduler_read(request: Request, session: SessionDep) -> SchedulerStatusRead:
+def _scheduler_read(
+    request: Request, session: SessionDep, user_id: str
+) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     auto_scan_status = getattr(scheduler, "auto_scan_status", None)
     return SchedulerStatusRead(
         enabled=scheduler.enabled,
         paused=scheduler.paused,
         running_accounts=sorted(scheduler.running_accounts),
-        today_schedules=_today_schedules(session, scheduler),
+        today_schedules=_today_schedules(session, scheduler, user_id),
         auto_scan_interval_hours=getattr(scheduler, "auto_scan_interval_hours", 24),
         auto_scans=auto_scan_status() if callable(auto_scan_status) else [],
     )
 
 
 @router.get("", response_model=SchedulerStatusRead)
-def read_scheduler_status(request: Request, session: SessionDep) -> SchedulerStatusRead:
-    return _scheduler_read(request, session)
+def read_scheduler_status(
+    request: Request, session: SessionDep, user: CurrentUser
+) -> SchedulerStatusRead:
+    return _scheduler_read(request, session, user.id)
 
 
 @router.patch("/settings", response_model=SchedulerStatusRead)
@@ -52,21 +61,26 @@ def update_scheduler_settings(
     request: Request,
     session: SessionDep,
     payload: SchedulerSettingsPatch,
+    user: CurrentUser,
 ) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     scheduler.update_auto_scan_interval(payload.auto_scan_interval_hours)
-    return _scheduler_read(request, session)
+    return _scheduler_read(request, session, user.id)
 
 
 @router.post("/pause", response_model=SchedulerStatusRead)
-def pause_scheduler(request: Request, session: SessionDep) -> SchedulerStatusRead:
+def pause_scheduler(
+    request: Request, session: SessionDep, user: CurrentUser
+) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     scheduler.pause()
-    return _scheduler_read(request, session)
+    return _scheduler_read(request, session, user.id)
 
 
 @router.post("/resume", response_model=SchedulerStatusRead)
-def resume_scheduler(request: Request, session: SessionDep) -> SchedulerStatusRead:
+def resume_scheduler(
+    request: Request, session: SessionDep, user: CurrentUser
+) -> SchedulerStatusRead:
     scheduler = request.app.state.scheduler
     scheduler.resume()
-    return _scheduler_read(request, session)
+    return _scheduler_read(request, session, user.id)

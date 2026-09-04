@@ -1782,3 +1782,79 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
     opacity: 0.55;
   }
 }
+
+/* ------------------------------------------------------------ 登录页 */
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(1200px 600px at 50% -10%, #241a12 0%, #100d0a 55%, #0b0908 100%);
+}
+
+.login-card {
+  width: min(420px, 100%);
+  background: linear-gradient(180deg, #1a1512, #141009);
+  border: 1px solid var(--seam);
+  border-radius: 18px;
+  padding: 28px 26px 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.login-mark {
+  font-size: 40px;
+  line-height: 1;
+  text-align: center;
+  margin-bottom: 6px;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 2px;
+  text-align: center;
+  color: var(--text-1);
+}
+
+.login-sub {
+  margin: 8px 0 18px;
+  font-size: 13px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.login-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--seam);
+  border-radius: 10px;
+}
+
+.login-tab {
+  flex: 1;
+  padding: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 14px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.login-tab.active {
+  background: var(--ember);
+  color: #1a120c;
+  font-weight: 600;
+}
+
+.login-foot {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}

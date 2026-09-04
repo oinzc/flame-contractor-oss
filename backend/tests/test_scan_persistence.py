@@ -12,7 +12,8 @@ from app.core.database import build_engine
 from app.core.migrations import run_migrations
 from app.execution.browser_manager import BrowserManager
 from app.main import create_app
-from app.models import Account, ScanTask, ScanTaskStatus
+from app.models import Account, ScanTask, ScanTaskStatus, User
+from sqlmodel import select
 from tests.fakes import FakePage, make_app
 from tests.test_send import _account_with_targets
 
@@ -133,6 +134,16 @@ def test_running_scan_is_marked_interrupted_on_app_start(settings):
     manager = BrowserManager(manager_engine, settings)
     app = create_app(settings, browser_manager=manager)
     with TestClient(app) as client:
+        # 该测试直接以 SQLModel 种账号（无 user_id），登录 admin 后仍需让账号归属当前用户
+        # 才能通过 execution 路由的越权校验。
+        from app.models import User
+
+        with Session(app.state.engine) as session:
+            admin = session.exec(select(User).where(User.username == "admin")).first()
+            acc = session.get(Account, account_id)
+            acc.user_id = admin.id if admin else None  # type: ignore[assignment]
+            session.add(acc)
+            session.commit()
         latest = client.get(f"/api/accounts/{account_id}/scan-chats/latest")
         assert latest.status_code == 200, latest.text
         payload = latest.json()

@@ -1382,9 +1382,11 @@ class BrowserManager:
                 )
             if not items:
                 return {"refreshed": [], "created": []}
+            account_obj = session.get(Account, account_id)
             result = create_targets_batch(
                 session,
                 TargetBatchCreate(account_id=account_id, items=items),
+                user_id=account_obj.user_id if account_obj is not None else None,
             )
             return result.model_dump()
 

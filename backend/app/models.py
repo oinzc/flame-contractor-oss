@@ -14,6 +14,22 @@ def new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+class User(SQLModel, table=True):
+    """续火平台账号：一个 User 可管理多个抖音账号(Account)，数据按人隔离。
+
+    username 全局唯一；密码使用 pbkdf2 哈希（app/core/security.py）。首启为空时
+    由 lifespan 自动种子一个默认账号（admin），详见 app/main.py。
+    """
+
+    __tablename__ = "user"
+
+    id: str = Field(default_factory=new_uuid, primary_key=True)
+    username: str = Field(min_length=1, max_length=60, unique=True, index=True)
+    password_hash: str = Field(max_length=256)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AccountStatus(str, Enum):
     PENDING_LOGIN = "pending_login"
     HEALTHY = "healthy"
@@ -82,9 +98,16 @@ class FailureClass(str, Enum):
 
 class Account(SQLModel, table=True):
     __tablename__ = "account"
+    __table_args__ = (
+        UniqueConstraint("user_id", "display_name", name="uq_account_user_display_name"),
+    )
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
-    display_name: str = Field(min_length=1, max_length=60, unique=True, index=True)
+    # 平台账号属主：一个 User 可管理多个抖音账号；数据按 user_id 隔离。
+    user_id: str | None = Field(
+        default=None, foreign_key="user.id", index=True, ondelete="RESTRICT"
+    )
+    display_name: str = Field(min_length=1, max_length=60, index=True)
     status: AccountStatus = Field(default=AccountStatus.PENDING_LOGIN, index=True)
     enabled: bool = Field(default=True, index=True)
     timezone: str = Field(default="Asia/Shanghai", max_length=64)
@@ -115,9 +138,16 @@ class AppSetting(SQLModel, table=True):
 
 class MessageTemplate(SQLModel, table=True):
     __tablename__ = "message_template"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_template_user_name"),
+    )
 
     id: str = Field(default_factory=new_uuid, primary_key=True)
-    name: str = Field(min_length=1, max_length=60, unique=True, index=True)
+    # 平台账号属主：模板(含文案池)按用户隔离。
+    user_id: str | None = Field(
+        default=None, foreign_key="user.id", index=True, ondelete="RESTRICT"
+    )
+    name: str = Field(min_length=1, max_length=60, index=True)
     type: TemplateType = Field(default=TemplateType.TEXT, max_length=16)
     content: str = Field(default="", max_length=1000)
     # 图片类型模板的有效图片路径（本地图片）；文本无

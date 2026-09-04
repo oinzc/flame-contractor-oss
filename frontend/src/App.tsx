@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError } from './api'
+import { api, ApiError, getToken, setToken } from './api'
 import type {
   Account,
   AccountStatus,
@@ -11,6 +11,7 @@ import type {
   ScanTaskState,
   SchedulerStatus,
   TargetBatchResult,
+  User,
 } from './types'
 import CreateAccountModal from './components/CreateAccountModal'
 import DashboardPage from './components/DashboardPage'
@@ -22,6 +23,7 @@ import ScanProgressDock from './components/ScanProgress'
 import SendModal from './components/SendModal'
 import SendTargetModal from './components/SendTargetModal'
 import IdentityHydrationProgress from './components/IdentityHydrationProgress'
+import LoginPage from './components/LoginPage'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs'
 
@@ -51,6 +53,8 @@ function lampClass(status: AccountStatus): string {
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard')
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
+  const [authInitializing, setAuthInitializing] = useState(() => getToken() !== null)
   const [health, setHealth] = useState<Health | null>(null)
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [targets, setTargets] = useState<ContractTarget[]>([])
@@ -93,6 +97,8 @@ export default function App() {
   }
 
   const refresh = useCallback(async () => {
+    // 未登录（无 token）不拉取任何业务数据，避免每次涌入 401
+    if (!getToken()) return
     try {
       const [nextHealth, nextSummary, nextTargets, nextTemplates, nextScheduler] =
         await Promise.all([
@@ -109,8 +115,36 @@ export default function App() {
       setSchedulerStatus(nextScheduler)
       setError(null)
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // 登录失效：清 token 回到登录页，避免不断重试
+        setToken(null)
+        setCurrentUser(null)
+        setAuthInitializing(false)
+        return
+      }
       setError(err instanceof ApiError ? err.message : '无法连接本机控制面')
     }
+  }, [])
+
+  // 首次进入：若有 token 则验证并拉取当前用户；无 token 直接进登录页
+  useEffect(() => {
+    if (!getToken()) {
+      setAuthInitializing(false)
+      return
+    }
+    api
+      .authMe()
+      .then((user) => {
+        setCurrentUser(user)
+        setAuthInitializing(false)
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          setToken(null)
+        }
+        setCurrentUser(null)
+        setAuthInitializing(false)
+      })
   }, [])
 
   useEffect(() => {
@@ -785,6 +819,27 @@ export default function App() {
 
   return (
     <div className="app">
+      {authInitializing ? (
+        <div className="login-page">
+          <div className="login-card">
+            <p className="login-sub">正在确认登录状态…</p>
+          </div>
+        </div>
+      ) : currentUser === null ? (
+        <LoginPage
+          onAuthed={() => {
+            // 登录成功后读取当前用户并进入控制台，随后拉取一次全量数据
+            void api
+              .authMe()
+              .then((user) => {
+                setCurrentUser(user)
+              })
+              .catch(() => setCurrentUser(null))
+            void refresh()
+          }}
+        />
+      ) : (
+        <>
       <aside className="sidebar">
         <div className="side-brand">
           <span className="side-glyph" aria-hidden="true">
@@ -848,6 +903,19 @@ export default function App() {
             {health?.database === 'ready' ? 'ENGINE' : 'OFFLINE'}
           </span>
           <span>{now.toLocaleTimeString('zh-CN', { hour12: false })}</span>
+          {currentUser && (
+            <button
+              className="btn ghost small"
+              type="button"
+              onClick={() => {
+                setToken(null)
+                setCurrentUser(null)
+              }}
+              title={`当前平台账号：${currentUser.username}`}
+            >
+              退出
+            </button>
+          )}
         </div>
       </aside>
 
@@ -1001,6 +1069,8 @@ export default function App() {
           />
         )}
       </div>
+        </>
+      )}
     </div>
   )
 }
