@@ -821,9 +821,10 @@ export default function App() {
 
   if (authInitializing) {
     return (
-      <div className="login-page">
+      <div className="login-page login-loading">
         <div className="login-card">
-          <p className="login-sub">正在确认登录状态…</p>
+          <p className="login-card-index">AUTH / CHECK</p>
+          <p className="login-loading-copy">正在确认登录状态…</p>
         </div>
       </div>
     )

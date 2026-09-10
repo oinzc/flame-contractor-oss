@@ -31,6 +31,14 @@ export default function AccountPage({ user, onLogout }: Props) {
   const [revoking, setRevoking] = useState<string | null>(null)
   const [adminUsers, setAdminUsers] = useState<User[]>([])
   const [adminError, setAdminError] = useState<string | null>(null)
+  const [adminNotice, setAdminNotice] = useState<string | null>(null)
+  const [newUsername, setNewUsername] = useState('')
+  const [newDisplayName, setNewDisplayName] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirm, setNewPasswordConfirm] = useState('')
+  const [newIsSuperuser, setNewIsSuperuser] = useState(false)
+  const [creatingUser, setCreatingUser] = useState(false)
 
   const loadSessions = () =>
     api
@@ -113,9 +121,52 @@ export default function AccountPage({ user, onLogout }: Props) {
     setAdminError(null)
     try {
       await api.authAdminUpdateUser(target.id, patch)
-      loadUsers()
+      await loadUsers()
+      return true
     } catch (err) {
       setAdminError(err instanceof ApiError ? err.message : '操作失败')
+      return false
+    }
+  }
+
+  async function handleCreateUser(event: React.FormEvent) {
+    event.preventDefault()
+    setAdminError(null)
+    setAdminNotice(null)
+    if (!newUsername.trim() || !newPassword) {
+      setAdminError('请填写用户名和初始密码')
+      return
+    }
+    if (newPassword.length < 8) {
+      setAdminError('初始密码至少需要 8 个字符')
+      return
+    }
+    if (newPassword !== newPasswordConfirm) {
+      setAdminError('两次输入的初始密码不一致')
+      return
+    }
+
+    setCreatingUser(true)
+    try {
+      const created = await api.authAdminCreateUser({
+        username: newUsername.trim(),
+        password: newPassword,
+        displayName: newDisplayName.trim() || undefined,
+        email: newEmail.trim() || undefined,
+        isSuperuser: newIsSuperuser,
+      })
+      setNewUsername('')
+      setNewDisplayName('')
+      setNewEmail('')
+      setNewPassword('')
+      setNewPasswordConfirm('')
+      setNewIsSuperuser(false)
+      setAdminNotice(`已创建平台用户“${created.username}”`)
+      await loadUsers()
+    } catch (err) {
+      setAdminError(err instanceof ApiError ? err.message : '创建用户失败，请重试')
+    } finally {
+      setCreatingUser(false)
     }
   }
 
@@ -311,14 +362,103 @@ export default function AccountPage({ user, onLogout }: Props) {
 
       {section === 'admin' && user.isSuperuser && (
         <section className="card-block">
-          <h3 className="card-title">平台用户管理</h3>
+          <div className="admin-section-head">
+            <div>
+              <p className="section-kicker">ADMIN / USERS</p>
+              <h3 className="card-title">创建平台用户</h3>
+            </div>
+            <span className="badge ember">{adminUsers.length} USERS</span>
+          </div>
           <p className="empty-copy">
-            作为平台管理员，你可以查看全部平台账号，并重置某用户密码或调整其管理员标记。
-            重置密码会立即使该用户的所有登录会话失效。
+            登录页不开放公开注册。新成员由管理员在这里创建，初始密码请通过可信渠道单独告知。
           </p>
+          <form className="admin-create-form" onSubmit={handleCreateUser}>
+            <div className="field">
+              <label htmlFor="admin-new-username">用户名</label>
+              <input
+                id="admin-new-username"
+                value={newUsername}
+                onChange={(event) => setNewUsername(event.target.value)}
+                autoComplete="off"
+                maxLength={60}
+                placeholder="用于登录"
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="admin-new-display">显示名称 <span>可选</span></label>
+              <input
+                id="admin-new-display"
+                value={newDisplayName}
+                onChange={(event) => setNewDisplayName(event.target.value)}
+                autoComplete="off"
+                maxLength={60}
+                placeholder="用于控制台内显示"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="admin-new-email">邮箱 <span>可选</span></label>
+              <input
+                id="admin-new-email"
+                type="email"
+                value={newEmail}
+                onChange={(event) => setNewEmail(event.target.value)}
+                autoComplete="off"
+                maxLength={255}
+                placeholder="仅作账号资料"
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="admin-new-password">初始密码</label>
+              <input
+                id="admin-new-password"
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
+                placeholder="至少 8 个字符"
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="admin-new-password-confirm">确认初始密码</label>
+              <input
+                id="admin-new-password-confirm"
+                type="password"
+                value={newPasswordConfirm}
+                onChange={(event) => setNewPasswordConfirm(event.target.value)}
+                autoComplete="new-password"
+                minLength={8}
+                maxLength={128}
+                placeholder="再次输入初始密码"
+                required
+              />
+            </div>
+            <div className="admin-create-actions">
+              <label className="admin-role-check">
+                <input
+                  type="checkbox"
+                  checked={newIsSuperuser}
+                  onChange={(event) => setNewIsSuperuser(event.target.checked)}
+                />
+                同时授予管理员权限
+              </label>
+              <button className="btn primary" type="submit" disabled={creatingUser}>
+                {creatingUser ? '创建中…' : '创建用户'}
+              </button>
+            </div>
+          </form>
           {adminError && <div className="form-error">{adminError}</div>}
-          <div className="table-wrap">
-            <table className="table">
+          {adminNotice && <div className="form-notice">{adminNotice}</div>}
+
+          <div className="admin-list-head">
+            <h3 className="card-title">现有平台用户</h3>
+            <p>重置密码会立即使该用户的所有登录会话失效。</p>
+          </div>
+          <div className="table-wrap admin-users-wrap">
+            <table className="table admin-users-table">
               <thead>
                 <tr>
                   <th>用户名</th>
@@ -330,7 +470,12 @@ export default function AccountPage({ user, onLogout }: Props) {
               </thead>
               <tbody>
                 {adminUsers.map((u) => (
-                  <AdminUserRow key={u.id} user={u} onUpdate={handleAdminUpdate} />
+                  <AdminUserRow
+                    key={u.id}
+                    user={u}
+                    currentUserId={user.id}
+                    onUpdate={handleAdminUpdate}
+                  />
                 ))}
               </tbody>
             </table>
@@ -343,22 +488,25 @@ export default function AccountPage({ user, onLogout }: Props) {
 
 function AdminUserRow({
   user,
+  currentUserId,
   onUpdate,
 }: {
   user: User
-  onUpdate: (user: User, patch: { password?: string; isSuperuser?: boolean }) => Promise<void>
+  currentUserId: string
+  onUpdate: (user: User, patch: { password?: string; isSuperuser?: boolean }) => Promise<boolean>
 }) {
   const [resetPw, setResetPw] = useState('')
   const [acting, setActing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const isCurrent = user.id === currentUserId
 
   async function handleReset() {
     if (!resetPw) return
     setErr(null)
     setActing(true)
     try {
-      await onUpdate(user, { password: resetPw })
-      setResetPw('')
+      const updated = await onUpdate(user, { password: resetPw })
+      if (updated) setResetPw('')
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : '重置失败')
     } finally {
@@ -368,41 +516,49 @@ function AdminUserRow({
 
   return (
     <tr>
-      <td>{user.username}</td>
-      <td>{user.displayName ?? '—'}</td>
-      <td>{user.isSuperuser ? '管理员' : '普通用户'}</td>
-      <td>{formatDateTime(user.createdAt)}</td>
-      <td>
-        <div className="admin-user-row">
-          <input
-            type="password"
-            placeholder="新密码"
-            value={resetPw}
-            onChange={(event) => setResetPw(event.target.value)}
-            maxLength={128}
-            aria-label={`为 ${user.username} 重置密码`}
-            style={{ width: 120 }}
-          />
-          <button
-            className="btn small"
-            type="button"
-            disabled={acting || !resetPw}
-            onClick={handleReset}
+      <td data-label="用户名">{user.username}</td>
+      <td data-label="显示名称">{user.displayName ?? '—'}</td>
+      <td data-label="角色">{user.isSuperuser ? '管理员' : '普通用户'}{isCurrent ? ' · 当前账号' : ''}</td>
+      <td data-label="创建时间">{formatDateTime(user.createdAt)}</td>
+      <td data-label="操作">
+        {isCurrent ? (
+          <span className="field-hint">请在“修改密码”中操作</span>
+        ) : (
+          <form
+            className="admin-user-row"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleReset()
+            }}
           >
-            {acting ? '重置中…' : '重置密码'}
-          </button>
-          {user.username !== 'admin' && (
+            <input
+              type="password"
+              placeholder="至少 8 个字符"
+              value={resetPw}
+              onChange={(event) => setResetPw(event.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              aria-label={`为 ${user.username} 重置密码`}
+            />
+            <button
+              className="btn small"
+              type="submit"
+              disabled={acting || resetPw.length < 8}
+            >
+              {acting ? '重置中…' : '重置密码'}
+            </button>
             <button
               className="btn ghost small"
               type="button"
               disabled={acting}
-              onClick={() => onUpdate(user, { isSuperuser: !user.isSuperuser })}
+              onClick={() => void onUpdate(user, { isSuperuser: !user.isSuperuser })}
             >
               {user.isSuperuser ? '取消管理员' : '设为管理员'}
             </button>
-          )}
-          {err && <span className="form-error">{err}</span>}
-        </div>
+            {err && <span className="form-error">{err}</span>}
+          </form>
+        )}
       </td>
     </tr>
   )

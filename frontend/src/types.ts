@@ -311,6 +311,10 @@ export interface AuthRead {
   user: User
 }
 
+export interface AuthSetupRead {
+  needsSetup: boolean
+}
+
 export interface AuthSessionRead {
   id: string
   createdAt: string
