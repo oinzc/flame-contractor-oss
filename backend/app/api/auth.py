@@ -1,5 +1,6 @@
 import time
 from datetime import timedelta
+from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlmodel import Session, select
@@ -10,9 +11,11 @@ from ..models import AuthSession, User, utc_now
 from ..schemas import (
     AuthRead,
     AuthSessionRead,
+    AuthSetupRead,
     Message,
     PasswordRecoveryRequest,
     UpdatePassword,
+    UserCreateAdmin,
     UserLogin,
     UserRead,
     UserRegister,
@@ -22,6 +25,7 @@ from ..schemas import (
 from .deps import CurrentSession, CurrentSuperUser, CurrentUser
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_setup_lock = Lock()
 
 
 def _user_read(user: User) -> UserRead:
@@ -58,26 +62,33 @@ def _session_read(auth_session: AuthSession, current_id: str) -> AuthSessionRead
 
 @router.post("/register", response_model=AuthRead, status_code=status.HTTP_201_CREATED)
 def register(payload: UserRegister, request: Request, session: SessionDep) -> AuthRead:
-    existing = session.exec(select(User).where(User.username == payload.username)).first()
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="用户名已被占用")
+    """只用于全新安装的一次性管理员初始化，初始化后永久关闭。"""
+    with _setup_lock:
+        if session.exec(select(User.id)).first() is not None:
+            raise HTTPException(status_code=409, detail="系统已完成初始化，请由管理员创建用户")
 
-    user = User(
-        username=payload.username,
-        password_hash=hash_password(payload.password),
-        display_name=payload.display_name or payload.username,
-        email=payload.email,
-    )
-    session.add(user)
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise HTTPException(status_code=409, detail="用户名已被占用") from None
-    session.refresh(user)
+        user = User(
+            username=payload.username,
+            password_hash=hash_password(payload.password),
+            display_name=payload.display_name or payload.username,
+            email=payload.email,
+            is_superuser=True,
+        )
+        session.add(user)
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise HTTPException(status_code=409, detail="系统已完成初始化，请直接登录") from None
+        session.refresh(user)
 
     token, _ = _issue_session(request, session, user)
     return AuthRead(token=token, user=_user_read(user))
+
+
+@router.get("/setup", response_model=AuthSetupRead)
+def setup_status(session: SessionDep) -> AuthSetupRead:
+    return AuthSetupRead(needs_setup=session.exec(select(User.id)).first() is None)
 
 
 @router.post("/login", response_model=AuthRead)
@@ -187,6 +198,35 @@ def list_users(session: SessionDep, _user: CurrentSuperUser) -> list[UserRead]:
     return [_user_read(u) for u in users]
 
 
+@router.post("/users", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+def create_user(
+    payload: UserCreateAdmin, session: SessionDep, _user: CurrentSuperUser
+) -> UserRead:
+    """由平台管理员创建用户；公开注册在首位管理员初始化后不可用。"""
+    if session.exec(select(User).where(User.username == payload.username)).first() is not None:
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+    if payload.email:
+        existing_email = session.exec(select(User).where(User.email == payload.email)).first()
+        if existing_email is not None:
+            raise HTTPException(status_code=409, detail="邮箱已被其他账号使用")
+
+    user = User(
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+        display_name=payload.display_name or payload.username,
+        email=payload.email,
+        is_superuser=payload.is_superuser,
+    )
+    session.add(user)
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="用户名已被占用") from None
+    session.refresh(user)
+    return _user_read(user)
+
+
 @router.patch("/users/{user_id}", response_model=UserRead)
 def update_user(
     user_id: str, payload: UserUpdateAdmin, session: SessionDep, _user: CurrentSuperUser
@@ -198,6 +238,10 @@ def update_user(
 
     if payload.password is not None:
         target.password_hash = hash_password(payload.password)
+    if payload.is_superuser is False and target.is_superuser:
+        superusers = session.exec(select(User).where(User.is_superuser.is_(True))).all()
+        if len(superusers) <= 1:
+            raise HTTPException(status_code=400, detail="至少保留一名平台管理员")
     if payload.is_superuser is not None:
         target.is_superuser = payload.is_superuser
     target.updated_at = utc_now()

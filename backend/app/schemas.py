@@ -30,7 +30,7 @@ class APIBase(BaseModel):
 
 class UserRegister(APIBase):
     username: str = Field(min_length=1, max_length=60)
-    password: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     display_name: str | None = Field(default=None, max_length=60)
     email: str | None = Field(default=None, max_length=255)
 
@@ -70,6 +70,16 @@ class UserLogin(APIBase):
         return value
 
 
+class AuthSetupRead(APIBase):
+    needs_setup: bool
+
+
+class UserCreateAdmin(UserRegister):
+    """管理员创建平台用户；可按需同时授予管理员权限。"""
+
+    is_superuser: bool = False
+
+
 class UserRead(APIBase):
     id: str
     username: str
@@ -105,13 +115,13 @@ class UserUpdateMe(APIBase):
 
 class UpdatePassword(APIBase):
     current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class UserUpdateAdmin(APIBase):
     """管理员编辑某用户：可重置密码、调整管理员标记。"""
 
-    password: str | None = Field(default=None, min_length=1, max_length=128)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
     is_superuser: bool | None = None
 
 
@@ -143,38 +153,6 @@ class PasswordRecoveryRequest(APIBase):
     def _strip_username(cls, value: str) -> str:
         value = value.strip()
         return value
-
-
-class Message(APIBase):
-    message: str
-
-
-class AuthSessionRead(APIBase):
-    id: str
-    created_at: datetime
-    last_seen_at: datetime | None = None
-    expires_at: datetime
-    # 当前请求是否正是本会话（供前端高亮「本机」）
-    current: bool = False
-    user_agent: str | None = None
-    ip_address: str | None = None
-
-
-class PasswordRecoveryRequest(APIBase):
-    """找回密码：按 username 定位账号，发送重置链接（或返回提示）。"""
-
-    username: str = Field(min_length=1, max_length=60)
-
-    @field_validator("username")
-    @classmethod
-    def _strip_username(cls, value: str) -> str:
-        value = value.strip()
-        return value
-
-
-class PasswordReset(APIBase):
-    token: str
-    new_password: str = Field(min_length=1, max_length=128)
 
 
 class Message(APIBase):

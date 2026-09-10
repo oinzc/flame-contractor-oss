@@ -18,8 +18,8 @@ class User(SQLModel, table=True):
     """续火平台账号：一个 User 可管理多个抖音账号(Account)，数据按人隔离。
 
     username 全局唯一（登录标识）；密码使用 pbkdf2 哈希（app/core/security.py）。
-    email/display_name 为可选的资料字段；is_superuser 决定是否是平台管理员
-    （首启种子的 admin 默认为超管，可重设其它用户密码、查看全部平台账号）。
+    email/display_name 为可选的资料字段；is_superuser 决定是否是平台管理员。
+    全新安装的首位用户通过一次性初始化入口创建并成为管理员。
     """
 
     __tablename__ = "user"
