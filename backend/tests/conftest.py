@@ -8,6 +8,8 @@ from app.core.database import build_engine
 from app.core.migrations import run_migrations
 from app.main import create_app
 
+TEST_ADMIN_PASSWORD = "admin123"
+
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
@@ -20,17 +22,37 @@ def settings(tmp_path) -> Settings:
 
 @pytest.fixture(autouse=True)
 def _authed_testclient(monkeypatch):
-    """让所有直接用 `with TestClient(app) as client:` 的测试也自动登录 admin。
+    """让业务测试使用一次性初始化后的管理员会话。
 
-    业务 API 现要求 Bearer token；统一在 TestClient 进入上下文（lifespan 已跑、
-    admin 已种子）后自动带上 admin 的 Authorization 头，避免逐个测试文件手动加。
+    单独验证首启流程的测试可在 app.state.disable_test_auto_auth 置 True 后跳过。
     """
     original_enter = TestClient.__enter__
 
     def patched_enter(self):
         result = original_enter(self)
-        resp = self.post("/api/auth/login", json={"username": "admin", "password": "admin"})
+        if getattr(self.app.state, "disable_test_auto_auth", False):
+            return result
+        setup = self.get("/api/auth/setup")
+        if setup.status_code == 200 and setup.json()["needsSetup"]:
+            resp = self.post(
+                "/api/auth/register",
+                json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
+            )
+        else:
+            resp = self.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": TEST_ADMIN_PASSWORD},
+            )
+            # 部分持久化测试会在应用启动前直接写入无属主业务数据；旧库认领流程
+            # 会使用 Settings 中的兼容密码创建管理员。
+            if resp.status_code == 401:
+                resp = self.post(
+                    "/api/auth/login",
+                    json={"username": "admin", "password": "admin"},
+                )
         if resp.status_code == 200:
+            self.headers["Authorization"] = f"Bearer {resp.json()['token']}"
+        elif resp.status_code == 201:
             self.headers["Authorization"] = f"Bearer {resp.json()['token']}"
         return result
 
@@ -41,7 +63,7 @@ def _authed_testclient(monkeypatch):
 def client(settings) -> Generator[TestClient, None, None]:
     app = create_app(settings)
     with TestClient(app) as test_client:
-        # 依赖 autouse fixture 自动带上 admin token
+        # 依赖 autouse fixture 自动完成首次初始化并带上 admin token
         yield test_client
 
 

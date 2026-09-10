@@ -17,14 +17,16 @@ from .notifications import BarkNotifier
 from .scheduler import Scheduler
 
 
-def seed_default_user(settings: Settings, engine) -> None:
-    """启动时种一个默认平台账号，并把无属主的旧账号/模板回填到该账号。
-
-    User 表为空时创建 admin（本地第一次登录 admin/admin，密码可覆盖）。
-    旧库升级后，此前不含 user_id 的 account / message_template 行会被回填到
-    admin，保证多租户隔离不丢历史数据。
-    """
+def claim_legacy_data(settings: Settings, engine) -> None:
+    """仅为旧库认领无属主数据；全新安装改由页面初始化首位管理员。"""
     with Session(engine) as session:
+        orphan_accounts = session.exec(select(Account).where(Account.user_id.is_(None))).all()
+        orphan_templates = session.exec(
+            select(MessageTemplate).where(MessageTemplate.user_id.is_(None))
+        ).all()
+        if not orphan_accounts and not orphan_templates:
+            return
+
         admin = session.exec(
             select(User).where(User.username == settings.bootstrap_username)
         ).first()
@@ -48,16 +50,9 @@ def seed_default_user(settings: Settings, engine) -> None:
             session.add(admin)
             session.commit()
 
-        # 回填无属主的旧账号/模板到 admin，避免历史数据成为孤儿
-        orphan_accounts = session.exec(
-            select(Account).where(Account.user_id.is_(None))
-        ).all()
         for account in orphan_accounts:
             account.user_id = admin.id
             session.add(account)
-        orphan_templates = session.exec(
-            select(MessageTemplate).where(MessageTemplate.user_id.is_(None))
-        ).all()
         for template in orphan_templates:
             template.user_id = admin.id
             session.add(template)
@@ -81,7 +76,7 @@ def create_app(
         app.state.browser_manager = browser_manager
         app.state.settings = settings
         run_migrations(settings.database_url)
-        seed_default_user(app.state.settings, engine)
+        claim_legacy_data(app.state.settings, engine)
         # 扫描进度写入 SQLite；进程重启后只收束遗留任务，不自动重开浏览器或重复扫描。
         recover_scan_tasks = getattr(browser_manager, "recover_persisted_scan_tasks", None)
         if callable(recover_scan_tasks):

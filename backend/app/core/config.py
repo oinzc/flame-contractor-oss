@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     )
     # 认证：签名 token 的密钥（上线务必用 FLAME_SECRET_KEY 覆盖默认值）
     secret_key: str = "flame-contractor-dev-secret-change-me"
-    # 首启种子平台账号：User 表为空时自动创建（本地第一次登录 admin/admin）
+    # 仅供旧库升级时认领无属主数据；全新安装由页面初始化首位管理员
     bootstrap_username: str = "admin"
     bootstrap_password: str = "admin"
 
