@@ -59,7 +59,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<import('./types').Health>('/health'),
-  authRegister: (input: { username: string; password: string; displayName?: string; email?: string }) =>
+  authSetupStatus: () => request<import('./types').AuthSetupRead>('/api/auth/setup'),
+  authInitialize: (input: { username: string; password: string; displayName?: string }) =>
     request<import('./types').AuthRead>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(input),
@@ -90,6 +91,17 @@ export const api = {
       body: JSON.stringify(input),
     }),
   authListUsers: () => request<import('./types').User[]>('/api/auth/users'),
+  authAdminCreateUser: (input: {
+    username: string
+    password: string
+    displayName?: string
+    email?: string
+    isSuperuser?: boolean
+  }) =>
+    request<import('./types').User>('/api/auth/users', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   authAdminUpdateUser: (id: string, input: { password?: string; isSuperuser?: boolean }) =>
     request<import('./types').User>(`/api/auth/users/${id}`, {
       method: 'PATCH',
