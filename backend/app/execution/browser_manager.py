@@ -1348,6 +1348,18 @@ class BrowserManager:
             and target.platform_conversation_id == conversation_id
         )
 
+    @staticmethod
+    def _spark_label_for_scan_entry(entry: dict) -> str | None:
+        label = entry.get("streak_label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        if entry.get("streak_days") is not None:
+            return None
+        preview = entry.get("preview")
+        if isinstance(preview, str) and "火花" in preview:
+            return preview.strip()[:64]
+        return "无火花"
+
     def _sync_existing_scan_entries(self, account_id: str, entries: list[dict]) -> dict:
         """自动扫描只刷新已有契约对象，绝不把新会话静默导入好友列表。"""
         with Session(self._engine) as session:
@@ -1377,7 +1389,7 @@ class BrowserManager:
                         conversation_status=entry.get("conversation_status") or "not_observed",
                         streak_days=entry.get("streak_days"),
                         spark_kind=entry.get("streak_kind"),
-                        spark_label=entry.get("streak_label"),
+                        spark_label=self._spark_label_for_scan_entry(entry),
                     )
                 )
             if not items:

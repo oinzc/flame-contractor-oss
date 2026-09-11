@@ -10,6 +10,7 @@ import type {
   TargetBatchResult,
 } from '../types'
 import { formatDateTime } from '../lib/format'
+import { sparkLabelForSnapshot } from '../lib/spark'
 import SparkBadge from './SparkBadge'
 import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
 
@@ -97,6 +98,8 @@ export default function TargetsPage({
   const [selectedEntries, setSelectedEntries] = useState<Map<string, ScanChatEntry>>(new Map())
   const [scanQuery, setScanQuery] = useState('')
   const [showNoStreak, setShowNoStreak] = useState(false)
+  const [deletingNoSpark, setDeletingNoSpark] = useState(false)
+  const [dismissedNoSparkTaskId, setDismissedNoSparkTaskId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -189,6 +192,22 @@ export default function TargetsPage({
     if (q && !entry.title.toLowerCase().includes(q)) return false
     return true
   })
+  const existingNoSparkTargets =
+    selectedScanTask?.status === 'completed' && selectedScanTask.syncStatus === 'done'
+      ? accountTargets.filter(
+          (target) =>
+            target.conversationType !== 'group' &&
+            (visibleScanEntries ?? []).some(
+              (entry) =>
+                entry.conversationType !== 'group' &&
+                !isStreakTarget(entry) &&
+                scanEntryMatchesTarget(entry, target),
+            ),
+        )
+      : []
+  const showNoSparkReminder =
+    existingNoSparkTargets.length > 0 &&
+    dismissedNoSparkTaskId !== selectedScanTask?.taskId
 
   async function handleDelete(target: ContractTarget) {
     if (
@@ -252,6 +271,36 @@ export default function TargetsPage({
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : `${verb}失败，请重试`)
     }
+  }
+
+  async function handleDeleteNoSparkTargets() {
+    if (existingNoSparkTargets.length === 0) return
+    const names = existingNoSparkTargets.map((target) => target.nicknameSnapshot).join('、')
+    if (
+      !window.confirm(
+        `确定删除本次扫描确认无火花的好友？\n\n${names}\n\n删除后将停止后续续火，并从好友列表隐藏；历史任务仍会保留，再次扫描导入时可以恢复。`,
+      )
+    ) {
+      return
+    }
+
+    setDeletingNoSpark(true)
+    setActionError(null)
+    const failed: string[] = []
+    for (const target of existingNoSparkTargets) {
+      try {
+        await api.deleteTarget(target.id)
+      } catch {
+        failed.push(target.nicknameSnapshot)
+      }
+    }
+    setDeletingNoSpark(false)
+    onChanged()
+    if (failed.length > 0) {
+      setActionError(`以下好友删除失败，请重试：${failed.join('、')}`)
+      return
+    }
+    setDismissedNoSparkTaskId(selectedScanTask?.taskId ?? null)
   }
 
   // 群聊识别（真机侦察结论）：标题带「已满/人数」括号；最后一条消息带「成员名：」前缀
@@ -327,7 +376,7 @@ export default function TargetsPage({
           streakDays: entry.streakDays ?? undefined,
           // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
           sparkKind: entry.streakKind,
-          sparkLabel: entry.streakLabel,
+          sparkLabel: sparkLabelForSnapshot(entry),
         })),
       })
       setBatchResult(result)
@@ -540,7 +589,7 @@ export default function TargetsPage({
                             >
                               校准
                             </button>
-                            {target.sparkLabel && target.sparkScannedAt && (
+                            {target.sparkScannedAt && (
                               <span className="spark-scan-note">
                                 抖音扫描于 {formatDateTime(target.sparkScannedAt)}
                               </span>
@@ -710,6 +759,43 @@ export default function TargetsPage({
                       <div>🛑 群聊同名冲突，未绑定 {batchResult.conversationAmbiguous.length} 个：{batchResult.conversationAmbiguous.join('、')}</div>
                     )}
                   </div>
+                )}
+                {showNoSparkReminder && (
+                  <section className="no-spark-review" role="alert" aria-live="polite">
+                    <div className="no-spark-review-copy">
+                      <span className="badge crimson">熄火复核 · {existingNoSparkTargets.length}</span>
+                      <strong>这些好友已在续火列表中，但本次扫描没有检测到官方火花。</strong>
+                      <p>
+                        {existingNoSparkTargets
+                          .map(
+                            (target) =>
+                              `${target.nicknameSnapshot}（本地历史 ${target.streakDays} 天）`,
+                          )
+                          .join('、')}
+                      </p>
+                      <small>没有火花通常无需继续续火。删除只会隐藏好友并停止后续发送，历史任务仍会保留。</small>
+                    </div>
+                    <div className="no-spark-review-actions">
+                      <button
+                        className="btn ghost small"
+                        type="button"
+                        disabled={deletingNoSpark}
+                        onClick={() => setDismissedNoSparkTaskId(selectedScanTask?.taskId ?? null)}
+                      >
+                        暂时保留
+                      </button>
+                      <button
+                        className="btn small no-spark-delete"
+                        type="button"
+                        disabled={deletingNoSpark}
+                        onClick={() => void handleDeleteNoSparkTargets()}
+                      >
+                        {deletingNoSpark
+                          ? '正在删除…'
+                          : `删除这些好友（${existingNoSparkTargets.length}）`}
+                      </button>
+                    </div>
+                  </section>
                 )}
                 {visibleScanEntries !== null && (
                   <div className="scan-pick-results" style={{ display: 'grid', gap: 8 }}>
