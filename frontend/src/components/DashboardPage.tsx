@@ -86,7 +86,7 @@ export default function DashboardPage({
     ATTENTION_ACCOUNT_STATUSES.includes(account.status),
   )
   const sparkDaysForDisplay = (target: (typeof targets)[number]) =>
-    target.sparkLabel === '无火花' ? 0 : target.sparkDays ?? target.streakDays
+    target.sparkLabel === '无火花' ? 0 : target.sparkDays ?? 0
   const rankedTargets = [...targets].sort(
     (a, b) => sparkDaysForDisplay(b) - sparkDaysForDisplay(a),
   )
@@ -388,7 +388,6 @@ export default function DashboardPage({
                 </span>
                 <span className="days">
                   <SparkBadge
-                    days={target.streakDays}
                     officialDays={target.sparkDays}
                     kind={target.sparkKind}
                     label={target.sparkLabel}

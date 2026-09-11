@@ -273,6 +273,14 @@ password, cookie, token, storageState, profilePath
 
 查询契约对象时，响应还包含 `sparkDays`、`sparkKind`、`sparkLabel`、`sparkScannedAt` 四个官方火花状态快照字段；它们只用于展示最近一次会话扫描结果，不参与发送决策。`streakDays` 仍是本地累计值，不能与 `sparkDays` 混用。
 
+### 5.3 局部更新契约对象
+
+- **请求 URL**：`/targets/{id}`
+- **请求方式**：PATCH
+- 可更新 `enabled`、`templateId`、`sendTimeHhmm`，以及官方展示快照 `sparkDays`/`sparkLabel`。
+- `sparkDays` 与 `sparkLabel` 互斥；提交任一官方状态字段时会刷新 `sparkScannedAt`，且绝不改写本地 `streakDays`。
+- `streakDays` 不接受通过 PATCH 手动校准；本地累计只由初始导入和已确认发送业务维护。
+
 ## 6. 模板接口
 
 ### 6.1 查询模板
@@ -518,8 +526,8 @@ password, cookie, token, storageState, profilePath
 ## CRUD 补齐与好友导入（2026-08-30 深夜）
 
 ### 好友（/api/targets）
-- `PATCH /api/targets/{id}`：开放 `enabled`（暂停/启用，删除被任务引用时的兜底）与
-  `templateId`（换绑模板，`null`=解绑，模板不存在 404）。
+- `PATCH /api/targets/{id}`：开放 `enabled`、`templateId`（`null`=解绑）、`sendTimeHhmm`，以及互斥的
+  `sparkDays`/`sparkLabel` 官方快照校准；不接受 `streakDays`，手动校准不会改写本地累计。
 - `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, platformUserId?, platformHandle?, platformConversationId?, conversationType?, identityStatus?, conversationStatus?, streakDays?, sparkDays?, sparkKind?, sparkLabel?}]`（≤200 条），
   逐条独立提交：新好友进 `created`、普通重名进 `duplicates`、单条失败进 `failed`，不中断整批；
   携带官方状态字段的已有好友更新官方快照并进 `refreshed`，不改写本地 `streakDays`。

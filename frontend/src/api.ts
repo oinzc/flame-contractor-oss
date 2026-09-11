@@ -130,7 +130,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  patchTarget: (id: string, patch: { streakDays?: number; enabled?: boolean; templateId?: string | null; sendTimeHhmm?: string | null }) =>
+  patchTarget: (id: string, patch: { sparkDays?: number | null; sparkLabel?: string | null; enabled?: boolean; templateId?: string | null; sendTimeHhmm?: string | null }) =>
     request<import('./types').ContractTarget>(`/api/targets/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
