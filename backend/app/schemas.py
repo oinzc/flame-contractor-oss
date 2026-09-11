@@ -677,6 +677,51 @@ class ScanChatsRead(APIBase):
     entries: list[ScanChatItem] = []
 
 
+ReconciliationCategory = Literal[
+    "changed",
+    "no_spark",
+    "new",
+    "not_observed",
+    "unchanged",
+]
+
+
+class ScanOfficialStateRead(APIBase):
+    """Official spark state at one side of a reconciliation comparison."""
+
+    days: int | None = None
+    kind: str | None = None
+    label: str | None = None
+    # Only previous snapshots normally carry this value; keeping it optional
+    # makes the shape safe for both sides and for old persisted records.
+    scanned_at: datetime | None = None
+
+
+class ScanReconciliationCountsRead(APIBase):
+    changed: int = Field(default=0, ge=0)
+    no_spark: int = Field(default=0, ge=0)
+    new: int = Field(default=0, ge=0)
+    not_observed: int = Field(default=0, ge=0)
+    unchanged: int = Field(default=0, ge=0)
+
+
+class ScanReconciliationItemRead(APIBase):
+    target_id: str | None = None
+    title: str
+    conversation_type: ConversationType | None = None
+    category: ReconciliationCategory
+    previous: ScanOfficialStateRead
+    current: ScanOfficialStateRead
+
+
+class ScanReconciliationRead(APIBase):
+    schema_version: int | None = None
+    counts: ScanReconciliationCountsRead = Field(
+        default_factory=ScanReconciliationCountsRead
+    )
+    entries: list[ScanReconciliationItemRead] = Field(default_factory=list)
+
+
 class ScanProgressRead(APIBase):
     """后台会话扫描进度；滚动到底前 total 未知，不伪造百分比。"""
 
@@ -693,8 +738,29 @@ class ScanProgressRead(APIBase):
     overall: Literal["ok", "auth_expired", "error"] | None = None
     detail: str | None = None
     entries: list[ScanChatItem] = []
+    reconciliation: ScanReconciliationRead = Field(
+        default_factory=ScanReconciliationRead
+    )
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class ScanHistoryRead(APIBase):
+    """轻量扫描历史；刻意不包含完整 entries_json。"""
+
+    task_id: str
+    account_id: str
+    source: Literal["manual", "automatic"] = "manual"
+    status: Literal["running", "completed", "failed", "interrupted", "cancelled"]
+    total: int | None = None
+    completed: int = 0
+    overall: Literal["ok", "auth_expired", "error"] | None = None
+    detail: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    reconciliation: ScanReconciliationRead = Field(
+        default_factory=ScanReconciliationRead
+    )
 
 
 class IdentityHydrationStart(APIBase):
