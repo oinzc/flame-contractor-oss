@@ -83,7 +83,7 @@ app/
 - `platform_user_id` 获得后用于稳定身份匹配；
 - 昵称是可变的展示快照和无稳定 ID 时的导入回退键，不作为发送身份确认的唯一依据；
 - 数据库同时约束 `(account_id, nickname_snapshot)` 与 `(account_id, platform_user_id)`，后者对非空稳定 ID 生效，防止同一账号重复绑定；
-- 会话扫描可回填稳定 ID、更新昵称快照和官方火花展示快照，但官方火花天数不参与发送决策。
+- 会话扫描可回填稳定 ID、更新昵称快照和官方火花展示快照；`spark_days` 保存官方数字快照，`streak_days` 仍是本地累计值，官方火花天数不参与发送决策。
 
 ### 4.3 MessageTemplate
 

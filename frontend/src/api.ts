@@ -149,6 +149,7 @@ export const api = {
       identityStatus?: 'bound' | 'ambiguous' | 'not_observed'
       conversationStatus?: 'bound' | 'ambiguous' | 'not_observed'
       streakDays?: number
+      sparkDays?: number | null
       sparkKind?: string | null
       sparkLabel?: string | null
     }[]

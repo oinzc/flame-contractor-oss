@@ -85,8 +85,12 @@ export default function DashboardPage({
   const attentionAccounts = summary.accounts.filter((account) =>
     ATTENTION_ACCOUNT_STATUSES.includes(account.status),
   )
-  const rankedTargets = [...targets].sort((a, b) => b.streakDays - a.streakDays)
-  const maxStreak = Math.max(1, ...targets.map((target) => target.streakDays))
+  const sparkDaysForDisplay = (target: (typeof targets)[number]) =>
+    target.sparkLabel === '无火花' ? 0 : target.sparkDays ?? target.streakDays
+  const rankedTargets = [...targets].sort(
+    (a, b) => sparkDaysForDisplay(b) - sparkDaysForDisplay(a),
+  )
+  const maxStreak = Math.max(1, ...targets.map(sparkDaysForDisplay))
 
   // 账号设了固定发送时刻时不再渲染「随机窗口」band，只保留到点计划点，避免重复显示
   const scheduleBands = summary.accounts
@@ -379,12 +383,13 @@ export default function DashboardPage({
                 <span className="streak-bar-track">
                   <span
                     className="streak-bar"
-                    style={{ width: `${(target.streakDays / maxStreak) * 100}%` }}
+                    style={{ width: `${(sparkDaysForDisplay(target) / maxStreak) * 100}%` }}
                   />
                 </span>
                 <span className="days">
                   <SparkBadge
                     days={target.streakDays}
+                    officialDays={target.sparkDays}
                     kind={target.sparkKind}
                     label={target.sparkLabel}
                     scannedAt={target.sparkScannedAt}
