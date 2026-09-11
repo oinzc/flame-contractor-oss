@@ -483,8 +483,8 @@ def test_delete_target_revive_on_re_add(client):
     assert [item["id"] for item in listing] == [target["id"]]
 
 
-def test_patch_target_streak(client):
-    """火花天数手动校准：只改 streakDays，其余字段不变。"""
+def test_patch_target_official_spark_status(client):
+    """手动校准只改官方火花快照，不允许改写本地累计。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
     target = client.post(
         "/api/targets",
@@ -492,19 +492,42 @@ def test_patch_target_streak(client):
     ).json()
 
     updated = client.patch(
-        f"/api/targets/{target['id']}", json={"streakDays": 12}
+        f"/api/targets/{target['id']}", json={"sparkDays": 12, "sparkLabel": None}
     )
     assert updated.status_code == 200, updated.text
     body = updated.json()
-    assert body["streakDays"] == 12
+    assert body["sparkDays"] == 12
+    assert body["sparkLabel"] is None
+    assert body["sparkScannedAt"] is not None
+    assert body["streakDays"] == 3
     assert body["nicknameSnapshot"] == "好友A"  # 其它字段不变
 
-    missing = client.patch("/api/targets/not-a-real-id", json={"streakDays": 5})
+    special = client.patch(
+        f"/api/targets/{target['id']}",
+        json={"sparkDays": None, "sparkLabel": "重燃中 1/3"},
+    )
+    assert special.status_code == 200, special.text
+    assert special.json()["sparkDays"] is None
+    assert special.json()["sparkLabel"] == "重燃中 1/3"
+    assert special.json()["streakDays"] == 3
+
+    missing = client.patch("/api/targets/not-a-real-id", json={"sparkDays": 5})
     assert missing.status_code == 404
 
     # 负数被 422 拒绝
-    negative = client.patch(f"/api/targets/{target['id']}", json={"streakDays": -1})
+    negative = client.patch(f"/api/targets/{target['id']}", json={"sparkDays": -1})
     assert negative.status_code == 422
+
+    conflicting = client.patch(
+        f"/api/targets/{target['id']}",
+        json={"sparkDays": 12, "sparkLabel": "无火花"},
+    )
+    assert conflicting.status_code == 422
+
+    local_streak = client.patch(
+        f"/api/targets/{target['id']}", json={"streakDays": 99}
+    )
+    assert local_streak.status_code == 422
 
 
 def test_patch_target_enabled(client):

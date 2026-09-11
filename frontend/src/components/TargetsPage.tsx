@@ -12,6 +12,7 @@ import type {
 import { formatDateTime } from '../lib/format'
 import { sparkLabelForSnapshot } from '../lib/spark'
 import SparkBadge from './SparkBadge'
+import OfficialSparkCalibrationModal from './OfficialSparkCalibrationModal'
 import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
 
 interface Props {
@@ -100,6 +101,7 @@ export default function TargetsPage({
   const [showNoStreak, setShowNoStreak] = useState(false)
   const [deletingNoSpark, setDeletingNoSpark] = useState(false)
   const [dismissedNoSparkTaskId, setDismissedNoSparkTaskId] = useState<string | null>(null)
+  const [sparkCalibrationTarget, setSparkCalibrationTarget] = useState<ContractTarget | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -223,22 +225,6 @@ export default function TargetsPage({
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '删除失败，请重试')
-    }
-  }
-
-  async function handleAdjustStreak(target: ContractTarget) {
-    const input = window.prompt(
-      `校准好友「${target.nicknameSnapshot}」的火花天数（本地记录，非抖音实时值）：`,
-      String(target.streakDays),
-    )
-    if (input === null) return
-    const value = Math.max(0, Number.parseInt(input, 10) || 0)
-    setActionError(null)
-    try {
-      await api.patchTarget(target.id, { streakDays: value })
-      onChanged()
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : '校准失败，请重试')
     }
   }
 
@@ -516,7 +502,7 @@ export default function TargetsPage({
                       <th>昵称</th>
                       <th>平台身份</th>
                       <th>模板</th>
-                      <th>火花状态</th>
+                      <th>抖音官方状态</th>
                       <th>上次确认发送</th>
                       <th>操作</th>
                     </tr>
@@ -578,7 +564,6 @@ export default function TargetsPage({
                         <td>
                           <div className="target-spark-cell">
                             <SparkBadge
-                              days={target.streakDays}
                               officialDays={target.sparkDays}
                               kind={target.sparkKind}
                               label={target.sparkLabel}
@@ -587,13 +572,14 @@ export default function TargetsPage({
                             <button
                               className="btn ghost small"
                               type="button"
-                              onClick={() => handleAdjustStreak(target)}
+                              onClick={() => setSparkCalibrationTarget(target)}
+                              title="只修正抖音官方状态快照，不改本地累计"
                             >
-                              校准
+                              校准官方
                             </button>
                             {target.sparkScannedAt && (
                               <span className="spark-scan-note">
-                                抖音扫描于 {formatDateTime(target.sparkScannedAt)}
+                                官方状态更新于 {formatDateTime(target.sparkScannedAt)}
                               </span>
                             )}
                           </div>
@@ -868,7 +854,7 @@ export default function TargetsPage({
                               <span className="pick-meta">
                                 {isStreakTarget(entry) && (
                                   <SparkBadge
-                                    days={entry.streakDays}
+                                    officialDays={entry.streakDays}
                                     kind={entry.streakKind}
                                     label={entry.streakLabel}
                                   />
@@ -976,7 +962,7 @@ export default function TargetsPage({
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="target-streak">火花天数</label>
+                  <label htmlFor="target-streak">本地初始累计（仅新建）</label>
                   <input
                     id="target-streak"
                     type="number"
@@ -994,6 +980,17 @@ export default function TargetsPage({
               </div>
             </form>
           </section>
+          {sparkCalibrationTarget && (
+            <OfficialSparkCalibrationModal
+              target={sparkCalibrationTarget}
+              onClose={() => setSparkCalibrationTarget(null)}
+              onSubmit={async (patch) => {
+                await api.patchTarget(sparkCalibrationTarget.id, patch)
+                setSparkCalibrationTarget(null)
+                await onChanged()
+              }}
+            />
+          )}
         </>
       )}
     </div>

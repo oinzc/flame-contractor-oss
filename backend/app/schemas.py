@@ -398,12 +398,27 @@ class TargetCreate(APIBase):
 
 
 class TargetPatch(APIBase):
-    """局部更新契约对象。开放火花天数校准、启停、换绑模板与精确发送时刻（None=解绑）。"""
+    """局部更新契约对象。开放官方火花快照校准、启停、换绑模板与精确发送时刻。"""
 
-    streak_days: int | None = Field(default=None, ge=0)
+    spark_days: int | None = Field(default=None, ge=0)
+    spark_label: str | None = Field(default=None, max_length=64)
     enabled: bool | None = None
     template_id: str | None = None
     send_time_hhmm: str | None = Field(default=None, pattern=TIME_RE.pattern)
+
+    @field_validator("spark_label")
+    @classmethod
+    def _strip_spark_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @model_validator(mode="after")
+    def _validate_spark_snapshot(self):
+        if self.spark_days is not None and self.spark_label is not None:
+            raise ValueError("sparkDays 与 sparkLabel 不能同时填写")
+        return self
 
     @field_validator("send_time_hhmm")
     @classmethod
