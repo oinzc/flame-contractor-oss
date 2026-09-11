@@ -12,7 +12,6 @@ import type {
 import { formatDateTime } from '../lib/format'
 import { sparkLabelForSnapshot } from '../lib/spark'
 import SparkBadge from './SparkBadge'
-import OfficialSparkCalibrationModal from './OfficialSparkCalibrationModal'
 import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
 
 interface Props {
@@ -101,7 +100,6 @@ export default function TargetsPage({
   const [showNoStreak, setShowNoStreak] = useState(false)
   const [deletingNoSpark, setDeletingNoSpark] = useState(false)
   const [dismissedNoSparkTaskId, setDismissedNoSparkTaskId] = useState<string | null>(null)
-  const [sparkCalibrationTarget, setSparkCalibrationTarget] = useState<ContractTarget | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -569,14 +567,6 @@ export default function TargetsPage({
                               label={target.sparkLabel}
                               scannedAt={target.sparkScannedAt}
                             />
-                            <button
-                              className="btn ghost small"
-                              type="button"
-                              onClick={() => setSparkCalibrationTarget(target)}
-                              title="只修正抖音官方状态快照，不改本地累计"
-                            >
-                              校准官方
-                            </button>
                             {target.sparkScannedAt && (
                               <span className="spark-scan-note">
                                 官方状态更新于 {formatDateTime(target.sparkScannedAt)}
@@ -640,7 +630,7 @@ export default function TargetsPage({
                 title={
                   selectedAccount?.status !== 'healthy'
                     ? '账号需先扫码登录才能扫描会话列表'
-                    : '后台滚动加载整个会话列表；完成后自动刷新已有好友/群聊的官方状态，下方仅需勾选新对象（约需 1–2 分钟）'
+                    : '读取抖音会话列表并自动刷新已有好友/群聊的官方火花状态；只读页面，不发送消息（约需 1–2 分钟）'
                 }
                 onClick={() => void handleScan()}
               >
@@ -650,7 +640,7 @@ export default function TargetsPage({
                     : selectedScanTask?.status === 'running'
                       ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
                       : '其他账号扫描中…'
-                  : '扫描会话列表'}
+                  : '扫描并刷新官方状态'}
               </button>
             </div>
             <p className="scan-helper">
@@ -980,17 +970,6 @@ export default function TargetsPage({
               </div>
             </form>
           </section>
-          {sparkCalibrationTarget && (
-            <OfficialSparkCalibrationModal
-              target={sparkCalibrationTarget}
-              onClose={() => setSparkCalibrationTarget(null)}
-              onSubmit={async (patch) => {
-                await api.patchTarget(sparkCalibrationTarget.id, patch)
-                setSparkCalibrationTarget(null)
-                await onChanged()
-              }}
-            />
-          )}
         </>
       )}
     </div>

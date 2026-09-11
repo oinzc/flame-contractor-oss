@@ -483,55 +483,31 @@ def test_delete_target_revive_on_re_add(client):
     assert [item["id"] for item in listing] == [target["id"]]
 
 
-def test_patch_target_official_spark_status(client):
-    """手动校准只改官方火花快照，不允许改写本地累计。"""
+def test_patch_target_rejects_manual_spark_calibration(client):
+    """官方火花快照只能由扫描同步，PATCH 不接受官方或本地累计字段。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
     target = client.post(
         "/api/targets",
         json={"accountId": account["id"], "nicknameSnapshot": "好友A", "streakDays": 3},
     ).json()
 
-    updated = client.patch(
-        f"/api/targets/{target['id']}", json={"sparkDays": 12, "sparkLabel": None}
-    )
-    assert updated.status_code == 200, updated.text
-    body = updated.json()
-    assert body["sparkDays"] == 12
-    assert body["sparkLabel"] is None
-    assert body["sparkScannedAt"] is not None
-    assert body["streakDays"] == 3
-    assert body["nicknameSnapshot"] == "好友A"  # 其它字段不变
+    for payload in (
+        {"sparkDays": 12},
+        {"sparkLabel": "无火花"},
+        {"streakDays": 99},
+    ):
+        response = client.patch(f"/api/targets/{target['id']}", json=payload)
+        assert response.status_code == 422, response.text
 
-    special = client.patch(
-        f"/api/targets/{target['id']}",
-        json={"sparkDays": None, "sparkLabel": "重燃中 1/3"},
-    )
-    assert special.status_code == 200, special.text
-    assert special.json()["sparkDays"] is None
-    assert special.json()["sparkLabel"] == "重燃中 1/3"
-    assert special.json()["streakDays"] == 3
-
-    missing = client.patch("/api/targets/not-a-real-id", json={"sparkDays": 5})
-    assert missing.status_code == 404
-
-    # 负数被 422 拒绝
-    negative = client.patch(f"/api/targets/{target['id']}", json={"sparkDays": -1})
-    assert negative.status_code == 422
-
-    conflicting = client.patch(
-        f"/api/targets/{target['id']}",
-        json={"sparkDays": 12, "sparkLabel": "无火花"},
-    )
-    assert conflicting.status_code == 422
-
-    local_streak = client.patch(
-        f"/api/targets/{target['id']}", json={"streakDays": 99}
-    )
-    assert local_streak.status_code == 422
+    unchanged = client.get("/api/targets", params={"accountId": account["id"]}).json()[0]
+    assert unchanged["sparkDays"] is None
+    assert unchanged["sparkLabel"] is None
+    assert unchanged["sparkScannedAt"] is None
+    assert unchanged["streakDays"] == 3
 
 
 def test_patch_target_enabled(client):
-    """启停好友：暂停后 enabled=False，可再启用；与火花校准互不影响。"""
+    """启停好友：暂停后 enabled=False，可再启用。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()
     target = client.post(
         "/api/targets",
