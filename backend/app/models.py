@@ -240,6 +240,7 @@ class ContractTarget(SQLModel, table=True):
     # 好友级精确发送时刻（HH:MM，账号本地时间）；为空=跟随账号（账号精确时刻或窗口随机）
     send_time_hhmm: str | None = Field(default=None, max_length=5)
     # 抖音会话列表最近一次扫描到的官方火花状态；仅用于展示，不参与发送决策。
+    spark_days: int | None = Field(default=None, ge=0)
     spark_kind: str | None = Field(default=None, max_length=16)
     spark_label: str | None = Field(default=None, max_length=64)
     spark_scanned_at: datetime | None = None

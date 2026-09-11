@@ -609,6 +609,10 @@ def create_targets_batch(
         conversation_type = item.conversation_type or (
             "group" if platform_conversation_id else None
         )
+        has_spark_snapshot = any(
+            field in item.model_fields_set
+            for field in ("spark_days", "spark_kind", "spark_label")
+        )
         existing = (
             session.exec(
                 select(ContractTarget).where(
@@ -694,19 +698,29 @@ def create_targets_batch(
                 existing.nickname_snapshot = nickname
             if revived:
                 track_identity(item, nickname, platform_user_id, platform_conversation_id)
+                if has_spark_snapshot:
+                    now = utc_now()
+                    existing.spark_days = item.spark_days
+                    existing.spark_kind = item.spark_kind
+                    existing.spark_label = item.spark_label
+                    existing.spark_scanned_at = now
+                    existing.updated_at = now
+                    session.add(existing)
+                    session.commit()
                 continue
             # 扫描导入可以刷新已有好友的官方徽标快照；本地累计天数保持不变。
             if (
                 platform_user_id
                 or platform_handle
                 or platform_conversation_id
-                or "spark_kind" in item.model_fields_set
-                or "spark_label" in item.model_fields_set
+                or has_spark_snapshot
             ):
                 now = utc_now()
-                existing.spark_kind = item.spark_kind
-                existing.spark_label = item.spark_label
-                existing.spark_scanned_at = now
+                if has_spark_snapshot:
+                    existing.spark_days = item.spark_days
+                    existing.spark_kind = item.spark_kind
+                    existing.spark_label = item.spark_label
+                    existing.spark_scanned_at = now
                 existing.updated_at = now
                 session.add(existing)
                 session.commit()
@@ -718,7 +732,7 @@ def create_targets_batch(
         try:
             scanned_at = (
                 utc_now()
-                if "spark_kind" in item.model_fields_set or "spark_label" in item.model_fields_set
+                if has_spark_snapshot
                 else None
             )
             session.add(
@@ -732,6 +746,7 @@ def create_targets_batch(
                     template_id=payload.template_id,
                     # 扫描读到的官方火花天数作为初始值；之后仍走本地累计
                     streak_days=item.streak_days or 0,
+                    spark_days=item.spark_days,
                     spark_kind=item.spark_kind,
                     spark_label=item.spark_label,
                     spark_scanned_at=scanned_at,

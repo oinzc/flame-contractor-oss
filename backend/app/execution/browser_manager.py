@@ -1388,6 +1388,7 @@ class BrowserManager:
                         identity_status=entry.get("identity_status") or "not_observed",
                         conversation_status=entry.get("conversation_status") or "not_observed",
                         streak_days=entry.get("streak_days"),
+                        spark_days=entry.get("streak_days"),
                         spark_kind=entry.get("streak_kind"),
                         spark_label=self._spark_label_for_scan_entry(entry),
                     )

@@ -428,6 +428,8 @@ class BatchTargetItem(APIBase):
     conversation_status: IdentityStatus | None = None
     # 扫描读到的抖音官方火花天数：导入时回填为初始值（之后仍本地累计）
     streak_days: int | None = Field(default=None, ge=0)
+    # 扫描读到的抖音官方数字火花天数；只作为展示快照，不覆盖本地 streak_days
+    spark_days: int | None = Field(default=None, ge=0)
     # 扫描读到的抖音官方状态：只作为展示快照，不覆盖本地 streak_days
     spark_kind: str | None = Field(default=None, max_length=16)
     spark_label: str | None = Field(default=None, max_length=64)
@@ -482,6 +484,7 @@ class TargetBatchCreate(APIBase):
             for field in (
                 "spark_kind",
                 "spark_label",
+                "spark_days",
                 "identity_status",
                 "conversation_status",
             ):
@@ -521,6 +524,7 @@ class TargetRead(APIBase):
     enabled: bool
     # 好友级精确发送时刻（HH:MM）；为空=跟随账号
     send_time_hhmm: str | None
+    spark_days: int | None
     spark_kind: str | None
     spark_label: str | None
     spark_scanned_at: datetime | None

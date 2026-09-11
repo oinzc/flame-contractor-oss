@@ -374,6 +374,7 @@ export default function TargetsPage({
           identityStatus: entry.identityStatus,
           conversationStatus: entry.conversationStatus,
           streakDays: entry.streakDays ?? undefined,
+          sparkDays: entry.streakDays,
           // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
           sparkKind: entry.streakKind,
           sparkLabel: sparkLabelForSnapshot(entry),
@@ -578,6 +579,7 @@ export default function TargetsPage({
                           <div className="target-spark-cell">
                             <SparkBadge
                               days={target.streakDays}
+                              officialDays={target.sparkDays}
                               kind={target.sparkKind}
                               label={target.sparkLabel}
                               scannedAt={target.sparkScannedAt}

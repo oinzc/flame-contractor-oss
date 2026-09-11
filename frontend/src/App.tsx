@@ -581,6 +581,7 @@ export default function App() {
             identityStatus: entry.identityStatus,
             conversationStatus: entry.conversationStatus,
             streakDays: entry.streakDays ?? undefined,
+            sparkDays: entry.streakDays,
             sparkKind: entry.streakKind,
             sparkLabel: sparkLabelForSnapshot(entry),
           })),

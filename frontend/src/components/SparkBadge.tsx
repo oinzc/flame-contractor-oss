@@ -3,6 +3,7 @@ import { formatDateTime } from '../lib/format'
 
 export interface SparkBadgeProps {
   days: number | null
+  officialDays?: number | null
   kind?: string | null
   label?: string | null
   scannedAt?: string | null
@@ -22,11 +23,12 @@ function glyphFor(label: string | null): string {
 }
 
 /**
- * 统一展示本地火花天数与抖音官方状态。
- * 官方 label 优先，但永远不会覆盖本地 streakDays 的业务值。
+ * 统一展示抖音官方火花状态；没有官方数字快照时才回退到本地累计值。
+ * 本地 streakDays 仍保留给发送模板和业务规则，不被扫描覆盖。
  */
 export default function SparkBadge({
   days,
+  officialDays = null,
   kind,
   label,
   scannedAt,
@@ -35,7 +37,8 @@ export default function SparkBadge({
 }: SparkBadgeProps) {
   const officialLabel = label?.trim() || null
   const observedNoSpark = officialLabel === '无火花'
-  const text = officialLabel ?? (days == null ? null : `${days}天`)
+  const displayDays = officialDays ?? days
+  const text = officialLabel ?? (displayDays == null ? null : `${displayDays}天`)
   if (text === null) return null
 
   const tone = observedNoSpark ? 'crimson' : toneFor(kind, officialLabel)
@@ -43,7 +46,9 @@ export default function SparkBadge({
     ? `抖音官方状态：未检测到火花 · 扫描于 ${formatDateTime(scannedAt ?? null)}${days == null ? '' : ` · 本地累计记录 ${days} 天（仅历史）`}`
     : officialLabel
       ? `抖音官方状态：${officialLabel}${scannedAt ? ` · 扫描于 ${formatDateTime(scannedAt)}` : ''}`
-      : `本地累计火花：${days}天`
+      : officialDays != null
+        ? `抖音官方状态：${officialDays} 天${scannedAt ? ` · 扫描于 ${formatDateTime(scannedAt)}` : ''}${days == null ? '' : ` · 本地累计记录 ${days} 天（仅用于发送模板）`}`
+        : `本地累计火花：${days}天${scannedAt ? ' · 官方数字待下次扫描' : ''}`
 
   return (
     <span className={`badge ${tone} spark-badge ${className}`.trim()} title={title}>

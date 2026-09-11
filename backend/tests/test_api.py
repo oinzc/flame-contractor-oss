@@ -853,6 +853,7 @@ def test_batch_target_persists_and_refreshes_official_spark_state(client):
                 {
                     "nickname": "已有好友",
                     "streakDays": 999,
+                    "sparkDays": 105,
                     "sparkKind": "normal",
                     "sparkLabel": "6 天后消失",
                 }
@@ -867,5 +868,32 @@ def test_batch_target_persists_and_refreshes_official_spark_state(client):
     updated = client.get("/api/targets", params={"accountId": account["id"]}).json()
     existing_after = next(item for item in updated if item["id"] == existing["id"])
     assert existing_after["streakDays"] == 42
+    assert existing_after["sparkDays"] == 105
     assert existing_after["sparkLabel"] == "6 天后消失"
     assert existing_after["sparkScannedAt"] is not None
+
+    cleared = client.post(
+        "/api/targets/batch",
+        json={
+            "accountId": account["id"],
+            "items": [
+                {
+                    "nickname": "已有好友",
+                    "sparkDays": None,
+                    "sparkKind": None,
+                    "sparkLabel": "无火花",
+                }
+            ],
+        },
+    )
+    assert cleared.status_code == 201, cleared.text
+    assert cleared.json()["refreshed"] == ["已有好友"]
+
+    cleared_target = next(
+        item
+        for item in client.get("/api/targets", params={"accountId": account["id"]}).json()
+        if item["id"] == existing["id"]
+    )
+    assert cleared_target["streakDays"] == 42
+    assert cleared_target["sparkDays"] is None
+    assert cleared_target["sparkLabel"] == "无火花"

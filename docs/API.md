@@ -271,7 +271,7 @@ password, cookie, token, storageState, profilePath
 
 账号不存在、模板不存在返回 404；同账号昵称或同一稳定身份重复返回 409。用户身份和群会话身份不能混填。
 
-查询契约对象时，响应还包含 `sparkKind`、`sparkLabel`、`sparkScannedAt` 三个官方火花状态快照字段；它们只用于展示最近一次会话扫描结果，不参与发送决策。
+查询契约对象时，响应还包含 `sparkDays`、`sparkKind`、`sparkLabel`、`sparkScannedAt` 四个官方火花状态快照字段；它们只用于展示最近一次会话扫描结果，不参与发送决策。`streakDays` 仍是本地累计值，不能与 `sparkDays` 混用。
 
 ## 6. 模板接口
 
@@ -520,14 +520,14 @@ password, cookie, token, storageState, profilePath
 ### 好友（/api/targets）
 - `PATCH /api/targets/{id}`：开放 `enabled`（暂停/启用，删除被任务引用时的兜底）与
   `templateId`（换绑模板，`null`=解绑，模板不存在 404）。
-- `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, platformUserId?, platformHandle?, platformConversationId?, conversationType?, identityStatus?, conversationStatus?, streakDays?, sparkKind?, sparkLabel?}]`（≤200 条），
+- `POST /api/targets/batch`：批量导入/刷新。`items: [{nickname, platformUserId?, platformHandle?, platformConversationId?, conversationType?, identityStatus?, conversationStatus?, streakDays?, sparkDays?, sparkKind?, sparkLabel?}]`（≤200 条），
   逐条独立提交：新好友进 `created`、普通重名进 `duplicates`、单条失败进 `failed`，不中断整批；
   携带官方状态字段的已有好友更新官方快照并进 `refreshed`，不改写本地 `streakDays`。
   响应中的 `identityBound`、`identityUnresolved`、`identityAmbiguous` 分别说明本批实际写入稳定身份、
   本次没有观察到可安全绑定的身份、以及同名冲突而主动阻止绑定的条目；未观察到不等于用户不存在。
   群聊对应的 `conversationBound`、`conversationUnresolved`、`conversationAmbiguous` 使用同样语义；群聊实际写入的是
   `platformConversationId`，不会把群聊误当成用户 `sec_uid`。
-  新好友的 `streakDays` 为扫描读到的官方火花天数，用作本地累计初始值；官方状态原文与扫描时间另存为展示快照。
+  新好友的 `streakDays` 为扫描读到的官方火花天数，用作本地累计初始值；`sparkDays` 保存本次扫描到的官方数字状态，官方状态原文与扫描时间另存为展示快照。已有好友刷新时只更新 `sparkDays`/`sparkKind`/`sparkLabel`，不改写本地 `streakDays`。
 
 ### 模板（/api/templates）
 - `PATCH /api/templates/{id}`：局部更新（name/content/imagePath/sticker*/enabled/
