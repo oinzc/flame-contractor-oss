@@ -117,7 +117,24 @@ def test_auto_scan_refreshes_existing_targets_without_importing_new_chats(settin
         ).json()
         assert len(targets) == 1
         assert targets[0]["nicknameSnapshot"] == "好友A"
+        assert targets[0]["sparkLabel"] == "无火花"
         assert targets[0]["sparkScannedAt"] is not None
+
+
+def test_scan_snapshot_label_does_not_confuse_missing_icon_with_no_spark(settings):
+    app = make_app(settings, [FakePage(logged_in=True)])
+    with TestClient(app):
+        manager = app.state.browser_manager
+
+        assert manager._spark_label_for_scan_entry(
+            {"streak_days": 515, "streak_kind": None, "streak_label": None, "preview": ""}
+        ) is None
+        assert manager._spark_label_for_scan_entry(
+            {"streak_days": None, "streak_label": None, "preview": "2 天后火花将消失"}
+        ) == "2 天后火花将消失"
+        assert manager._spark_label_for_scan_entry(
+            {"streak_days": None, "streak_label": None, "preview": "[比心]"}
+        ) == "无火花"
 
 
 def test_cancel_scan_preserves_discovered_entries(settings):

@@ -25,6 +25,7 @@ import SendTargetModal from './components/SendTargetModal'
 import IdentityHydrationProgress from './components/IdentityHydrationProgress'
 import LoginPage from './components/LoginPage'
 import AccountPage from './components/AccountPage'
+import { sparkLabelForSnapshot } from './lib/spark'
 
 type Page = 'dashboard' | 'accounts' | 'targets' | 'templates' | 'jobs' | 'me'
 
@@ -581,7 +582,7 @@ export default function App() {
             conversationStatus: entry.conversationStatus,
             streakDays: entry.streakDays ?? undefined,
             sparkKind: entry.streakKind,
-            sparkLabel: entry.streakLabel,
+            sparkLabel: sparkLabelForSnapshot(entry),
           })),
         })
       }

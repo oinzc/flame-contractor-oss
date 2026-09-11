@@ -184,7 +184,7 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-- 后端 pytest 当前为 **204 passed**（含平台账号、生产前端托管，以及既有发送/扫描安全回归）；
+- 后端 pytest 当前为 **205 passed**（含平台账号、生产前端托管、扫描熄火判定，以及既有发送/扫描安全回归）；
 - 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
 ## 当前能力边界

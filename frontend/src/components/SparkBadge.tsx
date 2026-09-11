@@ -34,18 +34,21 @@ export default function SparkBadge({
   children,
 }: SparkBadgeProps) {
   const officialLabel = label?.trim() || null
+  const observedNoSpark = officialLabel === '无火花'
   const text = officialLabel ?? (days == null ? null : `${days}天`)
   if (text === null) return null
 
-  const tone = toneFor(kind, officialLabel)
-  const title = officialLabel
-    ? `抖音官方状态：${officialLabel}${scannedAt ? ` · 扫描于 ${formatDateTime(scannedAt)}` : ''}`
-    : `本地累计火花：${days}天`
+  const tone = observedNoSpark ? 'crimson' : toneFor(kind, officialLabel)
+  const title = observedNoSpark
+    ? `抖音官方状态：未检测到火花 · 扫描于 ${formatDateTime(scannedAt ?? null)}${days == null ? '' : ` · 本地累计记录 ${days} 天（仅历史）`}`
+    : officialLabel
+      ? `抖音官方状态：${officialLabel}${scannedAt ? ` · 扫描于 ${formatDateTime(scannedAt)}` : ''}`
+      : `本地累计火花：${days}天`
 
   return (
     <span className={`badge ${tone} spark-badge ${className}`.trim()} title={title}>
       <span className="spark-badge-glyph" aria-hidden="true">
-        {glyphFor(officialLabel)}
+        {observedNoSpark ? '×' : glyphFor(officialLabel)}
       </span>
       <span className="spark-badge-text">{text}</span>
       {children}
