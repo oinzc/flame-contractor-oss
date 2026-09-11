@@ -11,6 +11,7 @@ from ..schemas import (
     IdentityHydrationStart,
     LoginStatusRead,
     ScanChatsRead,
+    ScanHistoryRead,
     ScanProgressRead,
     SendPreviewRead,
     SendProgressRead,
@@ -18,6 +19,9 @@ from ..schemas import (
     SendTargetPayload,
 )
 from ..services import send_preview
+from ..models import ScanTask
+from ..scan_reconciliation import parse_reconciliation
+from sqlmodel import select
 from .deps import CurrentUser
 
 router = APIRouter(prefix="/accounts/{account_id}", tags=["execution"])
@@ -128,6 +132,39 @@ def read_latest_scan_chats(
     _require_account(session, account_id, user.id)
     manager = request.app.state.browser_manager
     return manager.latest_scan_chats(account_id)
+
+
+@router.get("/scan-chats/history", response_model=list[ScanHistoryRead])
+def read_scan_chats_history(
+    account_id: str,
+    session: SessionDep,
+    user: CurrentUser,
+    limit: int = Query(10, ge=1, le=20),
+) -> list[dict]:
+    """读取最近扫描的轻量对账历史，不返回完整会话条目。"""
+    _require_account(session, account_id, user.id)
+    tasks = session.exec(
+        select(ScanTask)
+        .where(ScanTask.account_id == account_id)
+        .order_by(ScanTask.started_at.desc(), ScanTask.updated_at.desc())
+        .limit(limit)
+    ).all()
+    return [
+        {
+            "task_id": task.id,
+            "account_id": task.account_id,
+            "source": task.source,
+            "status": task.status.value if hasattr(task.status, "value") else task.status,
+            "total": task.total,
+            "completed": task.completed,
+            "overall": task.overall,
+            "detail": task.detail,
+            "started_at": task.started_at,
+            "finished_at": task.finished_at,
+            "reconciliation": parse_reconciliation(task.reconciliation_json),
+        }
+        for task in tasks
+    ]
 
 
 @router.post(

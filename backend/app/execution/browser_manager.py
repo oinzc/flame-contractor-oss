@@ -30,6 +30,13 @@ from ..models import (
     TemplateType,
 )
 from ..schemas import BatchTargetItem, TargetBatchCreate
+from ..scan_reconciliation import (
+    build_reconciliation,
+    empty_reconciliation,
+    match_scan_entry_to_target,
+    parse_reconciliation,
+    target_snapshot,
+)
 from ..services import create_targets_batch
 from .douyin_chat import (
     SCAN_MAX_ROUNDS,
@@ -118,6 +125,10 @@ class ScanProgress:
     overall: str | None = None
     detail: str | None = None
     entries: list[dict] | None = None
+    reconciliation: dict | None = None
+    # Captured before opening the browser so concurrent imports/deletions do
+    # not change the meaning of this scan's comparison.
+    targets_before_scan: list[dict] | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 
@@ -293,6 +304,7 @@ class BrowserManager:
             "overall": task.overall,
             "detail": task.detail,
             "entries": self._scan_entries_from_json(task.entries_json),
+            "reconciliation": parse_reconciliation(task.reconciliation_json),
             "started_at": task.started_at,
             "finished_at": task.finished_at,
         }
@@ -315,6 +327,11 @@ class BrowserManager:
             task.entries_json = json.dumps(
                 progress.entries or [], ensure_ascii=False, separators=(",", ":")
             )
+            task.reconciliation_json = json.dumps(
+                progress.reconciliation or empty_reconciliation(),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
             task.started_at = progress.started_at or task.started_at
             task.finished_at = progress.finished_at
             task.updated_at = _utcnow()
@@ -336,6 +353,7 @@ class BrowserManager:
             "overall": progress.overall,
             "detail": progress.detail,
             "entries": progress.entries or [],
+            "reconciliation": progress.reconciliation or empty_reconciliation(),
             "started_at": progress.started_at,
             "finished_at": progress.finished_at,
         }
@@ -369,11 +387,22 @@ class BrowserManager:
         with Session(self._engine) as session:
             if session.get(Account, account_id) is None:
                 raise HTTPException(status_code=404, detail="账号不存在")
+            targets_before_scan = [
+                target_snapshot(target)
+                for target in session.exec(
+                    select(ContractTarget).where(
+                        ContractTarget.account_id == account_id,
+                        ContractTarget.deleted_at.is_(None),
+                    )
+                ).all()
+            ]
 
         progress = ScanProgress(
             task_id=str(uuid4()),
             account_id=account_id,
             source=source,
+            reconciliation=empty_reconciliation(),
+            targets_before_scan=targets_before_scan,
             started_at=_utcnow(),
         )
         with Session(self._engine) as session:
@@ -390,6 +419,11 @@ class BrowserManager:
                     round=progress.round,
                     max_rounds=progress.max_rounds,
                     entries_json="[]",
+                    reconciliation_json=json.dumps(
+                        empty_reconciliation(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                     started_at=progress.started_at or _utcnow(),
                     updated_at=progress.started_at or _utcnow(),
                 )
@@ -407,6 +441,10 @@ class BrowserManager:
             overall = result["overall"]
             if overall == "ok":
                 entries = result["entries"]
+                reconciliation = build_reconciliation(
+                    progress.targets_before_scan or [],
+                    entries,
+                )
                 self._update_scan_progress(
                     progress.task_id,
                     status="completed",
@@ -417,6 +455,7 @@ class BrowserManager:
                     overall=overall,
                     detail=None,
                     entries=entries,
+                    reconciliation=reconciliation,
                     finished_at=_utcnow(),
                 )
             else:
@@ -1336,16 +1375,20 @@ class BrowserManager:
 
     @staticmethod
     def _scan_entry_matches_target(entry: dict, target: ContractTarget) -> bool:
-        title = entry.get("title")
-        if isinstance(title, str) and target.nickname_snapshot == title:
-            return True
-        platform_user_id = entry.get("platform_user_id")
-        if platform_user_id and target.platform_user_id == platform_user_id:
-            return True
-        conversation_id = entry.get("platform_conversation_id")
-        return bool(
-            conversation_id
-            and target.platform_conversation_id == conversation_id
+        return (
+            match_scan_entry_to_target(
+                entry,
+                [
+                    {
+                        "targetId": target.id,
+                        "title": target.nickname_snapshot,
+                        "conversationType": target.conversation_type,
+                        "platformUserId": target.platform_user_id,
+                        "platformConversationId": target.platform_conversation_id,
+                    }
+                ],
+            )
+            is not None
         )
 
     @staticmethod

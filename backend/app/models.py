@@ -346,6 +346,11 @@ class ScanTask(SQLModel, table=True):
     detail: str | None = Field(default=None, max_length=256)
     # 结果条目结构稳定且体量受会话列表规模约束，使用 SQLite Text 保存 JSON。
     entries_json: str = Field(default="[]", sa_column=Column(Text, nullable=False))
+    # 仅在完整成功扫描后写入的五类对账快照；旧任务保留安全空结构。
+    reconciliation_json: str = Field(
+        default='{"counts":{"changed":0,"no_spark":0,"new":0,"not_observed":0,"unchanged":0},"entries":[]}',
+        sa_column=Column(Text, nullable=False),
+    )
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
     updated_at: datetime = Field(default_factory=utc_now, index=True)
