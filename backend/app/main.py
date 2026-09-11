@@ -129,6 +129,14 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(api_router, prefix=settings.api_prefix)
+    if settings.serve_frontend:
+        # FastAPI 0.141+ 的 frontend 路由优先保留 API，再为 React SPA 提供 index fallback。
+        app.frontend(
+            "/",
+            directory=settings.frontend_dist_dir,
+            fallback="index.html",
+            check_dir=True,
+        )
     return app
 
 

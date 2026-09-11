@@ -2,7 +2,7 @@
 
 > 你与它立下契约，每日以一言续之，焰不可熄。
 
-本机优先的多账号抖音续火控制台。当前进度：**M1–M9 + M9+ 已完成** —— 控制平面、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复、手动强制发送、自动每日调度、图片/原生表情发送、异常通知、selector 热更新、文案池、统计备份、截图扫码登录、带全局任务坞的后台会话扫描，以及普通好友身份补采全部就绪，并在真实账号上验证通过。
+本机优先的多账号抖音续火控制台。当前进度：**M1–M10 已完成** —— 控制平面、平台账号、扫码登录、严格好友定位、真实发送 + 发送终态确认、每日防重复、手动强制发送、自动每日调度、图片/原生表情发送、异常通知、selector 热更新、文案池、统计备份、截图扫码登录、带全局任务坞的后台会话扫描，以及普通好友身份补采全部就绪。
 
 ## 目录结构
 
@@ -47,6 +47,16 @@ npm run dev
 - 初始化完成后登录页只保留登录入口，不再开放匿名注册；管理员可在「我的 → 平台用户」创建成员、重置密码或授予管理员权限。
 - 忘记密码时由平台管理员在本机重置；当前本地版本不提供无法实际送达的邮件找回流程。
 - 旧数据库升级时会保留既有平台用户；仅存在无属主历史业务数据时，兼容认领流程仍使用 `FLAME_BOOTSTRAP_USERNAME` / `FLAME_BOOTSTRAP_PASSWORD`。
+
+### 4. Windows 常驻运行（推荐）
+
+锁屏后需要继续执行调度时，使用当前用户的常驻监督器：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\runtime\manage_runtime.ps1 -Action Install
+```
+
+该命令先构建前端，再通过 Windows Task Scheduler 启动单个 FastAPI 进程；API 和构建后的 React 界面统一使用 <http://127.0.0.1:8000/>。监督器持有系统唤醒请求、每 15 秒检查健康状态，并只重启它自己启动的后端进程。日志和停止/卸载命令见 [`scripts/runtime/README.md`](scripts/runtime/README.md)。
 
 ## 扫码登录与定位校验（M2）
 
@@ -123,7 +133,7 @@ FLAME_BARK_URL=https://api.day.app/<你的device_key>
 - **发送冷却**：好友之间默认间隔 3 秒；
 - **窗口过期策略**：`FLAME_WINDOW_EXPIRY_POLICY=skip`（默认）——窗口已结束的计划不再深夜补发，转 skipped 并通知；`dispatch` 恢复到点即发；
 - **连续失败熔断**：`FLAME_FAILURE_STREAK_LIMIT`（默认 3）——连续 N 次终态失败自动暂停该账号调度（cooldown）并 critical 推送；
-- **开机自启**：`scripts\autostart\install_autostart.bat` 一键把启动脚本装入当前用户「启动」文件夹，登录即拉起前后端（详见 `scripts/autostart/README.md`）；
+- **常驻自恢复**：`scripts\runtime\manage_runtime.ps1 -Action Install` 安装当前用户计划任务，登录自启、失败重试、健康监测并持有系统唤醒请求；旧 `scripts/autostart` 只启动一次，不再推荐；
 - **artifacts 保留期**：`FLAME_ARTIFACT_RETENTION_DAYS`（默认 30，0 永久）启动时自动清理过期诊断产物。
 
 ## Selector 热更新（M5）
@@ -174,7 +184,7 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-- 后端 pytest 当前为 **203 passed**（含平台账号首次初始化、管理员建号与最后管理员保护，以及既有发送/扫描安全回归）；
+- 后端 pytest 当前为 **204 passed**（含平台账号、生产前端托管，以及既有发送/扫描安全回归）；
 - 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
 ## 当前能力边界

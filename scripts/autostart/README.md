@@ -1,4 +1,6 @@
-# Flame Contractor 开机自启（Windows）
+# Flame Contractor 旧开机自启（已废弃）
+
+> 这套脚本只在登录时启动一次 Vite 和 uvicorn，没有健康检查、失败重启或锁屏保持唤醒。新安装请使用 [`..\runtime\README.md`](../runtime/README.md)。
 
 ## 用途
 本项目的调度器是**进程内**的：uvicorn 不在跑 = 自动续火不在跑。开机自启消除
@@ -22,5 +24,5 @@ scripts\autostart\install_autostart.bat
 
 ## 注意
 - 仓库换路径后需重新运行安装脚本（重新生成带新路径的启动脚本）；
-- 调度器 `paused` 状态为内存态，重启后默认恢复为「运行」——如需暂停请在控制台操作；
+- 调度器 `paused` 状态已持久化，重启后恢复数据库中的实际状态；
 - 仅监听 127.0.0.1，不对外网暴露。
