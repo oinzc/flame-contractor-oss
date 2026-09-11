@@ -1001,40 +1001,6 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.modal-overlay.spark-calibration-overlay { z-index: 80; }
-.spark-calibration-modal { width: min(480px, calc(100vw - 40px)); }
-.spark-calibration-modal .modal-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.spark-calibration-modal .modal-title { margin: 0; }
-.spark-calibration-number {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-}
-.spark-calibration-number > span {
-  color: var(--text-2);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.spark-calibration-preview {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 42px;
-  padding: 9px 10px;
-  border: 1px solid var(--seam);
-  background: var(--panel-raise);
-}
-.spark-calibration-preview > span:first-child {
-  color: var(--text-2);
-  font-size: 11px;
-}
 .scan-helper {
   margin: -4px 0 12px;
   color: var(--text-2);

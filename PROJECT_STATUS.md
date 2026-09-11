@@ -7,7 +7,7 @@
 
 **2026-09-11 官方火花数字快照修复**：扫描原文已正确识别，但旧实现只保存特殊文字徽标，好友列表在普通状态下误显示本地累计值（例如本地 7 天而抖音为 105 天）。新增 `ContractTarget.spark_days`/API `sparkDays` 保存最近一次官方数字快照；列表与总览展示官方值，`streak_days` 继续只用于本地累计、发送模板和发送业务。已用 2026-09-11 最近一次 55 条扫描快照补齐现有对象，未重新扫描或发送。
 
-**2026-09-11 官方状态手动校准调整**：好友页不再允许手动改写本地 `streak_days`；“校准官方”可选择正常天数、重燃中、即将消失或无火花，只更新 `spark_days`/`spark_label` 官方展示快照及更新时间。好友页和总览在没有官方快照时显示待扫描/按 0 参与排序，不再回退显示本地累计，避免两套数值混淆。后端全量 **205 passed**、前端生产构建通过；`127.0.0.1:8000` 已在 1440×900 与 390×844 验证弹窗切换和预览，控制台无错误，未保存真实好友变更。内置浏览器连接失败，按仓库约定降级使用本地 Playwright。验证前发现调度已恢复，已在确认无运行中任务后持久化暂停并安全重启，交付时保持暂停。
+**2026-09-11 官方状态扫描刷新收口**：官方火花状态只允许来自抖音页面扫描，已移除逐好友“校准官方”弹窗及 `PATCH /api/targets/{id}` 的 `sparkDays`/`sparkLabel` 手动写入能力。好友页统一通过账号级“扫描并刷新官方状态”读取完整会话列表；扫描完成后自动刷新已存在好友/群聊的官方快照，新会话仍由用户选择是否导入，全程不发送消息。好友页和总览在没有官方快照时显示待扫描/按 0 参与排序，不回退显示本地累计，避免两套数值混淆。后端定向测试 2 项、全量 **205 passed**，前端生产构建通过；运行中 OpenAPI 已确认只保留 `enabled`/`templateId`/`sendTimeHhmm`。`127.0.0.1:8000` 已在 1440×900 与 390×844 验证唯一扫描入口、无手动校准入口/弹窗、无横向溢出且控制台无错误或警告；验收未点击真实扫描。内置浏览器连接失败，按仓库约定降级使用本地 Playwright；临时认证会话已清理，交付时调度保持暂停。
 
 **2026-09-11 Windows 常驻运行**：参考 Microsoft PowerToys Awake、WinSW 和 FastAPI 官方前端托管方案。`scripts/runtime/manage_runtime.ps1` 在当前 Windows 用户下安装 `Flame Contractor Runtime` 计划任务；监督器持有 `ES_SYSTEM_REQUIRED` 电源请求，使显示器可关闭但保持系统执行，并每 15 秒检查 `/health`。后端退出时只重启已确认由监督器启动的 PID。FastAPI 通过 `app.frontend()` 托管 Vite `dist`，常驻 UI/API 统一为 `http://127.0.0.1:8000/`，不再常驻 Vite dev server。日志位于 `%LOCALAPPDATA%\FlameContractor\logs`。安装前已把调度持久化为暂停，重启验证没有触发 Dry Run 或真实发送。
 
@@ -97,9 +97,9 @@
   - `send_image` 用 `expect_file_chooser` + `set_files` 注入 + 点确认弹窗发送。
   - **兼容 DOM 改版**：新增 selector `IMAGE_UPLOAD_TRIGGER`/`IMAGE_DIALOG_SEND`。
 - **图片终态确认**：`_confirm_send` 图片分支轮询 `image_bubble_confirmed` —— 发送前统计非头像图片数（`_count_non_avatar_images`），发送后要求数量增加才判成功，防历史图片误判。实机验证：图片真实发出且记 succeeded。
-- **官方火花状态手动校准**：早期 `streakDays` 本地校准入口已于 2026-09-11 替换；`PATCH /api/targets/{id}` 只接受 `sparkDays`/`sparkLabel` 修正官方展示快照，好友列表入口为「校准官方」，本地累计不允许从该接口改写。
+- **官方火花状态扫描刷新**：官方状态只由会话列表 DOM 扫描写入；账号级入口为「扫描并刷新官方状态」，扫描完成后自动刷新已有对象。`PATCH /api/targets/{id}` 不接受 `sparkDays`、`sparkLabel` 或 `streakDays`，不存在人工选择官方状态的入口。
 - **Bark 通知**：`app/notifications.py`，异常推送（登录失效/发送中断/部分未确认）；`FLAME_BARK_URL` 环境变量配置，`trust_env=False` 绕过 SOCKS 代理。
-- 前端：DashboardPage「自动调度」卡片 + 模板页图片类型 + 好友页官方火花校准按钮。
+- 前端：DashboardPage「自动调度」卡片 + 模板页图片类型 + 好友页官方状态扫描刷新入口。
 
 ### M5 selector bundle 热更新（HEAD `d687f88`）
 - **选择器外置为 JSON bundle**（`app/execution/selectors_bundle.json`），运行时唯一来源，不再硬编码进 `selectors.py`；`selectors.py` 保留同名常量作为默认值兜底（`tests/fakes.py`/`scripts` 的 `from .selectors import X` 无缝继续）。

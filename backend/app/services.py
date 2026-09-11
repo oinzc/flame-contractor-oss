@@ -805,7 +805,7 @@ def delete_target(session: Session, target_id: str, user_id: str) -> None:
 def patch_target(
     session: Session, target_id: str, payload: TargetPatch, user_id: str
 ) -> TargetRead:
-    """局部更新契约对象：官方火花快照校准、启停、换绑模板。"""
+    """局部更新契约对象：启停、换绑模板与精确发送时刻。"""
     target = session.get(ContractTarget, target_id)
     if target is None or not _target_belongs_to_user(session, target, user_id):
         raise HTTPException(status_code=404, detail="好友不存在")
@@ -813,16 +813,6 @@ def patch_target(
     data = payload.model_dump(exclude_unset=True)
     if data.get("template_id") is not None and session.get(MessageTemplate, data["template_id"]) is None:
         raise HTTPException(status_code=404, detail="模板不存在")
-
-    official_status_updated = "spark_days" in data or "spark_label" in data
-    if official_status_updated:
-        # 官方数字与特殊文字状态互斥。即使客户端只提交其中一项，也要清除旧形态，
-        # 避免「105 天」与「重燃中 1/3」同时残留。手动校准不触碰本地 streak_days。
-        target.spark_days = data.pop("spark_days", None)
-        target.spark_label = data.pop("spark_label", None)
-        if target.spark_label == "无火花":
-            target.spark_kind = None
-        target.spark_scanned_at = utc_now()
 
     for field, value in data.items():
         setattr(target, field, value)

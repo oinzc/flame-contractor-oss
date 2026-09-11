@@ -44,7 +44,7 @@ export default function SparkBadge({
       ? `抖音官方状态：${officialLabel}${scannedAt ? ` · 更新于 ${formatDateTime(scannedAt)}` : ''}`
       : officialDays != null
         ? `抖音官方状态：${officialDays} 天${scannedAt ? ` · 更新于 ${formatDateTime(scannedAt)}` : ''}`
-        : '尚未记录抖音官方状态，请扫描或手动校准'
+        : '尚未记录抖音官方状态，请扫描会话列表刷新'
 
   return (
     <span className={`badge ${tone} spark-badge ${className}`.trim()} title={title}>
