@@ -1,9 +1,11 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-09-10 | 功能基线：既有发送/扫描能力 + 平台账号首次初始化、管理员建号与 D1 登录体验（见 git log）
+> 最近更新：2026-09-11 | 功能基线：M1–M10 + Windows 常驻自恢复（见 git log）
 
 ## 当前状态
-**M5–M10 全部达成**。M6 可靠性闭环、M7「驾驶舱」重设计、M8 体验功能、M9 会话状态自动同步、M9+ 手动强制发送和 M10 平台账号完善均已落地。后端 pytest **203 passed**，前端 build 通过，关键功能已做真实页面验证。分期与不做清单见 `task_plan.md`。
+**M5–M10 全部达成**。平台账号与既有发送/扫描能力已落地；2026-09-11 新增 Windows 常驻自恢复。后端 pytest **204 passed**，前端 build 通过。分期与不做清单见 `task_plan.md`。
+
+**2026-09-11 Windows 常驻运行**：参考 Microsoft PowerToys Awake、WinSW 和 FastAPI 官方前端托管方案。`scripts/runtime/manage_runtime.ps1` 在当前 Windows 用户下安装 `Flame Contractor Runtime` 计划任务；监督器持有 `ES_SYSTEM_REQUIRED` 电源请求，使显示器可关闭但保持系统执行，并每 15 秒检查 `/health`。后端退出时只重启已确认由监督器启动的 PID。FastAPI 通过 `app.frontend()` 托管 Vite `dist`，常驻 UI/API 统一为 `http://127.0.0.1:8000/`，不再常驻 Vite dev server。日志位于 `%LOCALAPPDATA%\FlameContractor\logs`。安装前已把调度持久化为暂停，重启验证没有触发 Dry Run 或真实发送。
 
 **2026-09-10 平台账号完善**：全新数据库不再自动暴露默认账号，登录页会先读取 `GET /api/auth/setup`，仅在用户表为空时展示一次性管理员初始化；完成后 `POST /api/auth/register` 关闭，新增成员统一由管理员通过 `POST /api/auth/users` 创建。新建/修改/重置密码至少 8 位，后端禁止取消最后一名管理员。前端登录页按 D1「驾驶舱」蚀刻语言重做，移除登录/注册切换、默认凭据提示和无法真正完成的自助找回按钮；管理员页补建号表单，窄屏用户表改为卡片布局。后端认证提交为 `2e8c822`；最终测试与前端提交见最新 git log。
 
@@ -153,7 +155,7 @@ frontend/src/
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **203 passed**（含一次性管理员初始化、关闭公开注册、管理员建号、8 位密码下限与最后管理员保护；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **204 passed**（含一次性管理员初始化、平台账号保护和 FastAPI 同进程前端托管；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 重启后 `/health=database:ready`；`/api/scheduler` 返回自动同步周期、账号状态（含运行中任务 `taskId`）和原有发送计划字段 |
 | 前端真实渲染 | `http://localhost:5173/`，内置浏览器独立标签页完成硬刷新；总览显示可配置“自动同步周期”、只读说明和调度状态，宽度检查无横向溢出，当前刷新标签页控制台无错误 |
@@ -188,11 +190,9 @@ frontend/src/
 - M3 期间的实测坑（协议泄漏/Enter 不发送/零宽字符/预热传选择器/迁移 import 路径）见 `task_plan.md`「Errors Encountered」。
 
 ## 下一步开发顺序
-M10 账号功能已完成并在当前数据分支提交。下一步：
-1. 由维护者在 `http://127.0.0.1:5173/` 复核登录页文案与视觉。
-2. 确认后把本轮纯代码提交逐条 cherry-pick 到 `main`；不要合并整个 `migration-data-20260904`，避免把 `data/` 与 `backend/.env` 带入主分支。
-3. 如需继续增强账号安全，再单独评估强制首次改密、登录限速或 2FA；本轮不凭空加入远程邮件/短信基础设施。
-4. 发送链路后续验证仍先 Dry Run；只有维护者明确确认后才允许真实发送。
+1. 保持调度暂停，完成一次 `Win+L` 锁屏跨夜验证；第二天检查计划任务、PID、`/health` 和监督器日志。
+2. 验收后把常驻运行的纯代码提交 cherry-pick 到 `main`，不合并 `migration-data-20260904` 里的运行数据。
+3. 发送链路后续验证仍先 Dry Run；只有维护者明确确认后才允许真实发送。
 
 ## 换机与黑屏事件记录（2026-08-29）
 - **跨机迁移后登录失效**：抖音识别新设备作废旧会话（预期现象），须重新扫码。

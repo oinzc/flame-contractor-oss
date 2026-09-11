@@ -4,10 +4,10 @@
 M5 已全部完成并完成换机迁移（2026-08-29）。M6–M9、CRUD 补齐、会话扫描可靠性、普通好友身份补采和 M9+ 手动强制发送均已完成；后续仅按真实样本发现的问题增量迭代。
 
 ## Next Step
-账号功能完善已完成：全新安装改为一次性初始化首位管理员，初始化后关闭公开注册；管理员在「我的 → 平台用户」创建成员和重置密码；密码至少 8 位并保护最后一名管理员。登录页已按 D1「驾驶舱」视觉重做，去除默认账号和伪自助找回入口，并完成桌面/390px 真实渲染检查。发送安全边界与既有业务数据未改动。
+Windows 常驻运行已进入验收：FastAPI 同进程托管前端构建产物，Task Scheduler 在当前用户会话中登录自启/失败重试，监督器保持系统唤醒并健康检查后端。下一步是完成锁屏跨夜验证，不是扩展 Docker。
 
 ## Current Phase
-M6/M7/M8/M9/M9+ 全部完成；M10 平台账号完善也已落地。当前 `127.0.0.1:8000` 已加载最新认证代码，`/health` 为 ready，调度保持暂停；`127.0.0.1:5173` 正在运行新登录页。账号改动未触发 Dry Run 或真实发送，后续仍按“宁可不发不错发”的确认边界执行。
+M6/M7/M8/M9/M9+/M10 全部完成。2026-09-11 已安装 `Flame Contractor Runtime` 当前用户计划任务，生产界面与 API 统一使用 `127.0.0.1:8000`；调度已先持久化暂停，安装和重启测试未触发 Dry Run 或真实发送。
 
 ## 里程碑总览
 - [x] **M1 骨架**（`9d535c4`）：FastAPI + SQLModel + SQLite + Alembic 控制平面，核心表与幂等约束，CRUD API，Vercel 风格控制台骨架。
@@ -23,7 +23,7 @@ M6/M7/M8/M9/M9+ 全部完成；M10 平台账号完善也已落地。当前 `127.
 - [x] **M6-1 失败截图 + 工件增强**：发送失败/unknown 时自动截图存 `artifacts/<账号>/`；工件 JSON 增加 page_url、selector 探测结果、bundle/执行器版本；artifacts 保留期清理（`FLAME_ARTIFACT_RETENTION_DAYS`，默认 30）。
 - [x] **M6-2 网络预检 + 有界重试 + 发送冷却 + 窗口外补发策略**：run_send 前置连通性预检（离线不消耗本轮、留待下个 tick）；failed_retryable 在窗口内有限次退避重试（默认 2 次、间隔 10min）；好友间发送冷却（默认 3s）；窗口已结束的到期计划转 `skipped` 而非深夜补发（`FLAME_WINDOW_EXPIRY_POLICY`）。
 - [x] **M6-3 连续失败熔断 + 成功汇总推送**：`Account.failure_streak` 列（迁移）；连续 N 天失败（默认 3）转 `cooldown` + Bark 汇总通知，成功清零；run_send 完成后可选成功推送（`FLAME_NOTIFY_ON_SUCCESS`，默认开）。
-- [x] **M6-4 开机自启**：`scripts/install_autostart.bat`（schtasks 登录时拉起前后端）+ README 说明。
+- [x] **M6-4 Windows 常驻自恢复**：Task Scheduler 登录启动/失败重试 + execution-state 保持唤醒 + `/health` 监控自恢复；FastAPI 同进程托管 React 构建产物。
 - [x] **M6-5 全局调度暂停状态持久化**：新增 `AppSetting`/Alembic 迁移，暂停/恢复写入数据库，后端启动恢复，避免重启后意外恢复自动发送。
 
 ## M7 前端重设计

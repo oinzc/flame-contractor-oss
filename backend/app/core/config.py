@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     database_url: str = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
     profiles_dir: Path = PROJECT_ROOT / "data" / "profiles"
     artifacts_dir: Path = PROJECT_ROOT / "artifacts"
+    # 常驻模式可由同一个 FastAPI 进程托管前端构建产物；开发模式继续使用 Vite。
+    serve_frontend: bool = False
+    frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
     # Bark 通知推送地址（可选）：形如 https://api.day.app/<device_key>，空则不推送
     bark_url: str | None = None
     # artifacts 诊断产物保留天数（失败截图/工件 JSON），0 表示永不过期
