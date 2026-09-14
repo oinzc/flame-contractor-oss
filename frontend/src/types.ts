@@ -144,6 +144,43 @@ export interface ScanChatEntry {
   streakLabel: string | null
 }
 
+export type ScanReconciliationCategory =
+  | 'changed'
+  | 'no_spark'
+  | 'new'
+  | 'not_observed'
+  | 'unchanged'
+
+export interface ScanOfficialState {
+  days: number | null
+  kind: string | null
+  label: string | null
+  scannedAt: string | null
+}
+
+export interface ScanReconciliationItem {
+  targetId: string | null
+  title: string
+  conversationType: 'user' | 'group' | null
+  category: ScanReconciliationCategory
+  previous: ScanOfficialState
+  current: ScanOfficialState
+}
+
+export interface ScanReconciliationCounts {
+  changed: number
+  noSpark: number
+  new: number
+  notObserved: number
+  unchanged: number
+}
+
+export interface ScanReconciliation {
+  schemaVersion: number | null
+  counts: ScanReconciliationCounts
+  entries: ScanReconciliationItem[]
+}
+
 export interface TargetBatchResult {
   created: string[]
   refreshed: string[]
@@ -172,8 +209,23 @@ export interface ScanProgress {
   overall: 'ok' | 'auth_expired' | 'error' | null
   detail: string | null
   entries: ScanChatEntry[]
+  reconciliation: ScanReconciliation
   startedAt: string | null
   finishedAt: string | null
+}
+
+export interface ScanHistoryItem {
+  taskId: string
+  accountId: string
+  source: 'manual' | 'automatic'
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
+  total: number | null
+  completed: number
+  overall: 'ok' | 'auth_expired' | 'error' | null
+  detail: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  reconciliation: ScanReconciliation
 }
 
 export interface ScanTaskState extends ScanProgress {

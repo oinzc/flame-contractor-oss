@@ -1,9 +1,11 @@
 # PROJECT_STATUS — Flame Contractor（焰之契约者）
 
-> 最近更新：2026-09-11 | 功能基线：M1–M10 + Windows 常驻自恢复（见 git log）
+> 最近更新：2026-09-14 | 功能基线：M1–M11 + Windows 常驻自恢复（见 git log）
 
 ## 当前状态
-**M5–M10 全部达成**。平台账号与既有发送/扫描能力已落地；2026-09-11 新增 Windows 常驻自恢复。后端 pytest **205 passed**，前端 build 通过。分期与不做清单见 `task_plan.md`。
+**M5–M11 全部达成**。平台账号与既有发送/扫描能力已落地；2026-09-11 新增 Windows 常驻自恢复，2026-09-14 增加扫描对账中心。后端与前端最新验证见下方 M11 记录。分期与不做清单见 `task_plan.md`。
+
+**2026-09-14 M11 扫描对账中心**：每次完整成功的会话扫描会在同步前保存“扫描前官方快照”，再与抖音页面本次结果生成持久化对账，固定分为“状态变化 / 无火花 / 新会话 / 未观察到 / 无变化”五类。好友页使用 D1 蚀刻对账轨展示旧→新官方状态；无火花对象仍须用户二次确认才软删除，新会话仍须用户勾选才导入，“未观察到”只解释本次未看到且不会清空或改写状态。新增最近 10 次只读历史，历史记录不能执行导入或删除。旧扫描和失败/中断扫描不会伪造结论；官方状态仍只来自页面扫描，本地 `streak_days` 不参与校准。后端全量 **210 passed**，前端生产构建通过；运行中 OpenAPI 已包含历史端点。`127.0.0.1:8000` 使用隔离对账样本在 1440×900 与 390×844 验证五类切换、当前新会话选择、历史只读、任务坞收起后布局、无横向溢出且控制台无错误或警告。内置浏览器连接失败后按规范降级本地 Playwright，临时认证会话已清理；该验证没有触发真实扫描、Dry Run、导入、删除或发送，调度保持暂停。
 
 **2026-09-11 官方火花数字快照修复**：扫描原文已正确识别，但旧实现只保存特殊文字徽标，好友列表在普通状态下误显示本地累计值（例如本地 7 天而抖音为 105 天）。新增 `ContractTarget.spark_days`/API `sparkDays` 保存最近一次官方数字快照；列表与总览展示官方值，`streak_days` 继续只用于本地累计、发送模板和发送业务。已用 2026-09-11 最近一次 55 条扫描快照补齐现有对象，未重新扫描或发送。
 
@@ -148,24 +150,25 @@ backend/app/
   scheduler.py M4/M9 调度器：发送调度 + 会话自动同步/窗口保护/租约互斥/崩溃恢复/暂停
   execution/   profile_store、selectors（+selectors_bundle.json）、douyin_chat、send_confirmer、message_renderer、browser_manager
   api/         accounts、targets、templates、dashboard、execution、scheduler、selectors、health、router
-backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)、add_conversation_identity(f4a8c2e6b1d3)、add_scan_task_source(c6e7f8a9b0d1)
+backend/alembic/versions/  baseline(722cd9dc7d0b)、add_send_schedule(15a5feca9ee1)、add_image_path(a0737c65f237)、add_sticker(fe2a91c8b3d4)、add_app_setting(b7e3d1f9a2c4)、add_spark_snapshot(b8c4d2e6f901)、add_scan_task(d2e6f8a0b1c3)、add_platform_handle(e7f9a1c3d5b7)、add_conversation_identity(f4a8c2e6b1d3)、add_scan_task_source(c6e7f8a9b0d1)、add_scan_reconciliation(f8a9b0c1d2e3)
 backend/scripts/  search_debug / check_state / verify_sent / probe_dry_run / probe_send /
                    probe_sticker / probe_sticker_send / probe_login_wait / probe_scheduler_e2e /
                    reset_unknown_jobs / finalize_unknown_jobs（实机排查/后台账工具）
 frontend/src/
   App.tsx(顶栏导航+页面切换+全局刷新+scheduler 状态)、components/DashboardPage/AccountsPage/
-  TargetsPage/TemplatesPage/JobsPage/CreateAccountModal/SendModal/TaskDock/StatusBadge
+  TargetsPage/ScanReconciliationPanel/TemplatesPage/JobsPage/CreateAccountModal/SendModal/TaskDock/StatusBadge
   lib/format.ts(状态文案映射+调度映射)、api.ts、types.ts、theme.css(D1 蚀刻 bento + 任务坞)
 ```
 
 ## 测试与验证结果
 | 项目 | 结果 |
 |---|---|
-| 后端 pytest | **205 passed**（含一次性管理员初始化、平台账号保护、FastAPI 同进程前端托管和扫描熄火判定；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
+| 后端 pytest | **210 passed**（新增 5 项扫描对账分类、失败边界、历史排序与用户隔离测试；保留 2 条既有 warning：Starlette/httpx 弃用提示、模板池删除行数提示） |
 | 前端 npm run build | tsc --noEmit + vite build 通过 |
 | 端到端启动 | uvicorn 重启后 `/health=database:ready`；`/api/scheduler` 返回自动同步周期、账号状态（含运行中任务 `taskId`）和原有发送计划字段 |
 | 前端真实渲染 | `http://localhost:5173/`，内置浏览器独立标签页完成硬刷新；总览显示可配置“自动同步周期”、只读说明和调度状态，宽度检查无横向溢出，当前刷新标签页控制台无错误 |
 | 熄火复核渲染 | 内置浏览器控制接口失败后降级本地 Playwright；隔离数据在 1440×900、390×844 显示“无火花”与删除提醒，控制台无 error/warning；“暂时保留”、刷新后再次提醒、二次确认软删除均通过 |
+| M11 对账中心渲染 | `127.0.0.1:8000` 隔离样本在 1440×900、390×844 验证五类计数/切换、旧→新状态、新会话选择、历史只读和窄屏；无横向溢出、console error/warning 与 page error 均为 0，未执行任何业务写操作 |
 | **当前运行态（2026-09-10）** | `/health` 返回 `status=ok`、`database=ready`；8000 已加载账号认证新接口；调度持久化为暂停；5173 运行新登录页 |
 | 2026-09-01 运行态检查 | 后端 `/health` 返回 `status=ok`、`database=ready`；账号「示例账号」为 `healthy`；前后端均监听回环地址 `127.0.0.1`（8000/5173） |
 | 真实会话扫描 | 任务坞实时计数从 `0` 增长到 `39`/`44`；后续本次重启后真实扫描 `54/54` 完成，导入摘要包含 10 个群会话 ID/名称，现有 4 个群聊已按会话 ID 回填好友记录。会话数随抖音页面状态变化，不写死为固定总数 |

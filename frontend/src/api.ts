@@ -179,6 +179,10 @@ export const api = {
     ),
   latestScanChats: (accountId: string) =>
     request<import('./types').ScanProgress | null>(`/api/accounts/${accountId}/scan-chats/latest`),
+  scanChatsHistory: (accountId: string, limit = 10) =>
+    request<import('./types').ScanHistoryItem[]>(
+      `/api/accounts/${accountId}/scan-chats/history?limit=${encodeURIComponent(limit)}`,
+    ),
   startIdentityHydration: (accountId: string, targetIds: string[]) =>
     request<import('./types').IdentityHydrationProgress>(
       `/api/accounts/${accountId}/identity-hydration/start`,

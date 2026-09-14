@@ -5,14 +5,12 @@ import type {
   ContractTarget,
   IdentityHydrationTaskState,
   MessageTemplate,
-  ScanChatEntry,
   ScanTaskState,
-  TargetBatchResult,
 } from '../types'
 import { formatDateTime } from '../lib/format'
-import { sparkLabelForSnapshot } from '../lib/spark'
 import SparkBadge from './SparkBadge'
 import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
+import ScanReconciliationPanel from './ScanReconciliationPanel'
 
 interface Props {
   accounts: Account[]
@@ -31,41 +29,6 @@ interface Props {
 function compactStableId(value: string): string {
   if (value.length <= 18) return value
   return `${value.slice(0, 8)}…${value.slice(-6)}`
-}
-
-function identityStatusLabel(entry: ScanChatEntry): string {
-  if (entry.conversationType === 'group') {
-    if (entry.conversationStatus === 'bound') {
-      return entry.platformConversationId
-        ? `群聊已识别 · ${compactStableId(entry.platformConversationId)}`
-        : '群聊会话已识别'
-    }
-    if (entry.conversationStatus === 'ambiguous') {
-      return `群聊同名冲突 · ${entry.conversationCandidateCount} 个会话`
-    }
-    return '群聊会话未识别'
-  }
-  if (entry.identityStatus === 'bound') {
-    return entry.platformHandle ? `已识别 · ${entry.platformHandle}` : '稳定身份已识别'
-  }
-  if (entry.identityStatus === 'ambiguous') return `同名冲突 · ${entry.identityCandidateCount} 个候选`
-  return '本次未识别'
-}
-
-function scanEntryMatchesTarget(entry: ScanChatEntry, target: ContractTarget): boolean {
-  if (entry.platformUserId && target.platformUserId === entry.platformUserId) return true
-  if (
-    entry.platformConversationId &&
-    target.platformConversationId === entry.platformConversationId
-  ) {
-    return true
-  }
-  if (target.nicknameSnapshot !== entry.title) return false
-  return (
-    target.conversationType === null ||
-    entry.conversationType === null ||
-    target.conversationType === entry.conversationType
-  )
 }
 
 export default function TargetsPage({
@@ -90,16 +53,7 @@ export default function TargetsPage({
   const [error, setError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [batchTemplateId, setBatchTemplateId] = useState('')
-  const [batchResult, setBatchResult] = useState<TargetBatchResult | null>(null)
-  const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
-  const [scanEntries, setScanEntries] = useState<ScanChatEntry[] | null>(null)
-  const [selectedEntries, setSelectedEntries] = useState<Map<string, ScanChatEntry>>(new Map())
-  const [scanQuery, setScanQuery] = useState('')
-  const [showNoStreak, setShowNoStreak] = useState(false)
-  const [deletingNoSpark, setDeletingNoSpark] = useState(false)
-  const [dismissedNoSparkTaskId, setDismissedNoSparkTaskId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!accounts.some((account) => account.id === selectedAccountId)) {
@@ -107,43 +61,10 @@ export default function TargetsPage({
     }
   }, [accounts, selectedAccountId])
 
-  useEffect(() => {
-    if (!scanTask || scanTask.accountId !== selectedAccountId) {
-      setScanEntries(null)
-      setSelectedEntries(new Map())
-      setScanQuery('')
-      setBatchResult(null)
-      return
-    }
-    if (scanTask.status === 'running') {
-      setScanEntries(null)
-      setSelectedEntries(new Map())
-      setScanQuery('')
-      setBatchResult(null)
-      return
-    }
-    if (
-      scanTask.status === 'completed' ||
-      scanTask.status === 'interrupted' ||
-      scanTask.status === 'cancelled'
-    ) {
-      setScanEntries(scanTask.entries)
-      setBatchResult(scanTask.batchResult)
-    } else {
-      setScanEntries(null)
-    }
-  }, [scanTask?.taskId, scanTask?.status, scanTask?.batchResult, selectedAccountId])
-
   const accountTargets = targets.filter((target) => target.accountId === selectedAccountId)
   const pausedCount = accountTargets.filter((target) => !target.enabled).length
   // 默认只显示启用中的好友；暂停项是保留的历史记录，按需展开查看
   const selectedTargets = showPaused ? accountTargets : accountTargets.filter((t) => t.enabled)
-  const isExistingScanEntry = (entry: ScanChatEntry) =>
-    accountTargets.some((target) => scanEntryMatchesTarget(entry, target))
-  const selectedImportEntries = [...selectedEntries.values()].filter(
-    (entry) => !isExistingScanEntry(entry),
-  )
-
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId) ?? null
   const identityTargetIds = accountTargets
     .filter(
@@ -159,8 +80,6 @@ export default function TargetsPage({
   const selectedScanTask =
     scanTask?.accountId === selectedAccountId ? scanTask : null
 
-  const visibleScanEntries =
-    selectedScanTask?.status === 'running' ? selectedScanTask.entries : scanEntries
   const scanLoading = scanStarting || scanTask?.status === 'running'
   const displayedScanError =
     scanError ??
@@ -170,44 +89,6 @@ export default function TargetsPage({
       ? selectedScanTask.detail ?? '扫描未完成，请重新发起'
       : selectedScanTask?.syncError ?? null)
 
-  // 抖音官方火花天数就是续火对象的判定信号；火花将熄的（消息提示）也算
-  const scanStreakCount =
-    visibleScanEntries?.filter((entry) => isStreakTarget(entry)).length ?? 0
-  const scanNoStreakCount = (visibleScanEntries?.length ?? 0) - scanStreakCount
-  const scanExistCount =
-    visibleScanEntries?.filter((entry) => isExistingScanEntry(entry)).length ?? 0
-  const scanIdentityCount =
-    visibleScanEntries?.filter((entry) => entry.identityStatus === 'bound').length ?? 0
-  const scanIdentityPendingCount =
-    visibleScanEntries?.filter(
-      (entry) => entry.conversationType !== 'group' && entry.identityStatus !== 'bound',
-    ).length ?? 0
-  const scanConversationCount =
-    visibleScanEntries?.filter(
-      (entry) => entry.conversationType === 'group' && entry.conversationStatus === 'bound',
-    ).length ?? 0
-  const scanFiltered = (visibleScanEntries ?? []).filter((entry) => {
-    if (!showNoStreak && !isStreakTarget(entry)) return false
-    const q = scanQuery.trim().toLowerCase()
-    if (q && !entry.title.toLowerCase().includes(q)) return false
-    return true
-  })
-  const existingNoSparkTargets =
-    selectedScanTask?.status === 'completed' && selectedScanTask.syncStatus === 'done'
-      ? accountTargets.filter(
-          (target) =>
-            target.conversationType !== 'group' &&
-            (visibleScanEntries ?? []).some(
-              (entry) =>
-                entry.conversationType !== 'group' &&
-                !isStreakTarget(entry) &&
-                scanEntryMatchesTarget(entry, target),
-            ),
-        )
-      : []
-  const showNoSparkReminder =
-    existingNoSparkTargets.length > 0 &&
-    dismissedNoSparkTaskId !== selectedScanTask?.taskId
 
   async function handleDelete(target: ContractTarget) {
     if (
@@ -257,70 +138,9 @@ export default function TargetsPage({
     }
   }
 
-  async function handleDeleteNoSparkTargets() {
-    if (existingNoSparkTargets.length === 0) return
-    const names = existingNoSparkTargets.map((target) => target.nicknameSnapshot).join('、')
-    if (
-      !window.confirm(
-        `确定删除本次扫描确认无火花的好友？\n\n${names}\n\n删除后将停止后续续火，并从好友列表隐藏；历史任务仍会保留，再次扫描导入时可以恢复。`,
-      )
-    ) {
-      return
-    }
-
-    setDeletingNoSpark(true)
-    setActionError(null)
-    const failed: string[] = []
-    for (const target of existingNoSparkTargets) {
-      try {
-        await api.deleteTarget(target.id)
-      } catch {
-        failed.push(target.nicknameSnapshot)
-      }
-    }
-    setDeletingNoSpark(false)
-    onChanged()
-    if (failed.length > 0) {
-      setActionError(`以下好友删除失败，请重试：${failed.join('、')}`)
-      return
-    }
-    setDismissedNoSparkTaskId(selectedScanTask?.taskId ?? null)
-  }
-
-  // 群聊识别（真机侦察结论）：标题带「已满/人数」括号；最后一条消息带「成员名：」前缀
-  // （成员名可能被截断成冒号开头）；或为「xx加入了群聊」系统消息
-  function looksLikeGroup(title: string, preview: string): boolean {
-    return (
-      /（已满）|\(\d+\)|（\d+人?）/.test(title) ||
-      /加入了群聊/.test(preview) ||
-      /^[^：]{0,20}：\S/.test(preview)
-    )
-  }
-
-  // 火花将熄/重燃中的会话：火花徽标是文字标签（「重燃中 1/3」「5 天后消失」）；
-  // 已断火的只剩系统消息文案（「N 天后火花将消失」）。三者都视为续火对象
-  function hasSparkHint(entry: {
-    streakLabel?: string | null
-    preview: string
-  }): boolean {
-    return Boolean(entry.streakLabel) || /火花/.test(entry.preview)
-  }
-
-  function isStreakTarget(entry: {
-    streakDays: number | null
-    streakLabel?: string | null
-    preview: string
-  }): boolean {
-    return entry.streakDays != null || hasSparkHint(entry)
-  }
-
   async function handleScan() {
     setScanError(null)
     setActionError(null)
-    setBatchResult(null)
-    setScanEntries(null)
-    setSelectedEntries(new Map())
-    setScanQuery('')
     try {
       await onStartScan(selectedAccountId)
     } catch (err) {
@@ -339,39 +159,6 @@ export default function TargetsPage({
       await onStartIdentityHydration(selectedAccountId, identityTargetIds)
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '身份补采启动失败，请重试')
-    }
-  }
-
-  async function handleImportSelected() {
-    if (selectedImportEntries.length === 0) return
-    setBatchSubmitting(true)
-    setActionError(null)
-    try {
-      const result = await api.createTargetsBatch({
-        accountId: selectedAccountId,
-        items: selectedImportEntries.map((entry) => ({
-          nickname: entry.title,
-          platformUserId: entry.platformUserId,
-          platformHandle: entry.platformHandle,
-          platformConversationId: entry.platformConversationId,
-          conversationType: entry.conversationType,
-          identityStatus: entry.identityStatus,
-          conversationStatus: entry.conversationStatus,
-          streakDays: entry.streakDays ?? undefined,
-          sparkDays: entry.streakDays,
-          // null 也要传递：重新扫描到普通状态时应清除旧的特殊徽标。
-          sparkKind: entry.streakKind,
-          sparkLabel: sparkLabelForSnapshot(entry),
-        })),
-      })
-      setBatchResult(result)
-      setScanEntries(null)
-      setSelectedEntries(new Map())
-      onChanged()
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : '导入失败，请重试')
-    } finally {
-      setBatchSubmitting(false)
     }
   }
 
@@ -695,216 +482,16 @@ export default function TargetsPage({
                 </div>
               </section>
             )}
-            {(selectedScanTask?.status === 'interrupted' || selectedScanTask?.status === 'cancelled') &&
-              scanEntries !== null && (
-                <p className="scan-recovery-note">
-                  {selectedScanTask.status === 'cancelled'
-                    ? '这是取消前保存的部分结果，可继续手动导入；重新扫描可获取完整会话列表。'
-                    : '这是后端重启前保存的部分结果，仅供查看或手动导入；重新扫描可获取完整会话列表。'}
-                </p>
-              )}
-            <div className="form-grid">
-                {batchResult && (
-                  <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.7 }}>
-                    {batchResult.created.length > 0 && (
-                      <div>✅ 新增 {batchResult.created.length} 个：{batchResult.created.join('、')}</div>
-                    )}
-                    {batchResult.refreshed.length > 0 && (
-                      <div>🔄 已更新官方状态 {batchResult.refreshed.length} 个：{batchResult.refreshed.join('、')}</div>
-                    )}
-                    {batchResult.duplicates.length > 0 && (
-                      <div>↩️ 跳过重复 {batchResult.duplicates.length} 个：{batchResult.duplicates.join('、')}</div>
-                    )}
-                    {batchResult.failed.length > 0 && (
-                      <div>⚠️ 失败 {batchResult.failed.length} 个：{batchResult.failed.join('、')}</div>
-                    )}
-                    {batchResult.identityBound.length > 0 && (
-                      <div>🔐 已绑定稳定身份 {batchResult.identityBound.length} 个：{batchResult.identityBound.join('、')}</div>
-                    )}
-                    {batchResult.identityUnresolved.length > 0 && (
-                      <div>🔎 未观察到身份数据 {batchResult.identityUnresolved.length} 个：{batchResult.identityUnresolved.join('、')}</div>
-                    )}
-                    {batchResult.identityAmbiguous.length > 0 && (
-                      <div>🛑 同名冲突，未绑定 {batchResult.identityAmbiguous.length} 个：{batchResult.identityAmbiguous.join('、')}</div>
-                    )}
-                    {batchResult.conversationBound.length > 0 && (
-                      <div>👥 已绑定群会话 {batchResult.conversationBound.length} 个：{batchResult.conversationBound.join('、')}</div>
-                    )}
-                    {batchResult.conversationUnresolved.length > 0 && (
-                      <div>🔎 未观察到群会话 ID {batchResult.conversationUnresolved.length} 个：{batchResult.conversationUnresolved.join('、')}</div>
-                    )}
-                    {batchResult.conversationAmbiguous.length > 0 && (
-                      <div>🛑 群聊同名冲突，未绑定 {batchResult.conversationAmbiguous.length} 个：{batchResult.conversationAmbiguous.join('、')}</div>
-                    )}
-                  </div>
-                )}
-                {showNoSparkReminder && (
-                  <section className="no-spark-review" role="alert" aria-live="polite">
-                    <div className="no-spark-review-copy">
-                      <span className="badge crimson">熄火复核 · {existingNoSparkTargets.length}</span>
-                      <strong>这些好友已在续火列表中，但本次扫描没有检测到官方火花。</strong>
-                      <p>
-                        {existingNoSparkTargets
-                          .map(
-                            (target) =>
-                              `${target.nicknameSnapshot}（本地历史 ${target.streakDays} 天）`,
-                          )
-                          .join('、')}
-                      </p>
-                      <small>没有火花通常无需继续续火。删除只会隐藏好友并停止后续发送，历史任务仍会保留。</small>
-                    </div>
-                    <div className="no-spark-review-actions">
-                      <button
-                        className="btn ghost small"
-                        type="button"
-                        disabled={deletingNoSpark}
-                        onClick={() => setDismissedNoSparkTaskId(selectedScanTask?.taskId ?? null)}
-                      >
-                        暂时保留
-                      </button>
-                      <button
-                        className="btn small no-spark-delete"
-                        type="button"
-                        disabled={deletingNoSpark}
-                        onClick={() => void handleDeleteNoSparkTargets()}
-                      >
-                        {deletingNoSpark
-                          ? '正在删除…'
-                          : `删除这些好友（${existingNoSparkTargets.length}）`}
-                      </button>
-                    </div>
-                  </section>
-                )}
-                {visibleScanEntries !== null && (
-                  <div className="scan-pick-results" style={{ display: 'grid', gap: 8 }}>
-                    <div className="pick-toolbar">
-                      <input
-                        className="pick-search"
-                        type="text"
-                        value={scanQuery}
-                        onChange={(event) => setScanQuery(event.target.value)}
-                        placeholder="搜索会话名…"
-                      />
-                      <label className="pick-switch">
-                        <input
-                          type="checkbox"
-                          checked={showNoStreak}
-                          onChange={(event) => setShowNoStreak(event.target.checked)}
-                        />
-                        显示无火花会话（{scanNoStreakCount}）
-                      </label>
-                    </div>
-                    <div className="pick-list">
-                      {scanFiltered.length === 0 ? (
-                        <div className="muted" style={{ padding: '14px 12px', fontSize: 12 }}>
-                          {scanQuery.trim()
-                            ? '没有匹配的会话，换个关键词试试。'
-                            : showNoStreak
-                            ? '没有可显示的会话。'
-                            : '没有带火花的会话——勾选右上角开关可查看全部会话。'}
-                        </div>
-                      ) : (
-                        scanFiltered.map((entry) => {
-                          const exists = isExistingScanEntry(entry)
-                          const checked = !exists && selectedEntries.has(entry.title)
-                          const group =
-                            entry.conversationType === 'group' ||
-                            looksLikeGroup(entry.title, entry.preview)
-                          const identityStatus =
-                            entry.conversationType === 'group'
-                              ? entry.conversationStatus
-                              : entry.identityStatus
-                          return (
-                            <label
-                              key={entry.title}
-                              className={[
-                                'pick-row',
-                                checked ? 'selected' : '',
-                                exists ? 'occupied' : '',
-                              ]
-                                .filter(Boolean)
-                                .join(' ')}
-                              title={entry.preview || undefined}
-                            >
-                              <input
-                                type="checkbox"
-                                disabled={exists}
-                                checked={checked}
-                                onChange={() =>
-                                  setSelectedEntries((previous) => {
-                                    if (exists) return previous
-                                    const next = new Map(previous)
-                                    if (next.has(entry.title)) next.delete(entry.title)
-                                    else next.set(entry.title, entry)
-                                    return next
-                                  })
-                                }
-                              />
-                              <span className="pick-name">{entry.title}</span>
-                              <span className="pick-meta">
-                                {isStreakTarget(entry) && (
-                                  <SparkBadge
-                                    officialDays={entry.streakDays}
-                                    kind={entry.streakKind}
-                                    label={entry.streakLabel}
-                                  />
-                                )}
-                                {entry.streakDays == null && !entry.streakLabel && hasSparkHint(entry) && (
-                                  <span className="badge gold">🔥?</span>
-                                )}
-                                {group && <span className="badge">群</span>}
-                                <span
-                                  className={`badge identity-badge identity-${identityStatus}`}
-                                  title={
-                                    entry.conversationType === 'group'
-                                      ? entry.conversationDetail ?? undefined
-                                      : entry.identityDetail ?? undefined
-                                  }
-                                >
-                                  {identityStatusLabel(entry)}
-                                </span>
-                                {exists && (
-                                  <span className="badge">已自动同步</span>
-                                )}
-                              </span>
-                            </label>
-                          )
-                        })
-                      )}
-                    </div>
-                    <div className="pick-foot">
-                      <span className="pick-stat">
-                        扫描 {visibleScanEntries.length} · 续火对象 {scanStreakCount} · 用户身份已识别 {scanIdentityCount} · 群会话已识别 {scanConversationCount} · 待识别 {scanIdentityPendingCount} · 已在列表 {scanExistCount}
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <select
-                          value={batchTemplateId}
-                          onChange={(event) => setBatchTemplateId(event.target.value)}
-                          style={{ width: 170, padding: '5px 8px', fontSize: 12 }}
-                          title="导入的好友统一绑定的模板（之后可单独换绑）"
-                        >
-                          <option value="">不绑定模板</option>
-                          {templates.map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="btn primary small"
-                          type="button"
-                          disabled={batchSubmitting || selectedImportEntries.length === 0}
-                          onClick={() => void handleImportSelected()}
-                        >
-                          {batchSubmitting
-                            ? '导入中…'
-                            : `导入新对象（${selectedImportEntries.length}）`}
-                        </button>
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
+            {selectedScanTask && (
+              <ScanReconciliationPanel
+                accountId={selectedAccountId}
+                task={selectedScanTask}
+                targets={accountTargets}
+                templates={templates}
+                onChanged={onChanged}
+                onError={setActionError}
+              />
+            )}
           </section>
 
           <section className="card">

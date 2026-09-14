@@ -575,11 +575,13 @@ password, cookie, token, storageState, profilePath
 - `GET /api/accounts/{id}/scan-chats/latest`：读取该账号最近一次扫描快照；用于页面刷新、
   前端重连或后端重启后恢复任务坞。没有历史任务时返回 `null`。`running` 只表示当前进程
   仍在执行；后端重启会将遗留任务收束为 `interrupted`，保留已发现条目但不自动续跑。
+- `GET /api/accounts/{id}/scan-chats/history?limit=10`：读取该账号最近扫描的轻量历史，`limit` 范围 1–20；响应不包含完整 `entries`，仅含任务元数据与持久化 `reconciliation`，且按当前平台用户隔离。
 - `POST /api/accounts/{id}/scan-chats/cancel?taskId={taskId}`：取消指定后台扫描并保留已发现条目；
   已完成、失败、中断或已取消的终态任务重复调用时返回原终态，不会覆盖真实结果。
 - 快照响应字段为 `{taskId, accountId, source, status, total, completed, stage, currentItem, round,
-  maxRounds, overall, detail, entries, startedAt, finishedAt}`；`status` 取值为
+  maxRounds, overall, detail, entries, reconciliation, startedAt, finishedAt}`；`status` 取值为
   `running`/`completed`/`failed`/`interrupted`/`cancelled`。
+- `reconciliation` 仅在 `overall=ok` 的完整成功扫描中生成 `schemaVersion=1`，包含五类计数和条目：`changed`（官方状态变化）、`no_spark`（明确看到但无官方火花）、`new`（未匹配现有启用对象）、`not_observed`（完整列表未看到，保持原状态）、`unchanged`。失败、中断、取消和旧任务返回无版本的空结构，调用方不得据此导入或删除。
 - `source=automatic` 表示调度器发起的只读状态同步；它只回写已有好友/群聊的官方状态，不自动导入新会话、不发送消息。自动同步任务由调度器控制，前端任务坞只提供查看和恢复到好友状态页。
 - `failed` 保留 `detail`；`cancelled` 表示用户主动取消；`interrupted` 表示后端停止或重启。
   手动任务的这些状态都不会自动发送或自动导入新好友，用户可查看保留结果并显式重试/手动导入；自动任务只保留结果，不提供重试或导入操作。
