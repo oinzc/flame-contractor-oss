@@ -618,7 +618,15 @@ class DashboardSummary(APIBase):
 
 # ---------------------------------------------------------------- execution
 
-LoginState = Literal["idle", "waiting_scan", "succeeded", "failed", "expired"]
+LoginState = Literal[
+    "idle",
+    # 截图扫码：已开始渲染登录页，二维码尚未可读（慢网络下可达数十秒）
+    "preparing",
+    "waiting_scan",
+    "succeeded",
+    "failed",
+    "expired",
+]
 
 
 class LoginStatusRead(APIBase):

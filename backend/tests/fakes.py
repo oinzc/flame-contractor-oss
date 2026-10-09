@@ -133,6 +133,9 @@ class FakePage:
         self.sticker_clicked = None
         self.url = "https://www.douyin.com/chat"
         self.screenshots: list[str] = []
+        self.goto_kwargs: list[dict] = []
+        # 登录二维码：真实页面渲染完成前为 None，这里默认视为已渲染出二维码
+        self.qr_data_url = "data:image/png;base64,AAAA"
         # evaluate 桩：设置后 page.evaluate 返回该值（读自身昵称测试用）
         self.evaluate_result = None
 
@@ -157,8 +160,9 @@ class FakePage:
             Path(path).write_bytes(b"fake-png")
         return path
 
-    async def goto(self, url: str) -> None:
+    async def goto(self, url: str, **kwargs) -> None:
         self.gotos.append(url)
+        self.goto_kwargs.append(kwargs)
 
     async def query_selector(self, selector: str):
         if selector == CONVERSATION_LIST:
@@ -250,6 +254,9 @@ class FakePage:
             self.editor_text = ""
 
     async def evaluate(self, _expression: str, target=None, *args, **kwargs):
+        # 登录二维码查询脚本（结构与 class 无关，只认 data:image 前缀）
+        if "data:image" in _expression:
+            return self.qr_data_url
         # 读取自身昵称等「取值型」evaluate：测试显式设置 evaluate_result 时优先返回
         if self.evaluate_result is not None:
             return self.evaluate_result

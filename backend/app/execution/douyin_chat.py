@@ -16,6 +16,8 @@ _UNREAD_COUNT_SUFFIX_RE = re.compile(r"\(\d+\)$")
 
 MAX_LIST_SCROLLS = 8
 WARMUP_SCROLLS = 5
+# 会话页只等 DOM 就绪（不等全部静态资源），慢网络下也留有足够余量
+CHAT_PAGE_TIMEOUT_MS = 60_000
 SEARCH_RESULTS_TIMEOUT = 12.0
 OPEN_CONFIRM_TIMEOUT = 8.0
 EDITOR_READY_TIMEOUT = 8.0
@@ -609,7 +611,15 @@ class DouyinChat:
         return False, None
 
     async def open_chat_page(self) -> None:
-        await self.page.goto(_s.CHAT_URL)
+        """打开会话页。
+
+        douyin 页面会持续加载大量静态资源；默认的 `wait_until="load"` 在网络到
+        国内 CDN 较慢的机器上（例如云服务器）会超过 30s 超时，把整个流程误判为
+        失败。这里只等 DOM 就绪，页面是否可用一律交给后续元素轮询判断。
+        """
+        await self.page.goto(
+            _s.CHAT_URL, wait_until="domcontentloaded", timeout=CHAT_PAGE_TIMEOUT_MS
+        )
         await self._sleep(3)
 
     async def is_logged_in(self) -> bool:
