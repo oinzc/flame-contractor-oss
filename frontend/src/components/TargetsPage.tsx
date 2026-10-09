@@ -11,6 +11,7 @@ import { formatDateTime } from '../lib/format'
 import SparkBadge from './SparkBadge'
 import { ScanProgressBar, scanProgressCount, scanProgressPercent } from './ScanProgress'
 import ScanReconciliationPanel from './ScanReconciliationPanel'
+import FormDialog from './FormDialog'
 
 interface Props {
   accounts: Account[]
@@ -45,6 +46,9 @@ export default function TargetsPage({
   onStartIdentityHydration,
 }: Props) {
   const [selectedAccountId, setSelectedAccountId] = useState(accounts[0]?.id ?? '')
+  const [activeView, setActiveView] = useState<'friends' | 'scan'>('friends')
+  const [formOpen, setFormOpen] = useState(false)
+  const [initialDraft, setInitialDraft] = useState('')
   const [showPaused, setShowPaused] = useState(false)
   const [nickname, setNickname] = useState('')
   const [platformUserId, setPlatformUserId] = useState('')
@@ -89,6 +93,18 @@ export default function TargetsPage({
       ? selectedScanTask.detail ?? '扫描未完成，请重新发起'
       : selectedScanTask?.syncError ?? null)
 
+
+  const draft = JSON.stringify({ nickname, platformUserId, templateId, streakDays })
+
+  function openAddForm() {
+    setNickname('')
+    setPlatformUserId('')
+    setTemplateId('')
+    setStreakDays('0')
+    setError(null)
+    setInitialDraft(JSON.stringify({ nickname: '', platformUserId: '', templateId: '', streakDays: '0' }))
+    setFormOpen(true)
+  }
 
   async function handleDelete(target: ContractTarget) {
     if (
@@ -141,6 +157,7 @@ export default function TargetsPage({
   async function handleScan() {
     setScanError(null)
     setActionError(null)
+    setActiveView('scan')
     try {
       await onStartScan(selectedAccountId)
     } catch (err) {
@@ -174,6 +191,7 @@ export default function TargetsPage({
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
+    if (submitting) return
     setError(null)
     setSubmitting(true)
     try {
@@ -186,6 +204,7 @@ export default function TargetsPage({
       })
       setNickname('')
       setPlatformUserId('')
+      setFormOpen(false)
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '添加失败，请重试')
@@ -200,6 +219,28 @@ export default function TargetsPage({
         <div>
           <h1>好友管理</h1>
           <p className="sub">昵称必须与抖音会话列表里的显示完全一致，这是防错发的严格匹配。</p>
+        </div>
+        <div className="page-actions">
+          <button
+            className="btn small"
+            type="button"
+            disabled={scanLoading || selectedAccount?.status !== 'healthy'}
+            title={
+              selectedAccount?.status !== 'healthy'
+                ? '账号需先扫码登录才能扫描会话列表'
+                : '读取抖音会话列表并自动刷新已有好友/群聊的官方火花状态；只读页面，不发送消息（约需 1–2 分钟）'
+            }
+            onClick={() => void handleScan()}
+          >
+            {scanLoading
+              ? scanStarting
+                ? '正在启动扫描…'
+                : selectedScanTask?.status === 'running'
+                  ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
+                  : '其他账号扫描中…'
+              : '扫描会话'}
+          </button>
+          <button className="btn primary small" type="button" disabled={!selectedAccount} onClick={openAddForm}>+ 添加好友</button>
         </div>
       </div>
 
@@ -225,7 +266,21 @@ export default function TargetsPage({
             </select>
           </div>
 
-          <section className="card">
+          <div className="workspace-tabs" role="tablist" aria-label="好友管理视图"
+            onKeyDown={(event) => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+              event.preventDefault()
+              const next = event.key === 'Home' ? 'friends' : event.key === 'End' ? 'scan' : activeView === 'friends' ? 'scan' : 'friends'
+              setActiveView(next)
+              event.currentTarget.querySelector<HTMLButtonElement>(`#${next}-tab`)?.focus()
+            }}>
+            <button id="friends-tab" className="workspace-tab" type="button" role="tab" aria-selected={activeView === 'friends'} aria-controls="friends-panel" tabIndex={activeView === 'friends' ? 0 : -1} onClick={() => setActiveView('friends')}>好友列表（{selectedTargets.length}）</button>
+            <button id="scan-tab" className="workspace-tab" type="button" role="tab" aria-selected={activeView === 'scan'} aria-controls="scan-panel" tabIndex={activeView === 'scan' ? 0 : -1} onClick={() => setActiveView('scan')}>扫描结果{selectedScanTask?.status === 'running' ? ' · 进行中' : selectedScanTask?.finishedAt ? ` · ${formatDateTime(selectedScanTask.finishedAt)}` : ''}</button>
+          </div>
+          {actionError && <div className="form-error" role="alert">{actionError}</div>}
+          {displayedScanError && <div className="form-error" role="alert">{displayedScanError}</div>}
+
+          <section className="card workspace-panel" role="tabpanel" id="friends-panel" aria-labelledby="friends-tab" hidden={activeView !== 'friends'}>
             <div className="target-list-head">
               <div className="target-list-title">
                 <h2>好友列表（{selectedTargets.length}）</h2>
@@ -271,13 +326,11 @@ export default function TargetsPage({
                 )}
               </div>
             </div>
-            {actionError && <div className="form-error" style={{ marginBottom: 8 }}>{actionError}</div>}
-            {displayedScanError && <div className="form-error" style={{ marginBottom: 8 }}>{displayedScanError}</div>}
             {selectedTargets.length === 0 ? (
               <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
                 {!showPaused && pausedCount > 0
                   ? `好友都处于暂停状态（${pausedCount} 个），勾选上方「显示已暂停」可查看。`
-                  : '这个账号还没有好友，用下面的表单添加第一位。'}
+                  : '这个账号还没有好友，点击「添加好友」或扫描会话进行导入。'}
               </p>
             ) : (
               <div className="target-table-wrap">
@@ -407,31 +460,12 @@ export default function TargetsPage({
             )}
           </section>
 
-          <section className="card">
+          <section className="card workspace-panel" role="tabpanel" id="scan-panel" aria-labelledby="scan-tab" hidden={activeView !== 'scan'}>
             <div className="card-head target-scan-head">
-              <h2>会话扫描与批量添加</h2>
-              <button
-                className="btn small"
-                type="button"
-                disabled={scanLoading || selectedAccount?.status !== 'healthy'}
-                title={
-                  selectedAccount?.status !== 'healthy'
-                    ? '账号需先扫码登录才能扫描会话列表'
-                    : '读取抖音会话列表并自动刷新已有好友/群聊的官方火花状态；只读页面，不发送消息（约需 1–2 分钟）'
-                }
-                onClick={() => void handleScan()}
-              >
-                {scanLoading
-                  ? scanStarting
-                    ? '正在启动扫描…'
-                    : selectedScanTask?.status === 'running'
-                      ? `扫描中… ${scanProgressPercent(selectedScanTask) === null ? '读取中' : `${scanProgressPercent(selectedScanTask)}%`}`
-                      : '其他账号扫描中…'
-                  : '扫描并刷新官方状态'}
-              </button>
+              <h2>扫描结果与对账</h2>
             </div>
             <p className="scan-helper">
-              扫描只读取会话列表，不点击会话、不发送消息；完成后会自动刷新列表中已有好友/群聊的官方状态。已有对象会标记为已自动同步，下方仅需勾选未在列表的新对象进行导入。身份补采会逐个打开已有普通好友会话，可能标为已读，但同样不会发送。用户保存抖音稳定身份，群聊保存会话唯一 ID；未识别或同名冲突时绝不猜测绑定。
+              扫描会刷新已有好友的官方状态，不发送消息。新会话需勾选后导入，无火花对象需确认后删除；切换页面不影响后台扫描。
             </p>
             {selectedScanTask && (
               <section
@@ -453,7 +487,7 @@ export default function TargetsPage({
                               : '会话列表扫描未完成'}
                     </strong>
                     <p>
-                      {selectedScanTask.syncStatus === 'pending'
+                      {selectedScanTask.status === 'completed' && selectedScanTask.syncStatus === 'pending'
                         ? '正在把已存在好友的官方状态写回本地…'
                         : selectedScanTask.pollError ?? selectedScanTask.syncError ?? selectedScanTask.stage}
                     </p>
@@ -482,27 +516,25 @@ export default function TargetsPage({
                 </div>
               </section>
             )}
-            {selectedScanTask && (
-              <ScanReconciliationPanel
-                accountId={selectedAccountId}
-                task={selectedScanTask}
-                targets={accountTargets}
-                templates={templates}
-                onChanged={onChanged}
-                onError={setActionError}
-              />
-            )}
+            <ScanReconciliationPanel
+              accountId={selectedAccountId}
+              task={selectedScanTask}
+              targets={accountTargets}
+              templates={templates}
+              onChanged={onChanged}
+              onError={setActionError}
+            />
           </section>
 
-          <section className="card">
-            <div className="card-head">
-              <h2>添加好友</h2>
-            </div>
-            <form className="form-grid" onSubmit={handleSubmit}>
-              <div className="field-row">
+          {formOpen && (
+            <FormDialog title="添加好友" description={`所属账号：${selectedAccount?.displayName ?? ''}。昵称须与抖音显示完全一致。`}
+              formId="target-editor-form" submitLabel={submitting ? '添加中…' : '添加好友'}
+              dirty={draft !== initialDraft} busy={submitting} onClose={() => { setFormOpen(false); setError(null) }}>
+              <form id="target-editor-form" className="form-grid" onSubmit={handleSubmit}>
                 <div className="field">
                   <label htmlFor="target-nickname">昵称（必填）</label>
                   <input
+                    autoFocus
                     id="target-nickname"
                     value={nickname}
                     onChange={(event) => setNickname(event.target.value)}
@@ -511,18 +543,6 @@ export default function TargetsPage({
                     required
                   />
                 </div>
-                <div className="field">
-                  <label htmlFor="target-uid">稳定身份 ID（选填）</label>
-                  <input
-                    id="target-uid"
-                    value={platformUserId}
-                    onChange={(event) => setPlatformUserId(event.target.value)}
-                    placeholder="通常由扫描自动写入；仅供高级手动绑定"
-                    maxLength={128}
-                  />
-                </div>
-              </div>
-              <div className="field-row">
                 <div className="field">
                   <label htmlFor="target-template">绑定模板（选填）</label>
                   <select
@@ -538,25 +558,35 @@ export default function TargetsPage({
                     ))}
                   </select>
                 </div>
-                <div className="field">
-                  <label htmlFor="target-streak">本地初始累计（仅新建）</label>
-                  <input
-                    id="target-streak"
-                    type="number"
-                    min={0}
-                    value={streakDays}
-                    onChange={(event) => setStreakDays(event.target.value)}
-                  />
-                </div>
-              </div>
-              {error && <div className="form-error">{error}</div>}
-              <div className="form-actions">
-                <button className="btn primary small" type="submit" disabled={submitting}>
-                  {submitting ? '添加中…' : '添加好友'}
-                </button>
-              </div>
-            </form>
-          </section>
+                <details className="form-advanced">
+                  <summary>高级设置</summary>
+                  <div className="form-grid">
+                    <div className="field">
+                      <label htmlFor="target-uid">稳定身份 ID（选填）</label>
+                      <input
+                        id="target-uid"
+                        value={platformUserId}
+                        onChange={(event) => setPlatformUserId(event.target.value)}
+                        placeholder="通常由扫描自动写入；仅供高级手动绑定"
+                        maxLength={128}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="target-streak">本地初始累计（仅新建）</label>
+                      <input
+                        id="target-streak"
+                        type="number"
+                        min={0}
+                        value={streakDays}
+                        onChange={(event) => setStreakDays(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                </details>
+                {error && <div className="form-error" role="alert">{error}</div>}
+              </form>
+            </FormDialog>
+          )}
         </>
       )}
     </div>
