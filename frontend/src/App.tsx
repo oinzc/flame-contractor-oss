@@ -895,6 +895,7 @@ export default function App() {
               key={item.key}
               type="button"
               className={`side-nav-item${page === item.key ? ' active' : ''}`}
+              aria-label={item.label}
               onClick={() => setPage(item.key)}
             >
               <span className="nav-ico" aria-hidden="true">

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, ApiError } from '../api'
 import type { MessageTemplate } from '../types'
+import FormDialog from './FormDialog'
 
 interface Props {
   templates: MessageTemplate[]
@@ -42,6 +43,8 @@ const EMPTY_FORM = {
 }
 
 export default function TemplatesPage({ templates, onChanged }: Props) {
+  const [formOpen, setFormOpen] = useState(false)
+  const [initialDraft, setInitialDraft] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState(EMPTY_FORM.name)
   const [type, setType] = useState(EMPTY_FORM.type)
@@ -53,6 +56,15 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  const draft = JSON.stringify({ name, type, content, imagePath, stickerName, stickerCategory, poolItems })
+
+  function startCreate() {
+    resetForm()
+    setError(null)
+    setInitialDraft(JSON.stringify(EMPTY_FORM))
+    setFormOpen(true)
+  }
 
   function resetForm() {
     setEditingId(null)
@@ -79,6 +91,18 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
         : [{ content: '', weekdayMask: 0 }],
     )
     setError(null)
+    setInitialDraft(JSON.stringify({
+      name: template.name,
+      type: template.type,
+      content: template.type === 'text' ? template.content : '',
+      imagePath: template.type === 'image' ? (template.imagePath ?? '') : '',
+      stickerName: template.type === 'sticker' ? (template.stickerName ?? '') : '',
+      stickerCategory: template.type === 'sticker' ? (template.stickerCategory ?? '') : '',
+      poolItems: template.type === 'pool' && template.poolItems.length > 0
+        ? template.poolItems.map((item) => ({ content: item.content, weekdayMask: item.weekdayMask }))
+        : [{ content: '', weekdayMask: 0 }],
+    }))
+    setFormOpen(true)
   }
 
   async function handleToggleEnabled(template: MessageTemplate) {
@@ -110,6 +134,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
+    if (submitting) return
     setError(null)
     setSubmitting(true)
     try {
@@ -145,6 +170,7 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
         })
       }
       resetForm()
+      setFormOpen(false)
       onChanged()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败，请重试')
@@ -169,14 +195,15 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
       <section className="card">
         <div className="card-head">
           <h2>模板列表（{templates.length}）</h2>
+          <button className="btn primary small" type="button" onClick={startCreate}>+ 新建模板</button>
         </div>
         {listError && <div className="form-error" style={{ marginBottom: 8 }}>{listError}</div>}
         {templates.length === 0 ? (
           <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
-            还没有模板，用下面的表单创建第一个。
+            还没有模板，点击「新建模板」创建第一个。
           </p>
         ) : (
-          <table className="table">
+          <div className="template-table-wrap"><table className="table">
             <thead>
               <tr>
                 <th>名称</th>
@@ -243,198 +270,197 @@ export default function TemplatesPage({ templates, onChanged }: Props) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </section>
 
-      <section className="card">
-        <div className="card-head">
-          <h2>{editingId ? `编辑模板：${editingTemplate?.name ?? ''}` : '新建模板'}</h2>
-          {editingId && (
-            <button className="btn ghost small" type="button" onClick={resetForm}>
-              取消编辑
-            </button>
-          )}
-        </div>
-        <form className="form-grid" onSubmit={handleSubmit}>
-          <div className="field-row">
-            <div className="field">
-              <label htmlFor="template-name">模板名称</label>
-              <input
-                id="template-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="例如：每日一言"
-                maxLength={60}
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="template-type">模板类型</label>
-              <select
-                id="template-type"
-                value={type}
-                disabled={Boolean(editingId)}
-                title={editingId ? '类型不可修改，如需更换类型请删除后重建' : undefined}
-                onChange={(event) => setType(event.target.value as 'text' | 'image')}
-              >
-                <option value="text">文本</option>
-                <option value="image">图片</option>
-                <option value="sticker">表情</option>
-                <option value="pool">文案池</option>
-              </select>
-            </div>
-          </div>
-
-          {type === 'text' ? (
-            <>
-              <div className="variable-doc">
-                {VARIABLE_DOC.map((item) => (
-                  <span className="variable-chip" key={item.token}>
-                    <code>{item.token}</code> {item.meaning}
-                  </span>
-                ))}
-              </div>
+      {formOpen && (
+        <FormDialog
+          title={editingId ? `编辑模板：${editingTemplate?.name ?? ''}` : '新建模板'}
+          dirty={draft !== initialDraft}
+          busy={submitting}
+          formId="template-editor-form"
+          submitLabel={submitting ? '保存中…' : editingId ? '保存修改' : '保存模板'}
+          onClose={() => { setFormOpen(false); resetForm(); setError(null) }}
+        >
+          <form id="template-editor-form" className="form-grid" onSubmit={handleSubmit}>
+            <div className="field-row">
               <div className="field">
-                <label htmlFor="template-content">文案内容</label>
-                <textarea
-                  id="template-content"
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                  placeholder="{{target_name}}，今天也要开心。第 {{streak_days}} 天。"
-                  maxLength={1000}
-                  rows={3}
-                  required={type === 'text'}
-                />
-              </div>
-              {content.trim() && (
-                <div className="preview-box">
-                  <div className="preview-label">发送预览</div>
-                  <div className="preview-text">{previewContent(content)}</div>
-                </div>
-              )}
-            </>
-          ) : type === 'image' ? (
-            <div className="field">
-              <label htmlFor="template-image-path">图片本地路径</label>
-              <input
-                id="template-image-path"
-                value={imagePath}
-                onChange={(event) => setImagePath(event.target.value)}
-                placeholder="例：D:/images/比心.png"
-                maxLength={500}
-                required={type === 'image'}
-              />
-              <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
-                发送时把这张本地图片作为消息投递给好友。路径必须本机可读，且为图片文件。
-              </p>
-            </div>
-          ) : type === 'sticker' ? (
-            <>
-              <div className="field">
-                <label htmlFor="template-sticker-name">表情名称</label>
+                <label htmlFor="template-name">模板名称</label>
                 <input
-                  id="template-sticker-name"
-                  value={stickerName}
-                  onChange={(event) => setStickerName(event.target.value)}
-                  placeholder="例如：比心"
-                  maxLength={64}
-                  required={type === 'sticker'}
+                  autoFocus
+                  id="template-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="例如：每日一言"
+                  maxLength={60}
+                  required
                 />
-                <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
-                  抖音原生表情（贴纸）名称，发送时在表情面板里按名称匹配后一点即发。
-                </p>
               </div>
               <div className="field">
-                <label htmlFor="template-sticker-category">表情分类（可选）</label>
-                <input
-                  id="template-sticker-category"
-                  value={stickerCategory}
-                  onChange={(event) => setStickerCategory(event.target.value)}
-                  placeholder="例如：常用"
-                  maxLength={32}
-                />
-                <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
-                  若该表情在面板的某个分类页里，填分类可先切换到对应分类再匹配；不填则直接在当前面板查找。
-                </p>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="muted" style={{ fontSize: 11.5, margin: 0 }}>
-                文案池：每天按「最少最近使用」从候选中轮换一条发送；可为每条限定生效星期（全不选=每天可用）。
-              </p>
-              <div className="pool-editor">
-                {poolItems.map((item, index) => (
-                  <div className="pool-item-row" key={index}>
-                    <input
-                      type="text"
-                      value={item.content}
-                      maxLength={500}
-                      placeholder={`候选 ${index + 1}，可用 {{target_name}} {{streak_days}} 等安全变量`}
-                      onChange={(event) =>
-                        setPoolItems((previous) =>
-                          previous.map((draft, i) =>
-                            i === index ? { ...draft, content: event.target.value } : draft,
-                          ),
-                        )
-                      }
-                    />
-                    <div className="pool-days">
-                      {WEEKDAY_LABELS.map((label, bit) => {
-                        const on = (item.weekdayMask & (1 << bit)) !== 0
-                        return (
-                          <button
-                            key={label}
-                            type="button"
-                            className={`pool-day${on ? ' on' : ''}`}
-                            onClick={() =>
-                              setPoolItems((previous) =>
-                                previous.map((draft, i) =>
-                                  i === index
-                                    ? { ...draft, weekdayMask: draft.weekdayMask ^ (1 << bit) }
-                                    : draft,
-                                ),
-                              )
-                            }
-                          >
-                            {label}
-                          </button>
-                        )
-                      })}
-                    </div>
-                    <button
-                      className="pool-remove"
-                      type="button"
-                      title="删除该候选"
-                      onClick={() =>
-                        setPoolItems((previous) => previous.filter((_, i) => i !== index))
-                      }
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button
-                  className="btn small"
-                  type="button"
-                  onClick={() =>
-                    setPoolItems((previous) => [...previous, { content: '', weekdayMask: 0 }])
-                  }
+                <label htmlFor="template-type">模板类型</label>
+                <select
+                  id="template-type"
+                  value={type}
+                  disabled={Boolean(editingId)}
+                  title={editingId ? '类型不可修改，如需更换类型请删除后重建' : undefined}
+                  onChange={(event) => setType(event.target.value as typeof type)}
                 >
-                  + 添加候选
-                </button>
+                  <option value="text">文本</option>
+                  <option value="image">图片</option>
+                  <option value="sticker">表情</option>
+                  <option value="pool">文案池</option>
+                </select>
               </div>
-            </>
-          )}
-          {error && <div className="form-error">{error}</div>}
-          <div className="form-actions">
-            <button className="btn primary small" type="submit" disabled={submitting}>
-              {submitting ? '保存中…' : editingId ? '保存修改' : '保存模板'}
-            </button>
-          </div>
-        </form>
-      </section>
+            </div>
+
+            {type === 'text' ? (
+              <>
+                <div className="variable-doc">
+                  {VARIABLE_DOC.map((item) => (
+                    <span className="variable-chip" key={item.token}>
+                      <code>{item.token}</code> {item.meaning}
+                    </span>
+                  ))}
+                </div>
+                <div className="field">
+                  <label htmlFor="template-content">文案内容</label>
+                  <textarea
+                    id="template-content"
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    placeholder="{{target_name}}，今天也要开心。第 {{streak_days}} 天。"
+                    maxLength={1000}
+                    rows={3}
+                    required={type === 'text'}
+                  />
+                </div>
+                {content.trim() && (
+                  <div className="preview-box">
+                    <div className="preview-label">发送预览</div>
+                    <div className="preview-text">{previewContent(content)}</div>
+                  </div>
+                )}
+              </>
+            ) : type === 'image' ? (
+              <div className="field">
+                <label htmlFor="template-image-path">图片本地路径</label>
+                <input
+                  id="template-image-path"
+                  value={imagePath}
+                  onChange={(event) => setImagePath(event.target.value)}
+                  placeholder="例：D:/images/比心.png"
+                  maxLength={500}
+                  required={type === 'image'}
+                />
+                <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                  发送时把这张本地图片作为消息投递给好友。路径必须本机可读，且为图片文件。
+                </p>
+              </div>
+            ) : type === 'sticker' ? (
+              <>
+                <div className="field">
+                  <label htmlFor="template-sticker-name">表情名称</label>
+                  <input
+                    id="template-sticker-name"
+                    value={stickerName}
+                    onChange={(event) => setStickerName(event.target.value)}
+                    placeholder="例如：比心"
+                    maxLength={64}
+                    required={type === 'sticker'}
+                  />
+                  <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                    抖音原生表情（贴纸）名称，发送时在表情面板里按名称匹配后一点即发。
+                  </p>
+                </div>
+                <div className="field">
+                  <label htmlFor="template-sticker-category">表情分类（可选）</label>
+                  <input
+                    id="template-sticker-category"
+                    value={stickerCategory}
+                    onChange={(event) => setStickerCategory(event.target.value)}
+                    placeholder="例如：常用"
+                    maxLength={32}
+                  />
+                  <p className="muted" style={{ fontSize: 11.5, margin: '6px 0 0' }}>
+                    若该表情在面板的某个分类页里，填分类可先切换到对应分类再匹配；不填则直接在当前面板查找。
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted" style={{ fontSize: 11.5, margin: 0 }}>
+                  文案池：每天按「最少最近使用」从候选中轮换一条发送；可为每条限定生效星期（全不选=每天可用）。
+                </p>
+                <div className="pool-editor">
+                  {poolItems.map((item, index) => (
+                    <div className="pool-item-row" key={index}>
+                      <input
+                        type="text"
+                        value={item.content}
+                        maxLength={500}
+                        aria-label={`候选文案 ${index + 1}`}
+                        placeholder={`候选 ${index + 1}，可用 {{target_name}} {{streak_days}} 等安全变量`}
+                        onChange={(event) =>
+                          setPoolItems((previous) =>
+                            previous.map((draft, i) =>
+                              i === index ? { ...draft, content: event.target.value } : draft,
+                            ),
+                          )
+                        }
+                      />
+                      <div className="pool-days">
+                        {WEEKDAY_LABELS.map((label, bit) => {
+                          const on = (item.weekdayMask & (1 << bit)) !== 0
+                          return (
+                            <button
+                              key={label}
+                              type="button"
+                              className={`pool-day${on ? ' on' : ''}`}
+                              aria-pressed={on}
+                              onClick={() =>
+                                setPoolItems((previous) =>
+                                  previous.map((draft, i) =>
+                                    i === index
+                                      ? { ...draft, weekdayMask: draft.weekdayMask ^ (1 << bit) }
+                                      : draft,
+                                  ),
+                                )
+                              }
+                            >
+                              {label}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <button
+                        className="pool-remove"
+                        type="button"
+                        title="删除该候选"
+                        onClick={() =>
+                          setPoolItems((previous) => previous.filter((_, i) => i !== index))
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="btn small"
+                    type="button"
+                    onClick={() =>
+                      setPoolItems((previous) => [...previous, { content: '', weekdayMask: 0 }])
+                    }
+                  >
+                    + 添加候选
+                  </button>
+                </div>
+              </>
+            )}
+            {error && <div className="form-error">{error}</div>}
+          </form>
+        </FormDialog>
+      )}
     </div>
   )
 }

@@ -858,9 +858,8 @@ body {
 
 .target-table-wrap {
   min-width: 0;
-  max-height: min(640px, max(360px, calc(100vh - 280px)));
   overflow: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--edge) var(--panel);
@@ -1145,6 +1144,41 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 }
 
 .modal h3 { margin: 0 0 12px; font-size: 15px; }
+
+/* 管理表单与扫描工作区复用驾驶舱边界，不为高频操作增加动效。 */
+.form-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  box-sizing: border-box;
+  color: var(--ink);
+  animation: none;
+}
+.form-dialog::backdrop { background: rgba(10, 8, 6, 0.72); }
+.form-dialog .modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.form-dialog .modal-title { margin: 0; font-size: 16px; }
+.form-dialog .modal-sub { margin: 0 0 16px; color: var(--text-2); font-size: 12px; }
+.dialog-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.dialog-actions { justify-content: flex-end; margin-top: 16px; }
+.dialog-actions[hidden] { display: none; }
+.form-advanced { border-top: 1px solid var(--edge); padding-top: 12px; }
+.form-advanced summary { cursor: pointer; color: var(--text-2); font-size: 12px; }
+.form-advanced > .form-grid { margin-top: 12px; }
+.page-actions { display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
+.workspace-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--edge); }
+.workspace-tab { background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.workspace-tab[aria-selected='true'] { color: var(--flame); border-bottom-color: var(--flame); }
+.workspace-tab:focus-visible, .form-advanced summary:focus-visible { outline: 2px solid var(--flame); outline-offset: 2px; }
+.workspace-panel[hidden] { display: none; }
+.template-table-wrap { min-width: 0; overflow-x: auto; }
+.template-table-wrap .table { min-width: 560px; }
+@media (max-width: 640px) {
+  .page-head:has(.page-actions) { align-items: stretch; flex-direction: column; }
+  .page-actions .btn { flex: 1; }
+  .workspace-tab { flex: 1; padding: 10px 8px; }
+  .form-dialog { padding: 16px; }
+  .form-dialog .pool-item-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .form-dialog .pool-item-row > input { grid-column: 1 / -1; }
+}
 
 /* 发送任务面板：预览与执行分层，执行期间可收起为右下角任务坞 */
 .send-overlay { padding: 16px; }

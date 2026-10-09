@@ -158,7 +158,7 @@ export default function ScanReconciliationPanel({
     setQuery('')
   }, [historyTaskId])
 
-  const historyTask = history.find((item) => item.taskId === historyTaskId) ?? null
+  const historyTask = history.find((item) => item.taskId === historyTaskId) ?? (task === null ? history[0] ?? null : null)
   const viewedTask = historyTask ?? task
   const viewedReconciliation = viewedTask?.reconciliation ?? null
   const readOnly = historyTask !== null
@@ -181,7 +181,7 @@ export default function ScanReconciliationPanel({
     const firstNonEmpty = CATEGORY_ORDER.find((category) => categoryCount(category) > 0)
     setActiveCategory(firstNonEmpty ?? 'unchanged')
     setUnchangedOpen(firstNonEmpty === undefined)
-  }, [historyTaskId, task?.taskId, task?.reconciliation])
+  }, [historyTaskId, historyTask?.taskId, task?.taskId, task?.reconciliation])
 
   const viewedEntries = viewedReconciliation?.entries ?? []
   const visibleItems = useMemo(() => {
@@ -391,11 +391,11 @@ export default function ScanReconciliationPanel({
           <h3 id="scan-reconciliation-title">蚀刻对账轨</h3>
           <p>
             {readOnly
-              ? '历史记录只读查看，不会修改好友或触发任何请求。'
+              ? `历史记录 · ${formatDateTime(historyTask?.startedAt ?? historyTask?.finishedAt)} · 只读查看，不修改好友。`
               : '按扫描前快照与本次完整结果对照；官方状态仍只来自抖音页面扫描。'}
           </p>
         </div>
-        {readOnly && (
+        {readOnly && task !== null && (
           <button className="btn ghost small" type="button" onClick={() => setHistoryTaskId(null)}>
             回到本次扫描
           </button>
@@ -539,7 +539,8 @@ export default function ScanReconciliationPanel({
         <div className="reconciliation-history-list">
           {history.map((record) => (
             <button
-              className={`reconciliation-history-row${historyTaskId === record.taskId ? ' is-active' : ''}`}
+              className={`reconciliation-history-row${historyTask?.taskId === record.taskId ? ' is-active' : ''}`}
+              aria-pressed={historyTask?.taskId === record.taskId}
               key={record.taskId}
               type="button"
               onClick={() => setHistoryTaskId(record.taskId)}
