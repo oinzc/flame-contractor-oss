@@ -4,11 +4,18 @@ import type { Account, DryRunRead, LoginStatus } from '../types'
 import { ACCOUNT_STATUS_LABELS, ACCOUNT_STATUS_TONES, formatDateTime } from '../lib/format'
 import StatusBadge from './StatusBadge'
 import EditAccountModal from './EditAccountModal'
+import QrCodeImage from './QrCodeImage'
 
 const DRY_RUN_LABELS: Record<string, string> = {
   found: '已定位 · 未发送',
   not_found: '未找到',
   ambiguous: '身份存疑',
+}
+
+// 后端返回的机器可读失败原因 → 可操作的提示（未知原因仍回退到通用文案）
+const LOGIN_FAILURE_HINTS: Record<string, string> = {
+  no_desktop: '当前部署没有桌面环境，无法弹出浏览器窗口；请改用「截图扫码」登录。',
+  qr_unavailable: '登录二维码未能在页面上生成；请稍后重试，或检查服务器到抖音的网络。',
 }
 
 interface Props {
@@ -47,7 +54,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
           if (status.state !== 'idle') {
             setQrStates((previous) => ({ ...previous, [account.id]: status }))
           }
-          if (status.state === 'waiting_scan') {
+          if (status.state === 'preparing' || status.state === 'waiting_scan') {
             // 接管轮询：持续刷新二维码截图并跟踪登录结果
             void pollQrLogin(account.id)
           }
@@ -340,16 +347,18 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                 )}
                 {login && (login.state === 'failed' || login.state === 'expired') && (
                   <div className="flow-hint crimson">
-                    {login.state === 'expired' ? '等待扫码超时，请重新发起。' : '登录流程失败，请重试。'}
+                    {login.state === 'expired'
+                      ? '等待扫码超时，请重新发起。'
+                      : (LOGIN_FAILURE_HINTS[login.detail ?? ''] ?? '登录流程失败，请重试。')}
                   </div>
                 )}
 
+                {qr?.state === 'preparing' && (
+                  <div className="flow-hint gold">正在渲染登录页，二维码生成后会自动显示…</div>
+                )}
                 {qr?.state === 'waiting_scan' && (
                   <div className="qr-panel">
-                    <img
-                      src={`${api.qrImageUrl(account.id)}?t=${qrTicks[account.id] ?? 0}`}
-                      alt="抖音登录二维码（截图实时刷新）"
-                    />
+                    <QrCodeImage accountId={account.id} tick={qrTicks[account.id] ?? 0} />
                     <div className="qr-hint">
                       截图扫码模式：打开抖音 App → 左上角「≡」→ 扫一扫 → 对准上方二维码。
                       二维码自动刷新，如手机端提示过期请稍候片刻再扫。
@@ -368,7 +377,9 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                 )}
                 {qr && (qr.state === 'failed' || qr.state === 'expired') && (
                   <div className="flow-hint crimson">
-                    {qr.state === 'expired' ? '等待扫码超时，请重新发起。' : '截图扫码流程失败，请重试。'}
+                    {qr.state === 'expired'
+                      ? '等待扫码超时，请重新发起。'
+                      : (LOGIN_FAILURE_HINTS[qr.detail ?? ''] ?? '截图扫码流程失败，请重试。')}
                   </div>
                 )}
 

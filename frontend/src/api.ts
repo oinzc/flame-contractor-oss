@@ -37,12 +37,13 @@ async function readDetail(response: Response): Promise<string> {
   return `请求失败（HTTP ${response.status}）`
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+function authHeaders(): Record<string, string> {
   const token = getToken()
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...authHeaders() }
   const response = await fetch(path, {
     headers,
     ...init,
@@ -286,9 +287,14 @@ export const api = {
     }),
   qrLoginStatus: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login/qr`),
-  qrImageUrl: (id: string) => `/api/accounts/${id}/login/qr/image`,
+  /** 二维码截图端点需要 Authorization 头，`<img src>` 无法携带，必须走 fetch + blob */
+  qrImage: async (id: string): Promise<Blob> => {
+    const response = await fetch(`/api/accounts/${id}/login/qr/image`, { headers: authHeaders() })
+    if (!response.ok) throw new ApiError(response.status, '二维码截图获取失败')
+    return response.blob()
+  },
   downloadBackup: async () => {
-    const response = await fetch('/api/backup')
+    const response = await fetch('/api/backup', { headers: authHeaders() })
     if (!response.ok) throw new ApiError(response.status, '备份导出失败')
     const blob = await response.blob()
     const url = URL.createObjectURL(blob)

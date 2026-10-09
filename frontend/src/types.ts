@@ -388,11 +388,20 @@ export interface AccountCreateInput {
   sendTimeHhmm?: string | null
 }
 
-export type LoginState = 'idle' | 'waiting_scan' | 'succeeded' | 'failed' | 'expired'
+export type LoginState =
+  | 'idle'
+  /** 截图扫码：已开始渲染登录页，二维码尚未可读（慢网络下可达数十秒） */
+  | 'preparing'
+  | 'waiting_scan'
+  | 'succeeded'
+  | 'failed'
+  | 'expired'
 
 export interface LoginStatus {
   state: LoginState
   detail: string | null
+  /** 截图扫码：二维码截图的落盘路径；为空表示这一帧还没生成 */
+  qrImage?: string | null
   /** 登录成功后读到的当前抖音身份昵称（控制台标签与抖音身份的对照） */
   selfNickname?: string | null
 }
