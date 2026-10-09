@@ -48,7 +48,11 @@ npm run dev
 - 忘记密码时由平台管理员在本机重置；当前本地版本不提供无法实际送达的邮件找回流程。
 - 旧数据库升级时会保留既有平台用户；仅存在无属主历史业务数据时，兼容认领流程仍使用 `FLAME_BOOTSTRAP_USERNAME` / `FLAME_BOOTSTRAP_PASSWORD`。
 
-### 4. Windows 常驻运行（推荐）
+### 4. Docker 部署（Windows / Linux）
+
+跨平台和服务器部署使用根目录 `Dockerfile` 与 `compose.yaml`，详见 [Docker 部署说明](docs/DOCKER.md)。Windows 使用 Docker Desktop 的 Linux 容器；Linux 使用 Docker Engine + Compose。容器中使用「截图扫码」登录，数据与浏览器 Profile 持久化到独立卷。
+
+### 5. Windows 原生常驻运行
 
 锁屏后需要继续执行调度时，使用当前用户的常驻监督器：
 
@@ -203,8 +207,11 @@ M1–M11 功能已完成，当前进入使用验收和维护阶段。Windows 常
 
 2026-10-09 14:16（北京时间）只读运行快照：`127.0.0.1:8000/health` 返回 `ok / ready`，监听地址为 `127.0.0.1`；数据库迁移为 `f8a9b0c1d2e3`，`scheduler.paused=0`（调度已开启）。未发现运行中的发送、扫描或身份补采数据库记录，外键检查无错误。计划任务为 `Ready`，状态脚本未找到监督器进程，但后端仍在线；监督器日志最后记录在 2026-10-08 10:58，计划任务最后结果为 `3221225786`。监督器退出原因尚未确认，不能认定当前健康监控和保持唤醒有效。运行状态应通过健康接口和常驻管理脚本重新核对。
 
-- [ ] 排查常驻监督器未运行的原因，确认健康监控与系统保持唤醒恢复有效。
-- [ ] 完成 `Win+L` 锁屏跨夜验收，检查计划任务、监督器/后端 PID、健康接口及日志。当前调度已开启；如采用暂停调度的运维验收方式，需明确记录暂停与恢复时间，不能把已暂停当作当前事实。
+- 当前部署方向已改为 Linux 服务器 Docker + SSH 隧道；Windows 原生监督器与锁屏跨夜验收不再作为服务器部署前提。
+- 2026-10-09 Docker 部署完成：Windows Docker Desktop（Linux/amd64）和 Ubuntu 24.04 Docker Engine 已实际构建并启动验证；新增 Compose、运行密钥检查、非 root 浏览器、持久化卷、健康检查及日志轮转。macOS/ARM64 的配置范围和未实测边界见 [Docker 部署说明](docs/DOCKER.md)。
+- 修复 `httpx` 误放在开发依赖的问题；容器使用 `constraints-docker.txt` 固定已验证的运行依赖，避免新版 SQLModel 日期时间规则变化导致回归失败。最终容器内后端测试为 **210 passed / 2 warnings**；Windows 验证了健康接口、浏览器启动、弱密钥拒绝和重建后数据保留。
+- 服务器目录 `/opt/flame-contractor-docker`，容器 `flame-contractor-app-1` 为 healthy，端口仅发布 `127.0.0.1:8000`。旧 systemd 应用服务已停止并取消自启；旧原生目录保留。本机通过 SSH 隧道访问 <http://127.0.0.1:18000/>，可双击 `scripts/runtime/open_server_console.cmd` 连接。
+- 迁移后保留 1 个管理员、1 个账号、16 个好友、2 个模板、117 条任务记录，外键检查通过。本机和服务器调度均暂停；服务器账号为待登录，需要使用「截图扫码」重新登录、定位校验后再恢复服务器调度。本机不要同时恢复调度。本轮未执行真实发送或会话扫描。
 - [ ] 完成 M11 真实扫描样本验收；新会话导入、无火花删除仍须由用户明确操作。
 - [ ] 验收后将纯代码提交 cherry-pick 到 `main`，不合并数据分支，不携带 `data/` 或 `backend/.env`。
 
