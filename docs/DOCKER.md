@@ -56,20 +56,28 @@ docker compose cp app:/tmp/flame-backup.db ./flame-backup.db
 
 图片模板必须使用容器内可读路径，例如 `/app/data/images/example.png`。宿主 Windows 的 `C:\...` 或 Linux 的外部路径不会自动进入容器；将图片放入 data 卷并更新模板路径后使用。本轮迁移没有图片模板，不需要转换图片路径。
 
-## 服务器访问
+## 当前部署：本机 Docker（Windows + Docker Desktop）
 
-当前部署目录为 `/opt/flame-contractor-docker`。旧的 `/opt/flame-contractor` 原生部署保留作备份，systemd 应用服务停用，不能与容器同时运行。
+当前运行实例就是本机这个容器：`docker compose up -d` 启动，访问 <http://127.0.0.1:8000/>。数据在命名卷 `flame-contractor_data` / `flame-contractor_artifacts`，密钥在仓库根目录 `.env`（已被 `.gitignore` 忽略）。
 
-在当前 Windows 电脑双击 `scripts/runtime/open_server_console.cmd`，或执行：
+登录用「截图扫码」：本机到抖音的网络正常，实测出码约 **8 秒**。容器使用全新的 Linux Chromium Profile，Windows 原生部署的登录态不能沿用，需要重新扫码一次。
+
+原生 Windows 服务不要与容器同时运行（会抢 8000 端口）。计划任务「Flame Contractor Runtime」已停用，需要恢复原生常驻时用 `Enable-ScheduledTask -TaskName "Flame Contractor Runtime"`。
+
+## 服务器部署（2026-10-09 已撤销）
+
+服务器是 Alibaba Cloud 美国弗吉尼亚节点（`47.253.197.95`）。抖音的静态资源在国内 CDN，跨境往返使登录页要 **15–20 秒**才能渲染出二维码（本机约 8 秒），因此撤销了服务器部署，改回本机 Docker。
+
+已执行 `docker compose down`：容器与网络已删除，数据卷 `flame-contractor_data` / `flame-contractor_artifacts` 保留在服务器上，代码与密钥仍在 `/opt/flame-contractor-docker`，需要时可重新 `up -d`。旧的 `/opt/flame-contractor` 原生目录同样保留作备份，systemd 应用服务处于停用状态。
+
+需要重新从其他电脑访问时，双击 `scripts/runtime/open_server_console.cmd` 建立 SSH 隧道：
 
 ```powershell
 ssh -i "$env:USERPROFILE\.ssh\codex_alicloud_ed25519" -N -L 127.0.0.1:18000:127.0.0.1:8000 root@47.253.197.95
 ```
 
-访问 <http://127.0.0.1:18000/>。隧道关闭只影响网页访问，不停止服务器调度。其他电脑需要自己的 SSH 密钥授权，再运行相同隧道命令；不需要域名。
+访问 <http://127.0.0.1:18000/>。隧道关闭只影响网页访问。其他电脑需要自己的 SSH 密钥授权，不需要域名。服务器管理：SSH 登录后 `cd /opt/flame-contractor-docker`，用 `docker compose ps`、`logs --tail 100 app`、`stop`、`up -d`。
 
-服务器管理：SSH 登录后 `cd /opt/flame-contractor-docker`，使用 `docker compose ps`、`logs --tail 100 app`、`stop`、`up -d`。配置变化用 `up -d --force-recreate`；修改挂载的密钥会使旧登录会话失效。
-
-2026-10-09 验证：Windows 构建、启动、非 root Chromium、默认密钥拒绝、重建后数据保留通过；Linux 最终镜像内 pytest 为 210 passed、2 warnings。两个警告为 TestClient/httpx 弃用与模板删除行数不匹配，尚未处理。未实测真实抖音扫描、发送及 macOS/ARM64。
+2026-10-09 验证：本机 Docker（Windows）构建、启动、非 root Chromium、健康检查、二维码登录（出码 8.1 秒、512×512 有效 PNG、真实页面显示正常）通过；服务器侧镜像内 pytest 为 214 passed。未实测真实抖音扫描、发送及 macOS/ARM64。
 
 浏览器版本匹配、进程回收和容器浏览器配置参考 [Playwright 官方 Docker 文档](https://playwright.dev/python/docs/docker)。
