@@ -4,9 +4,21 @@ import time
 
 from fastapi.testclient import TestClient
 
+from app.execution import browser_manager
 from app.models import AccountStatus
 from sqlmodel import Session
 from tests.fakes import FakePage, create_account, make_app
+
+
+def _wait_for_final_state(client: TestClient, account_id: str, path: str) -> dict:
+    deadline = time.monotonic() + 5
+    state: dict | None = None
+    while time.monotonic() < deadline:
+        state = client.get(f"/api/accounts/{account_id}{path}").json()
+        if state["state"] in ("succeeded", "failed", "expired"):
+            return state
+        time.sleep(0.05)
+    raise AssertionError(f"登录流程未在期限内结束: {state}")
 
 
 def test_qr_login_succeeds_and_marks_healthy(settings):
@@ -18,7 +30,8 @@ def test_qr_login_succeeds_and_marks_healthy(settings):
         account = create_account(client)
         started = client.post(f"/api/accounts/{account['id']}/login/qr")
         assert started.status_code == 202
-        assert started.json()["state"] == "waiting_scan"
+        # 二维码还没渲染出来之前不进入等待扫码（避免前端展示空白/过期画面）
+        assert started.json()["state"] == "preparing"
 
         # 轮询直至结束（假页面立即已登录）
         deadline = time.monotonic() + 5
@@ -60,7 +73,9 @@ def test_qr_login_image_endpoint(settings):
         assert got.headers["cache-control"] == "no-store"
 
 
-def test_qr_login_mutually_exclusive_with_headed_login(settings):
+def test_qr_login_mutually_exclusive_with_headed_login(settings, monkeypatch):
+    # 互斥语义与运行环境无关：显式声明有桌面，让有头流程真正跑起来
+    monkeypatch.setattr(browser_manager, "headed_login_available", lambda: True)
     app = make_app(settings, [FakePage(logged_in=False)])
     with TestClient(app) as client:
         account = create_account(client)
@@ -69,6 +84,63 @@ def test_qr_login_mutually_exclusive_with_headed_login(settings):
         conflict = client.post(f"/api/accounts/{account['id']}/login/qr")
         assert conflict.status_code == 409
         client.post(f"/api/accounts/{account['id']}/login/cancel")
+
+
+def test_headed_login_without_desktop_gives_actionable_hint(settings, monkeypatch):
+    """容器/纯服务器没有桌面：给出可操作提示，而不是底层异常名。"""
+    monkeypatch.setattr(browser_manager, "headed_login_available", lambda: False)
+    app = make_app(settings, [FakePage(logged_in=False)])
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login")
+        state = _wait_for_final_state(client, account["id"], "/login")
+        assert state["state"] == "failed"
+        assert state["detail"] == "no_desktop"
+
+
+def test_open_chat_page_waits_for_dom_ready_only(settings):
+    """回归：等 `load` 会在慢网络下 30s 超时并把登录误判为失败，只等 DOM 就绪。"""
+    page = FakePage(logged_in=True)
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not page.goto_kwargs:
+            time.sleep(0.05)
+        assert page.gotos == ["https://www.douyin.com/chat"]
+        assert page.goto_kwargs[0]["wait_until"] == "domcontentloaded"
+
+
+def test_qr_login_reports_unavailable_qr(settings):
+    """二维码始终没渲染出来时，明确报「二维码未生成」而不是一直转圈。"""
+    page = FakePage(logged_in=False)
+    page.qr_data_url = None
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        state = _wait_for_final_state(client, account["id"], "/login/qr")
+        assert state["state"] == "failed"
+        assert state["detail"] == "qr_unavailable"
+
+
+def test_qr_login_drops_stale_qr_image(settings):
+    """新流程开始即清掉上一轮截图：没有新二维码前不该把旧画面当成可用二维码。"""
+    page = FakePage(logged_in=False)
+    page.qr_data_url = None
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        stale = settings.artifacts_dir / account["id"] / "login" / "login-qr.png"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_bytes(b"stale-png")
+        assert client.get(f"/api/accounts/{account['id']}/login/qr/image").status_code == 200
+
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+
+        assert not stale.exists()
+        assert client.get(f"/api/accounts/{account['id']}/login/qr/image").status_code == 404
 
 
 def test_qr_login_timeout_marks_expired(settings):

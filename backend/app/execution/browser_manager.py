@@ -2,6 +2,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
+import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -56,6 +58,9 @@ from .send_confirmer import SendConfirmer
 LOGIN_CHECK_TIMEOUT = 8.0
 LOGIN_POLL_INTERVAL = 2.0
 LOGIN_TIMEOUT_SECONDS = 180.0
+# 截图扫码：二维码在页面上真正渲染出来需要的时间（慢网络下可达数十秒）
+QR_PREPARE_TIMEOUT = 120.0
+QR_PREPARE_POLL_INTERVAL = 2.0
 SEND_TIMEOUT_SECONDS = 15.0
 SEND_POLL_INTERVAL = 0.5
 SEND_STABILIZE_POLLS = 3
@@ -65,6 +70,15 @@ BrowserFactory = Callable[[Path, bool], Awaitable[tuple[object, object]]]
 # Windows 有头窗口会被 Chromium 的原生遮挡计算误判为被遮挡而停止绘制（整页黑屏，
 # headless 不受影响）；关闭该特性规避。headless 携带无害，故统一传入。
 CHROMIUM_LAUNCH_ARGS = ["--disable-features=CalculateNativeWinOcclusion"]
+
+
+def headed_login_available() -> bool:
+    """当前主机能否弹出有头浏览器窗口。
+
+    容器与纯服务器部署没有 X 显示，有头浏览器必然启动失败；该判断独立成函数，
+    便于测试直接替换，而不必改动进程环境。
+    """
+    return not (sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
 
 
 def _utcnow() -> datetime:
@@ -1100,6 +1114,12 @@ class BrowserManager:
         return flow
 
     async def start_login(self, account_id: str) -> dict[str, str | None]:
+        """有头扫码登录：在本机弹出一个浏览器窗口给用户扫码。
+
+        容器或纯服务器部署没有 X 显示，有头浏览器必然启动失败；该情况由
+        `_login_flow` 直接给出可操作提示（`no_desktop`），不在这里拦截，避免
+        让接口状态依赖运行环境。
+        """
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="该账号已有登录流程进行中")
         profile_path = ensure_profile_dir(self._settings, account_id)
@@ -1138,6 +1158,12 @@ class BrowserManager:
     async def _login_flow(self, flow: LoginFlow, profile_path: Path) -> None:
         context = None
         try:
+            if not headed_login_available():
+                # 无 X 显示（容器/纯服务器）：有头浏览器必然启动失败，直接给出
+                # 可操作的提示，而不是抛一个用户看不懂的底层异常。
+                flow.state = "failed"
+                flow.detail = "no_desktop"
+                return
             flow.state = "waiting_scan"
             context, page = await self._open(profile_path, headless=False)
             chat = DouyinChat(page, sleep=self._sleep)
@@ -1184,12 +1210,17 @@ class BrowserManager:
 
     async def start_qr_login(self, account_id: str) -> dict[str, str | None]:
         """headless 截图扫码登录：headless 渲染登录页（有头黑屏环境的替代路径），
-        定时把整页截图落盘，由前端轮询图片展示给用户扫描；登录判据与正式发送
-        链路完全一致（wait_logged_in）。"""
+        定时把二维码落盘，由前端轮询图片展示给用户扫描；登录判据与正式发送
+        链路完全一致（wait_logged_in）。
+
+        返回时状态为 `preparing`：二维码在慢网络下要数秒到数十秒才渲染出来，
+        只有真正可读后才切到 `waiting_scan`，前端据此避免展示空白/过期画面。
+        """
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="该账号已有登录流程进行中")
+        self._qr_image_file(account_id).unlink(missing_ok=True)
         profile_path = ensure_profile_dir(self._settings, account_id)
-        flow = LoginFlow(account_id=account_id)
+        flow = LoginFlow(account_id=account_id, state="preparing")
         self._flows[account_id] = flow
         flow.task = asyncio.create_task(self._qr_login_flow(flow, profile_path))
         return self._login_view(flow)
@@ -1205,28 +1236,50 @@ class BrowserManager:
             return {"state": "idle", "detail": None}
         return self._login_view(flow)
 
+    def _qr_image_file(self, account_id: str) -> Path:
+        return self._settings.artifacts_dir / account_id / "login" / "login-qr.png"
+
     def qr_image_path(self, account_id: str) -> str | None:
         flow = self._flows.get(account_id)
         if flow is not None and flow.qr_image:
             return flow.qr_image
-        existing = self._settings.artifacts_dir / account_id / "login" / "login-qr.png"
+        existing = self._qr_image_file(account_id)
         return str(existing) if existing.exists() else None
+
+    async def _wait_for_qr(self, page) -> bool:
+        """轮询等待二维码真正可读；慢网络下要数秒到数十秒。
+
+        按轮次计数而非墙上时间：轮次 × 间隔等于超时预算，既避免依赖 sleep 的
+        真实时长，也让测试可以注入空 sleep 后仍然确定性地结束。
+        """
+        is_closed = getattr(page, "is_closed", None)
+        for _ in range(int(QR_PREPARE_TIMEOUT / QR_PREPARE_POLL_INTERVAL)):
+            if callable(is_closed) and is_closed():
+                return False
+            if await read_qr_data_url(page) is not None:
+                return True
+            await self._sleep(QR_PREPARE_POLL_INTERVAL)
+        return False
 
     async def _qr_login_flow(
         self, flow: LoginFlow, profile_path: Path
     ) -> None:
         context = None
         try:
-            flow.state = "waiting_scan"
+            # 先等到二维码真的渲染出来再对外暴露 waiting_scan：慢网络（例如服务器
+            # 访问国内 CDN）下弹窗和二维码要数秒到数十秒才出现，提前进入等待只会
+            # 让前端拿到 404 或骨架屏截图。
+            flow.state = "preparing"
             context, page = await self._open(profile_path, headless=True)
             chat = DouyinChat(page, sleep=self._sleep)
             await chat.open_chat_page()
 
+            directory = self._qr_image_file(flow.account_id).parent
+            target_path = self._qr_image_file(flow.account_id)
+
             async def take_qr_shot() -> None:
                 try:
-                    directory = self._settings.artifacts_dir / flow.account_id / "login"
                     directory.mkdir(parents=True, exist_ok=True)
-                    target_path = directory / "login-qr.png"
                     # 优先：直接取二维码本体的 data URL（像素级清晰，可扫性最佳）
                     data_url = await read_qr_data_url(page)
                     if data_url:
@@ -1241,8 +1294,14 @@ class BrowserManager:
                 except Exception:
                     pass  # 截图失败不影响登录检测
 
+            if not await self._wait_for_qr(page):
+                flow.state = "failed"
+                flow.detail = "qr_unavailable"
+                return
+
             # 先同步截一帧：保证「等待扫码」期间二维码必然已可展示
             await take_qr_shot()
+            flow.state = "waiting_scan"
 
             async def shoot() -> None:
                 while True:
