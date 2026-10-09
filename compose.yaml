@@ -1,0 +1,28 @@
+name: flame-contractor
+services:
+  app:
+    image: flame-contractor:local
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: 512mb
+    ports:
+      - "127.0.0.1:${FLAME_HOST_PORT:-8000}:8000"
+    volumes:
+      - data:/app/data
+      - artifacts:/app/artifacts
+      - type: bind
+        source: ${FLAME_ENV_PATH:-./.env}
+        target: /app/backend/.env
+        read_only: true
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  data:
+  artifacts:
