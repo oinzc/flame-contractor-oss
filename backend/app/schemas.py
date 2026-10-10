@@ -7,6 +7,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .core.config import AUTO_SCAN_INTERVAL_MAX_HOURS, AUTO_SCAN_INTERVAL_MIN_HOURS
 from .models import AccountStatus, FailureClass, JobStatus, ScheduleStatus, TemplateType
+from .scheduler import (
+    FIXED_TIME_GRACE_MINUTES_MAX,
+    FIXED_TIME_GRACE_MINUTES_MIN,
+)
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -586,11 +590,22 @@ class AutoScanStatusRead(APIBase):
 
 
 class SchedulerSettingsPatch(APIBase):
-    """更新自动会话状态同步周期；单位为小时。"""
+    """更新调度设置：会话同步周期、定时到点是否重发、固定时刻宽限期。
 
-    auto_scan_interval_hours: int = Field(
+    三个字段都可选；只传需要改的那个，未传的保持现值。
+    """
+
+    auto_scan_interval_hours: int | None = Field(
+        default=None,
         ge=AUTO_SCAN_INTERVAL_MIN_HOURS,
         le=AUTO_SCAN_INTERVAL_MAX_HOURS,
+    )
+    # None 表示「不改」，因此不能只靠真假判断是否传值（用 model_fields_set 区分）。
+    scheduled_always_send: bool | None = None
+    fixed_time_grace_minutes: int | None = Field(
+        default=None,
+        ge=FIXED_TIME_GRACE_MINUTES_MIN,
+        le=FIXED_TIME_GRACE_MINUTES_MAX,
     )
 
 
@@ -600,6 +615,8 @@ class SchedulerStatusRead(APIBase):
     running_accounts: list[str]
     today_schedules: list[SendScheduleRead]
     auto_scan_interval_hours: int
+    scheduled_always_send: bool
+    fixed_time_grace_minutes: int
     auto_scans: list[AutoScanStatusRead]
 
 

@@ -1728,11 +1728,19 @@ class BrowserManager:
     # ------------------------------------------------------------ send
 
     async def run_send(
-        self, account_id: str, *, force: bool = False, exclude_scheduled: bool = False
+        self,
+        account_id: str,
+        *,
+        force: bool = False,
+        exclude_scheduled: bool = False,
+        force_run_id: str | None = None,
     ) -> dict:
         """对账号批量发送。手动「立即发送/强制发送全部」包含全部启用好友；
         自动账号级调度传 exclude_scheduled=True，只发「未设置独立发送时刻」的好友
         （这些好友由 scheduler 按各自精确时刻单独派发）。
+
+        force_run_id 供调度器传「按业务日固定」的槽位后缀：开启 scheduled_always_send
+        后定时任务忽略当天已发送记录再发一遍，而重试复用同一槽位不会重复发送。
         """
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
@@ -1777,11 +1785,17 @@ class BrowserManager:
         if blocked is not None:
             return blocked
 
-        force_run_id = uuid4().hex[:12] if force else None
+        force_run_id = force_run_id or (uuid4().hex[:12] if force else None)
         return await self._execute_send(account, targets, force_run_id=force_run_id)
 
-    async def run_send_for_targets(self, account_id: str, target_ids: list[str]) -> dict:
-        """对指定好友集发送（自动按好友精确时刻派发用）。尊重每日幂等，不强制、不绕过成功记录。"""
+    async def run_send_for_targets(
+        self, account_id: str, target_ids: list[str], *, force_run_id: str | None = None
+    ) -> dict:
+        """对指定好友集发送（自动按好友精确时刻派发用）。
+
+        force_run_id 由调度器在开启 scheduled_always_send 时传入「按业务日固定」的槽位
+        后缀，使同一好友当天已发过也照发一遍，而重试复用同一槽位不会重复发送。
+        """
         if self._active_flow(account_id) is not None:
             raise HTTPException(status_code=409, detail="账号正在登录流程中，暂不能发送")
         if self._active_scan(account_id) is not None:
@@ -1812,7 +1826,7 @@ class BrowserManager:
         if blocked is not None:
             return blocked
 
-        return await self._execute_send(account, targets)
+        return await self._execute_send(account, targets, force_run_id=force_run_id)
 
     async def send_target(
         self,

@@ -63,6 +63,145 @@ def test_generate_uses_account_exact_time_if_set(engine):
     assert rows[0].scheduled_at == datetime(2026, 8, 27, 13, 30)
 
 
+def test_fixed_time_grace_persists_across_scheduler_instances(engine):
+    """宽限期写库持久化：新实例恢复，避免页面上的设置重启后悄悄回退。"""
+    first = Scheduler(engine, settings=None, loop_interval=0)
+    assert first.fixed_time_grace_minutes == 30
+    first.update_fixed_time_grace_minutes(5)
+    assert first.fixed_time_grace_minutes == 5
+    with Session(engine) as session:
+        setting = session.get(AppSetting, "scheduler.fixed_time_grace_minutes")
+        assert setting is not None and setting.value == "5"
+
+    second = Scheduler(engine, settings=None, loop_interval=0)
+    second.load_persisted_state()
+    assert second.fixed_time_grace_minutes == 5
+
+    with pytest.raises(ValueError):
+        second.update_fixed_time_grace_minutes(-1)
+    with pytest.raises(ValueError):
+        second.update_fixed_time_grace_minutes(1441)
+
+
+def test_scheduled_always_send_toggle_persists_and_applies_immediately(engine):
+    """「到点重发」开关：写库持久化、新实例恢复、且下一次 tick 立即按新值派发。"""
+    account = make_account(engine, send_time_hhmm="21:30")
+    seen: list[str | None] = []
+
+    async def send(account_id: str, *, exclude_scheduled: bool = True, force_run_id=None) -> dict:
+        seen.append(force_run_id)
+        return {"overall": "ok", "results": []}
+
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+
+    def build() -> Scheduler:
+        return Scheduler(
+            engine,
+            settings=None,
+            send_account=send,
+            clock=clock,
+            sleep=asyncio.sleep,
+            loop_interval=0,
+            retry_max_count=0,
+            window_expiry_policy="dispatch",
+        )
+
+    first = build()
+    assert first.scheduled_always_send is False
+    first.update_scheduled_always_send(True)
+    assert first.scheduled_always_send is True
+    with Session(engine) as session:
+        setting = session.get(AppSetting, "scheduler.scheduled_always_send")
+        assert setting is not None and setting.value == "1"
+
+    # 关掉开关后立刻回到「不带固定槽位」的每日一次语义
+    first.update_scheduled_always_send(False)
+    first.generate_due_schedules()
+    asyncio.run(first.tick())
+    asyncio.run(first.wait_idle())
+    assert seen == [None], "关闭后不应再传固定槽位"
+
+    # 新实例从数据库恢复持久化值
+    second = build()
+    first.update_scheduled_always_send(True)
+    third = Scheduler(engine, settings=None, loop_interval=0)
+    third.load_persisted_state()
+    assert third.scheduled_always_send is True
+    assert second.scheduled_always_send is False
+
+
+def test_account_exact_time_sent_within_grace_period(engine):
+    """回归：固定时刻本身是「窗口终点」，没有宽限期就会在到点那一刻被判过期。
+
+    这里时钟设在固定时刻之前几毫秒（模拟 tick 对齐边界的真实情况），计划必须派发，
+    而不是被 `local_now >= fixed` 判成「窗口已结束」。
+    """
+    account = make_account(engine, send_time_hhmm="21:30")
+    calls: list[str] = []
+
+    async def send(account_id: str, **kwargs) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    # 21:30 Asia/Shanghai = 13:30 UTC
+    for offset in (
+        timedelta(milliseconds=-2),  # 到点前几毫秒：tick 提前醒来的真实情况
+        timedelta(0),  # 正好到点
+        timedelta(minutes=29),  # 宽限期内（默认 30 分钟）
+    ):
+        calls.clear()
+        with Session(engine) as session:
+            for row in session.exec(select(SendSchedule)).all():
+                session.delete(row)
+            session.commit()
+        clock = make_clock(datetime(2026, 8, 27, 13, 30, tzinfo=timezone.utc) + offset)
+        sched = Scheduler(
+            engine,
+            settings=None,
+            send_account=send,
+            clock=clock,
+            sleep=asyncio.sleep,
+            loop_interval=0,
+            retry_max_count=0,
+            window_expiry_policy="skip",
+        )
+        sched.generate_due_schedules()
+        asyncio.run(sched.tick())
+        asyncio.run(sched.wait_idle())
+        assert calls == [account.id], (
+            f"距固定时刻 {offset} 时应在 skip 策略下照常派发"
+        )
+        assert schedule_rows(engine)[0].status != ScheduleStatus.SKIPPED
+
+
+def test_account_exact_time_skipped_after_grace_period(engine):
+    """超过宽限期仍未派发 → 转 SKIPPED，保持「错过就不深夜补发」的原意。"""
+    make_account(engine, send_time_hhmm="21:30")
+    calls: list[str] = []
+
+    async def send(account_id: str, **kwargs) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    # 固定 21:30（13:30 UTC），时钟 14:05 UTC（本地 22:05）= 超出 30 分钟宽限
+    clock = make_clock(datetime(2026, 8, 27, 14, 5, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="skip",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert calls == []
+    assert schedule_rows(engine)[0].status == ScheduleStatus.SKIPPED
+
+
 def test_account_exact_time_skipped_when_already_past(engine):
     """账号设置固定发送时刻后，该时刻已过仍未派发 → 今天不再补发，转 SKIPPED。"""
     # 固定 21:30（= 13:30 UTC）；时钟设在 15:00 UTC（本地 23:00）已过该时刻
@@ -461,6 +600,208 @@ def test_scheduler_end_to_end_sends_via_run_send(settings):
             jobs = session.exec(select(SendJob)).all()
             assert len(jobs) == 1
             assert jobs[0].status == JobStatus.SUCCEEDED
+
+
+def test_scheduled_always_send_passes_stable_daily_slot(engine):
+    """开启 scheduled_always_send：定时派发按业务日传固定槽位后缀。"""
+    make_account(engine, send_time_hhmm="21:30")
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    seen: list[str | None] = []
+
+    async def send(account_id: str, *, exclude_scheduled: bool = True, force_run_id=None) -> dict:
+        seen.append(force_run_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+        scheduled_always_send=True,
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    # 21:30 Asia/Shanghai = 13:30 UTC，clock 设在 15:00 UTC 已过该时刻（dispatch 策略仍派发）
+    assert seen == ["sched20260827"]
+    assert schedule_rows(engine)[0].status == ScheduleStatus.SUCCEEDED
+
+
+def test_scheduled_send_default_keeps_daily_once(engine):
+    """默认（不开 scheduled_always_send）：定时派发不带固定槽位，保持每日一次防重复。"""
+    make_account(engine, send_time_hhmm="21:30")
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    seen: list[str | None] = []
+
+    async def send(account_id: str, *, exclude_scheduled: bool = True, force_run_id=None) -> dict:
+        seen.append(force_run_id)
+        return {"overall": "ok"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert seen == [None]
+
+
+def test_seconds_until_next_tick_aligns_to_minute_boundary(engine):
+    """节拍对齐整分钟：否则固定 02:22 会被进程启动相位带着漂移到 :25 之类。"""
+    clock = make_clock(datetime(2026, 8, 27, 13, 17, 25, tzinfo=timezone.utc))
+    sched = Scheduler(engine, settings=None, clock=clock, loop_interval=0)
+    # 余量让醒来时刻落在边界之后（定时器可能早几毫秒返回）
+    assert 35.0 <= sched._seconds_until_next_tick() < 35.1
+
+
+def test_exact_time_target_dispatched_when_tick_lands_milliseconds_early(engine):
+    """回归：整分边界前几毫秒醒来时，到点好友仍要发，而不是整整推迟一分钟。
+
+    实测事件循环的定时器会早若干毫秒返回，tick 落在 :59.998 之类的时刻；若按
+    `due_at > now` 严格比较，14:01 的计划会被判成「还没到点」，14:02 才发。
+    """
+    account = make_account(engine, send_time_hhmm="21:30")
+    with Session(engine) as session:
+        session.add(
+            ContractTarget(account_id=account.id, nickname_snapshot="准点好友", send_time_hhmm="21:30")
+        )
+        session.commit()
+
+    calls: list[list[str]] = []
+
+    async def send_targets(account_id: str, ids: list[str], *, force_run_id=None) -> dict:
+        calls.append(ids)
+        return {"overall": "ok", "results": []}
+
+    # 本地 21:30 = 13:30 UTC；时钟设在到点前 2 毫秒
+    clock = make_clock(datetime(2026, 8, 27, 13, 29, 59, 998000, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert len(calls) == 1, "到点前几毫秒醒来时仍应派发，不应推迟一分钟"
+
+
+def test_account_plan_dispatched_when_tick_lands_milliseconds_early(engine):
+    """同上：账号级计划的到点比较也要有容差，否则整分钟被推迟。"""
+    make_account(engine, send_time_hhmm="21:30")
+    calls: list[str] = []
+
+    async def send(account_id: str) -> dict:
+        calls.append(account_id)
+        return {"overall": "ok"}
+
+    clock = make_clock(datetime(2026, 8, 27, 13, 29, 59, 998000, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert len(calls) == 1, "到点前几毫秒醒来时账号批量仍应派发"
+
+
+def test_exact_time_target_dispatched_before_account_batch(engine):
+    """同一轮 tick 里好友级准点先发、账号批量随后：准点好友不被批量挤到下一轮。"""
+    account = make_account(engine, send_time_hhmm="02:22")
+    with Session(engine) as session:
+        session.add(
+            ContractTarget(account_id=account.id, nickname_snapshot="准点好友", send_time_hhmm="02:22")
+        )
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot="普通好友"))
+        session.commit()
+
+    order: list[str] = []
+
+    async def send_account(account_id: str, *, exclude_scheduled: bool = True, force_run_id=None) -> dict:
+        order.append(f"账号批量:exclude_scheduled={exclude_scheduled}")
+        return {"overall": "ok", "results": []}
+
+    async def send_targets(account_id: str, ids: list[str], *, force_run_id=None) -> dict:
+        with Session(engine) as session:
+            names = [session.get(ContractTarget, i).nickname_snapshot for i in ids]
+        order.append(f"好友级:{names}")
+        return {"overall": "ok", "results": []}
+
+    # 本地 2026-08-28 02:22:05（账号时区 Asia/Shanghai）→ 规划时刻已到
+    clock = make_clock(datetime(2026, 8, 27, 18, 22, 5, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send_account,
+        send_targets=send_targets,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert order == ["好友级:['准点好友']", "账号批量:exclude_scheduled=True"]
+    assert schedule_rows(engine)[0].status == ScheduleStatus.SUCCEEDED
+
+
+def test_scheduled_always_send_uses_stable_slot_for_exact_time_target(engine):
+    """开启 scheduled_always_send：好友级准点派发按业务日传固定槽位（当天发过也照发）。"""
+    account = make_account(engine, send_time_hhmm="02:22")
+    with Session(engine) as session:
+        session.add(
+            ContractTarget(account_id=account.id, nickname_snapshot="准点好友", send_time_hhmm="02:22")
+        )
+        session.commit()
+
+    seen: list[str | None] = []
+
+    async def send_targets(account_id: str, ids: list[str], *, force_run_id=None) -> dict:
+        seen.append(force_run_id)
+        return {"overall": "ok", "results": []}
+
+    clock = make_clock(datetime(2026, 8, 27, 18, 22, 5, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+        scheduled_always_send=True,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+    assert seen == ["sched20260828"]
 
 
 # ---------------------------------------------------------------- 通知挂接
