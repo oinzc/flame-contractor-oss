@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 import unicodedata
 from collections import Counter
@@ -9,6 +10,8 @@ from typing import Awaitable, Callable
 # 关键：必须用「模块引用 + 运行期取值」，不能在导入时 `from .selectors import X`
 # 捕获常量——那样 selector 热更新对这个文件就失效了。
 from . import selectors as _s
+
+logger = logging.getLogger(__name__)
 
 # 抖音输入框发送后会残留零宽字符，普通 strip() 判不清空
 _BLANK_RE = re.compile(r"[\s\u200b\u200c\u200d\ufeff]+")
@@ -640,9 +643,17 @@ class DouyinChat:
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        transient_logged = False
         while True:
-            if await self.is_logged_in():
-                return True
+            try:
+                if await self.is_logged_in():
+                    return True
+            except Exception:  # noqa: BLE001 - 轮询判据，瞬时错误按「还没登录」重试
+                # 扫码被确认后页面会跳转/重载，轮询期间可能撞上「执行上下文已销毁」
+                # 这类瞬时错误；它是轮询判据，不该因一次瞬时错误把整个流程判死。
+                if not transient_logged:
+                    transient_logged = True
+                    logger.warning("会话列表轮询遇到瞬时错误，继续重试", exc_info=True)
             if loop.time() >= deadline:
                 return False
             await self._sleep(poll_interval)
