@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -54,6 +55,8 @@ from .pool import pick_pool_item
 from .profile_store import ensure_profile_dir
 from .selectors import bundle_digest
 from .send_confirmer import SendConfirmer
+
+logger = logging.getLogger(__name__)
 
 LOGIN_CHECK_TIMEOUT = 8.0
 LOGIN_POLL_INTERVAL = 2.0
@@ -1187,6 +1190,7 @@ class BrowserManager:
         except Exception as exc:
             flow.state = "failed"
             flow.detail = type(exc).__name__
+            logger.warning("有头扫码登录流程失败：%s", exc, exc_info=True)
         finally:
             if context is not None:
                 try:
@@ -1246,25 +1250,37 @@ class BrowserManager:
         existing = self._qr_image_file(account_id)
         return str(existing) if existing.exists() else None
 
-    async def _wait_for_qr(self, page) -> bool:
-        """轮询等待二维码真正可读；慢网络下要数秒到数十秒。
+    async def _wait_for_qr_or_session(self, page, chat) -> str:
+        """轮询等待二维码真正可读，或确认已有登录态；慢网络下要数秒到数十秒。
+
+        抖音在 Profile 已持有有效会话时不会再展示登录二维码。只等二维码的话，
+        这类账号会一直空等到 qr_unavailable——「截图扫码」对它们永远失败。因此
+        每轮同时判断当前是否已在登录态，命中即按登录成功处理。
 
         按轮次计数而非墙上时间：轮次 × 间隔等于超时预算，既避免依赖 sleep 的
         真实时长，也让测试可以注入空 sleep 后仍然确定性地结束。
+
+        返回 "qr"（二维码可读）/ "session"（已有登录态）/ "none"（都没等到）。
         """
         is_closed = getattr(page, "is_closed", None)
         for _ in range(int(QR_PREPARE_TIMEOUT / QR_PREPARE_POLL_INTERVAL)):
             if callable(is_closed) and is_closed():
-                return False
+                return "none"
             if await read_qr_data_url(page) is not None:
-                return True
+                return "qr"
+            try:
+                if await chat.is_logged_in():
+                    return "session"
+            except Exception:  # noqa: BLE001 - 轮询判据，瞬时错误按「尚未登录」重试
+                pass
             await self._sleep(QR_PREPARE_POLL_INTERVAL)
-        return False
+        return "none"
 
     async def _qr_login_flow(
         self, flow: LoginFlow, profile_path: Path
     ) -> None:
         context = None
+        page = None
         try:
             # 先等到二维码真的渲染出来再对外暴露 waiting_scan：慢网络（例如服务器
             # 访问国内 CDN）下弹窗和二维码要数秒到数十秒才出现，提前进入等待只会
@@ -1294,7 +1310,14 @@ class BrowserManager:
                 except Exception:
                     pass  # 截图失败不影响登录检测
 
-            if not await self._wait_for_qr(page):
+            outcome = await self._wait_for_qr_or_session(page, chat)
+            if outcome == "session":
+                # 已有有效登录态：抖音不再展示二维码，直接按登录成功处理。
+                flow.state = "succeeded"
+                flow.self_nickname = await read_self_nickname(page)
+                self._mark_healthy(flow.account_id, flow.self_nickname)
+                return
+            if outcome == "none":
                 flow.state = "failed"
                 flow.detail = "qr_unavailable"
                 return
@@ -1319,6 +1342,9 @@ class BrowserManager:
             if not logged_in:
                 flow.state = "expired"
                 flow.detail = "等待扫码超时，请重新发起"
+                logger.warning(
+                    "截图扫码等待超时；流程结束时页面 %s", getattr(page, "url", "unknown")
+                )
                 return
             flow.state = "succeeded"
             flow.self_nickname = await read_self_nickname(page)
@@ -1329,8 +1355,17 @@ class BrowserManager:
         except Exception as exc:
             flow.state = "failed"
             flow.detail = type(exc).__name__
+            logger.warning("截图扫码登录流程失败：%s", exc, exc_info=True)
         finally:
             if context is not None:
+                if page is not None and flow.state in {"failed", "expired"}:
+                    # 失败现场留一张截图，便于判断是风控页、验证码还是页面结构变化
+                    try:
+                        diagnostic = self._qr_image_file(flow.account_id).parent / "login-final.png"
+                        await page.screenshot(path=str(diagnostic), full_page=False)
+                        logger.warning("登录未完成（%s），现场截图：%s", flow.state, diagnostic)
+                    except Exception:
+                        pass
                 try:
                     await context.close()
                 except Exception:

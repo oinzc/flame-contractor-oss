@@ -5,6 +5,7 @@ import time
 from fastapi.testclient import TestClient
 
 from app.execution import browser_manager
+from app.execution.selectors import CONVERSATION_LIST
 from app.models import AccountStatus
 from sqlmodel import Session
 from tests.fakes import FakePage, create_account, make_app
@@ -125,6 +126,30 @@ def test_qr_login_reports_unavailable_qr(settings):
         assert state["detail"] == "qr_unavailable"
 
 
+def test_qr_login_detects_existing_session_without_qr(settings):
+    """回归：Profile 已有有效会话时抖音不再展示二维码，截图扫码必须直接判成功。
+
+    否则这类账号会一直空等到 qr_unavailable（容器里已登录过的账号正是如此，
+    登录与 Dry Run/调度互相锁死）。
+    """
+    page = FakePage(logged_in=True)
+    page.qr_data_url = None  # 已登录页面没有二维码
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        started = client.post(f"/api/accounts/{account['id']}/login/qr")
+        assert started.status_code == 202
+        state = _wait_for_final_state(client, account["id"], "/login/qr")
+        assert state["state"] == "succeeded", state
+
+        with Session(app.state.engine) as session:
+            from app.models import Account as AccountModel
+
+            acc = session.get(AccountModel, account["id"])
+            assert acc.status == AccountStatus.HEALTHY
+            assert acc.last_verified_at is not None
+
+
 def test_qr_login_drops_stale_qr_image(settings):
     """新流程开始即清掉上一轮截图：没有新二维码前不该把旧画面当成可用二维码。"""
     page = FakePage(logged_in=False)
@@ -141,6 +166,34 @@ def test_qr_login_drops_stale_qr_image(settings):
 
         assert not stale.exists()
         assert client.get(f"/api/accounts/{account['id']}/login/qr/image").status_code == 404
+
+
+class _FlakyConversationPage(FakePage):
+    """前几次会话列表查询抛瞬时错误，模拟扫码确认后页面跳转的瞬间。"""
+
+    def __init__(self, failures: int = 3):
+        super().__init__(logged_in=True)
+        self._remaining_failures = failures
+        self.poll_failures_raised = 0
+
+    async def query_selector(self, selector: str):
+        if selector == CONVERSATION_LIST and self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            self.poll_failures_raised += 1
+            raise RuntimeError("Execution context was destroyed, most likely because of a navigation")
+        return await super().query_selector(selector)
+
+
+def test_qr_login_survives_transient_poll_error(settings):
+    """回归：扫码被确认后页面会跳转，轮询期间的瞬时错误不该把流程判死。"""
+    page = _FlakyConversationPage(failures=3)
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        state = _wait_for_final_state(client, account["id"], "/login/qr")
+        assert state["state"] == "succeeded", state
+        assert page.poll_failures_raised == 3
 
 
 def test_qr_login_timeout_marks_expired(settings):
