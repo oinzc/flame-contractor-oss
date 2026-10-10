@@ -38,3 +38,6 @@ output/
 # Logs
 *.log
 nohup.out
+
+# ZCode 客户端生成的排除副本（内容同步自 .gitignore，仅本机使用）
+.zcodeignore
