@@ -11,7 +11,11 @@ from sqlmodel import SQLModel
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers 默认 True，会把此刻已存在的 logger 全部置为 disabled。
+    # 迁移在应用启动时执行、而 app.* 的模块 logger 在导入时创建，于是整个应用的
+    # logger.warning/error 全被吞掉（通知发送失败、扫码登录失败现场、发送诊断都收不到）。
+    # 只借用 alembic.ini 的格式与级别，不动应用已有的 logger。
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = SQLModel.metadata
 
