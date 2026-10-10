@@ -116,7 +116,12 @@ def test_dry_run_locating_targets_without_sending(settings):
 
 
 def test_dry_run_marks_auth_expired(settings):
-    app = make_app(settings, [FakePage(logged_in=False)])
+    """定位校验遇登录失效：overall=auth_expired；连续两次判定失败才标记账号失效。
+
+    单次判定抖动不改状态（否则调度器会跳过该账号的扫描与发送，只能人工重新扫码
+    恢复），因此第一次失败只计数。
+    """
+    app = make_app(settings, [FakePage(logged_in=False), FakePage(logged_in=False)])
     with TestClient(app) as client:
         account = create_account(client)
         client.post(
@@ -124,9 +129,16 @@ def test_dry_run_marks_auth_expired(settings):
             json={"accountId": account["id"], "nicknameSnapshot": "好友A"},
         )
 
-        result = client.post(f"/api/accounts/{account['id']}/dry-run").json()
-        assert result["overall"] == "auth_expired"
+        first = client.post(f"/api/accounts/{account['id']}/dry-run").json()
+        assert first["overall"] == "auth_expired"
+        assert "未确认" in first["detail"]
 
+        status_after_first = next(
+            item for item in client.get("/api/accounts").json() if item["id"] == account["id"]
+        )["status"]
+        assert status_after_first != "auth_expired"
+
+        client.post(f"/api/accounts/{account['id']}/dry-run")
         updated = next(
             item for item in client.get("/api/accounts").json() if item["id"] == account["id"]
         )

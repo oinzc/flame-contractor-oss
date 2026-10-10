@@ -837,11 +837,18 @@ def test_partial_result_triggers_notification(engine):
 
 
 def test_auth_expired_triggers_notification(engine):
+    """发送前登录判定确认为失效（账号已被标记）时，终局并 critical 提醒重新扫码。
+
+    注意：只有账号状态真被翻成 AUTH_EXPIRED 才算「确认失效」。单次判定未通过时
+    账号仍 HEALTHY，按可重试处理且不催用户重新扫码（见 test_unconfirmed_...）。
+    """
     api = make_account(engine)
     clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
     notifier = RecordingNotifier()
 
     async def send(account_id: str) -> dict:
+        # 模拟本次判定达到容忍次数：账号在发送过程中被标记失效
+        _set_account_status(engine, account_id, AccountStatus.AUTH_EXPIRED)
         return {"overall": "auth_expired"}
 
     sched = Scheduler(
@@ -959,6 +966,27 @@ def _make_exact_time_target(engine, name: str = "示例好友", hhmm: str = "09:
             )
         )
         session.commit()
+
+
+def _add_target(engine, name: str = "普通好友") -> None:
+    """建一个普通好友（无独立时刻）；自动扫描要求账号至少有一个契约对象。"""
+    with Session(engine) as session:
+        account = session.exec(select(Account)).first()
+        session.add(ContractTarget(account_id=account.id, nickname_snapshot=name))
+        session.commit()
+
+
+def _set_account_status(engine, account_id: str, status: AccountStatus) -> None:
+    with Session(engine) as session:
+        account = session.get(Account, account_id)
+        account.status = status
+        session.add(account)
+        session.commit()
+
+
+async def _noop_scan(account_id: str) -> dict:
+    """占位扫描执行器：只让调度器认为「已配置扫描器」，本测试不真正触发扫描。"""
+    return {"overall": "ok", "entries": []}
 
 
 def test_target_send_success_notifies_with_friend_name(engine):
@@ -1321,3 +1349,111 @@ def test_auto_scan_conflict_is_shortly_deferred(engine):
     clock.set(datetime(2026, 8, 27, 10, 5, tzinfo=timezone.utc))
     asyncio.run(drive())
     assert calls == [account.id, account.id]
+
+
+# ---------------------------------------------------------------- 登录判定容忍
+
+
+def test_unconfirmed_auth_failure_is_retryable_not_terminal(engine):
+    """发送前登录判定未通过、但账号未被标记失效时：不当终局，也不催用户重新扫码。
+
+    回归背景：调度器对非 HEALTHY 账号会跳过扫描与发送，若把单次判定抖动当终局，
+    账号会停摆且无法自愈（只能人工重新扫码）——2026-10-10 实测发生过。
+    """
+    make_account(engine)  # HEALTHY
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "auth_expired", "detail": "登录判定未通过，但未确认失效"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=1,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert not any("登录失效" in title for title, _, _ in notifier.sent)
+    rows = schedule_rows(engine)
+    assert rows and rows[0].status == ScheduleStatus.PENDING  # 未终局，可在窗口内重试
+
+
+def test_auto_scan_unconfirmed_auth_failure_does_not_notify(engine):
+    """自动同步单次判定失败：不推送，账号保持 HEALTHY，下一轮自动重试。"""
+    account = make_account(engine)
+    _add_target(engine)
+    notifier = RecordingNotifier()
+
+    async def scan(account_id: str) -> dict:
+        return {"overall": "auth_expired", "entries": []}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        scan_account=scan,
+        notifier=notifier,
+        clock=make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc)),
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched._run_auto_scan(account.id))
+
+    assert notifier.sent == []
+
+
+def test_auto_scan_confirmed_auth_failure_notifies(engine):
+    """账号确已被判定失效时，自动同步照旧 critical 提醒。"""
+    account = make_account(engine, status=AccountStatus.AUTH_EXPIRED)
+    _add_target(engine)
+    notifier = RecordingNotifier()
+
+    async def scan(account_id: str) -> dict:
+        return {"overall": "auth_expired", "entries": []}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        scan_account=scan,
+        notifier=notifier,
+        clock=make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc)),
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched._run_auto_scan(account.id))
+
+    titles = [title for title, _, _ in notifier.sent]
+    assert any("会话状态同步失败" in title for title in titles)
+
+
+def test_auto_scan_retries_immediately_after_unconfirmed_failure(engine):
+    """未确认失效时账号仍是 HEALTHY，因此会被判定「应当再扫一次」——即快速复核，
+    而不必等满一个同步周期。"""
+    account = make_account(engine)
+    _add_target(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    with Session(engine) as session:
+        session.add(
+            ScanTask(
+                id="scan-1",
+                account_id=account.id,
+                status=ScanTaskStatus.FAILED,
+                overall="auth_expired",
+                detail="登录判定未通过，但未确认失效",
+            )
+        )
+        session.commit()
+
+    sched = Scheduler(
+        engine, settings=None, scan_account=_noop_scan, clock=clock,
+        sleep=asyncio.sleep, loop_interval=0,
+    )
+    assert sched._auto_scan_due(account, clock()) is True

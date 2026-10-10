@@ -17,6 +17,7 @@ BrowserManager.run_send（SendJob 幂等键兜底、终态确认已实机验证�
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from datetime import date, datetime, time, timedelta
 from typing import Awaitable, Callable
@@ -42,6 +43,8 @@ from .models import (
     utc_now,
 )
 from .notifications import Notifier, NullNotifier
+
+logger = logging.getLogger(__name__)
 
 # 账号级租约默认时长：调度点到触发发送的宽限，防另一 worker 误抢正在跑的账号
 DEFAULT_LEASE_SECONDS = 5.0
@@ -775,12 +778,17 @@ class Scheduler:
             # 账号级链路对此另有延迟重试与终态通知，此处不重复打扰。
             return
         if overall == "auth_expired":
-            await self._notify(
-                "准点发送遇登录失效",
-                f"账号「{account}」准点给「{label}」发送时发现登录已失效，请重新扫码登录。",
-                "critical",
+            if self._auth_failure_confirmed(account_id):
+                await self._notify(
+                    "准点发送遇登录失效",
+                    f"账号「{account}」准点给「{label}」发送时发现登录已失效，请重新扫码登录。",
+                    "critical",
+                )
+                return
+            # 单次判定未通过：账号未标记失效，别催用户重新扫码，按普通未完成回执。
+            logger.warning(
+                "账号 %s 准点发送登录判定未通过但未确认失效，按未完成回执", account_id
             )
-            return
         ok, skipped, failed = summarize_send_results(result.get("results"))
         detail = result.get("detail")
         reason = f"：{detail}" if detail else ""
@@ -975,19 +983,28 @@ class Scheduler:
         """partial/error/执行异常：窗口内有限次指数退避重试，耗尽才转终态并通知。
 
         重试复用 run_send 的幂等：已成功/unknown 的好友任务自动跳过，仅重试可重试项。
-        auth_expired 需人工重新登录，重试无意义，直接终态。
+        auth_expired 一旦由账号状态确认（连续判定失败）就需人工重新登录，重试无意义，
+        直接终态；只判到「单次未通过」则按可重试处理。
         """
         if overall == "auth_expired":
-            self._finalize(schedule_id, ScheduleStatus.FAILED, overall)
-            self._clear_retry_state(schedule_id)
-            await self._register_failure(account_id)
-            await self._notify(
-                "账号登录失效",
-                f"账号「{self._account_name(account_id)}」登录已失效，"
-                "自动续火已停；请重新扫码登录，登录后会自动恢复调度。",
-                "critical",
+            if self._auth_failure_confirmed(account_id):
+                self._finalize(schedule_id, ScheduleStatus.FAILED, overall)
+                self._clear_retry_state(schedule_id)
+                await self._register_failure(account_id)
+                await self._notify(
+                    "账号登录失效",
+                    f"账号「{self._account_name(account_id)}」登录已失效（已连续多次判定确认），"
+                    "自动续火已停；请重新扫码登录，登录后会自动恢复调度。",
+                    "critical",
+                )
+                return
+            # 未确认失效：账号仍是 HEALTHY，单次判定抖动不该当终局，也不该催用户
+            # 重新扫码。落到下方通用重试，窗口内再试一次，抖动恢复即可成功。
+            logger.warning(
+                "账号 %s 发送前登录判定未通过但未确认失效，按可重试处理", account_id
             )
-            return
+            overall = "error"
+            detail = detail or "登录判定未通过（未确认失效，可能为瞬时抖动）"
         retries = self._retries.get(schedule_id, 0)
         if retries < self._retry_max_count:
             self._retries[schedule_id] = retries + 1
@@ -1059,6 +1076,16 @@ class Scheduler:
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             return account.display_name if account is not None else account_id
+
+    def _auth_failure_confirmed(self, account_id: str) -> bool:
+        """该账号是否已被确认登录失效（区别于单次判定抖动）。
+
+        发送与扫描返回的 overall 都会写 `auth_expired`，但只有账号状态确实被翻成
+        AUTH_EXPIRED 才算确认——否则只是单次判定未通过，账号仍为 HEALTHY、稍后会自动
+        重试，既不该催用户重新扫码，也不该把这次发送当作终局失败。
+        """
+        account = self._load_account(account_id)
+        return account is not None and account.status == AccountStatus.AUTH_EXPIRED
 
     def _local_hhmm(self, account: Account, moment: datetime | None) -> str:
         """把 UTC-naive 的计划时刻换算成账号本地 HH:MM，供通知里说「原定几点」。"""
@@ -1210,12 +1237,19 @@ class Scheduler:
             result = await self._scan_account(account_id)
             overall = result.get("overall")
             if overall == "auth_expired":
-                await self._notify(
-                    "会话状态同步失败",
-                    f"账号「{self._account_name(account_id)}」登录已失效，官方火花状态暂未更新；"
-                    "重新扫码后会自动补做同步。",
-                    "critical",
-                )
+                if self._auth_failure_confirmed(account_id):
+                    await self._notify(
+                        "会话状态同步失败",
+                        f"账号「{self._account_name(account_id)}」登录已失效（已连续多次判定确认），"
+                        "官方火花状态暂未更新；重新扫码后会自动补做同步。",
+                        "critical",
+                    )
+                else:
+                    # 单次判定未通过：账号仍 HEALTHY，下一轮（或即时的补扫）会重试，
+                    # 此时催用户重新扫码只会误导。
+                    logger.warning(
+                        "账号 %s 自动同步登录判定未通过但未确认失效，不推送", account_id
+                    )
         except asyncio.CancelledError:
             # 扫描子任务由 BrowserManager.aclose 收束为 interrupted，避免误记成用户取消。
             raise

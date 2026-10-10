@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     notify_on_success: bool = True
     # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断
     failure_streak_limit: int = 3
+    # 登录判定容忍次数：连续 N 次判定失败才把账号标记为登录失效。单次判定抖动
+    # （页面加载慢、临时验证页、网络波动）不该锁死账号——调度器会跳过非 HEALTHY
+    # 账号的扫描与发送，一次误判就会让账号停摆且只能人工重新扫码恢复。
+    auth_check_tolerance: int = 2
     # 会话官方火花状态自动同步间隔（小时）；官方页面只提供天级状态，默认每日同步一次
     auto_scan_interval_hours: int = Field(
         default=24,

@@ -37,17 +37,24 @@ def test_scan_chats_collects_all_titles(settings):
 
 
 def test_scan_chats_requires_login(settings):
-    """登录失效：overall=auth_expired，账号状态转 auth_expired。"""
-    app = make_app(settings, [FakePage(logged_in=False)])
+    """登录失效：overall=auth_expired；连续两次判定失败后账号状态才转 auth_expired。
+
+    单次判定抖动不得锁死账号——调度器会跳过所有非 HEALTHY 账号的扫描与发送，
+    一次误判就需要人工重新扫码才能恢复（2026-10-10 实测发生过），因此第一次
+    只计数、不改状态。
+    """
+    app = make_app(settings, [FakePage(logged_in=False), FakePage(logged_in=False)])
     with TestClient(app) as client:
         account = _account_with_targets(client)
 
-        result = client.post(f"/api/accounts/{account['id']}/scan-chats")
-        assert result.status_code == 200, result.text
-        payload = result.json()
+        first = client.post(f"/api/accounts/{account['id']}/scan-chats")
+        assert first.status_code == 200, first.text
+        payload = first.json()
         assert payload["overall"] == "auth_expired"
         assert payload["entries"] == []
+        assert client.get("/api/accounts").json()[0]["status"] != "auth_expired"
 
+        client.post(f"/api/accounts/{account['id']}/scan-chats")
         updated = client.get("/api/accounts").json()[0]
         assert updated["status"] == "auth_expired"
 
