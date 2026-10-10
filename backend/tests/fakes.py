@@ -398,7 +398,7 @@ def make_factory(pages: list[FakePage]):
     return factory
 
 
-def make_app(settings, pages: list[FakePage]):
+def make_app(settings, pages: list[FakePage], notifier=None):
     engine = build_engine(settings.database_url)
     run_migrations(settings.database_url)
 
@@ -418,6 +418,7 @@ def make_app(settings, pages: list[FakePage]):
         confirm_timeout=0.2,
         search_timeout=0.2,
         network_checker=_online,
+        notifier=notifier,
         sleep=lambda _seconds: asyncio.sleep(0),
     )
     return create_app(settings, browser_manager=manager)
@@ -427,3 +428,15 @@ def create_account(client: TestClient, name: str = "测试账号") -> dict:
     response = client.post("/api/accounts", json={"displayName": name})
     assert response.status_code == 201, response.text
     return response.json()
+
+
+class RecordingNotifier:
+    """测试观测通知：记录每次 send，用于断言「推了什么、以什么级别推的」。"""
+
+    def __init__(self):
+        self.sent: list[tuple[str, str, str]] = []
+        self.enabled = True
+
+    async def send(self, title: str, content: str, level: str = "active") -> bool:
+        self.sent.append((title, content, level))
+        return True

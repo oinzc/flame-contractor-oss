@@ -1,14 +1,16 @@
 """M8-4：截图扫码登录 API——headless 截图、登录成功标记 healthy、互斥与图片端点。"""
 
+import asyncio
 import time
 
 from fastapi.testclient import TestClient
 
 from app.execution import browser_manager
+from app.execution.browser_manager import BrowserManager, LoginFlow
 from app.execution.selectors import CONVERSATION_LIST
 from app.models import AccountStatus
 from sqlmodel import Session
-from tests.fakes import FakePage, create_account, make_app
+from tests.fakes import FakePage, RecordingNotifier, create_account, make_app
 
 
 def _wait_for_final_state(client: TestClient, account_id: str, path: str) -> dict:
@@ -256,3 +258,74 @@ def test_qr_shot_writes_decoded_qr_bytes(settings):
             time.sleep(0.05)
         assert got is not None and got.status_code == 200
         assert got.content == b"\x00\x00\x00"  # base64 AAAA 解码结果
+
+
+# ---------------------------------------------------------------- 登录结果推送
+
+
+def test_qr_login_failure_notifies(settings):
+    """登录失败要主动推送：结果只在页面上可见，用户可能早已离开控制台。"""
+    notifier = RecordingNotifier()
+    page = FakePage(logged_in=False)
+    page.qr_data_url = None  # 既无二维码也无登录态 → qr_unavailable
+    app = make_app(settings, [page], notifier=notifier)
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        state = _wait_for_final_state(client, account["id"], "/login/qr")
+        assert state["state"] == "failed"
+
+    assert notifier.sent, "登录失败必须推送"
+    title, content, level = notifier.sent[-1]
+    assert "扫码登录失败" in title
+    assert "测试账号" in content
+    assert level == "timeSensitive"
+
+
+def test_qr_login_success_does_not_notify(settings):
+    """登录成功在页面上立刻可见，不再额外推送，避免噪音。"""
+    notifier = RecordingNotifier()
+    app = make_app(settings, [FakePage(logged_in=True)], notifier=notifier)
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login/qr")
+        state = _wait_for_final_state(client, account["id"], "/login/qr")
+        assert state["state"] == "succeeded"
+
+    assert notifier.sent == []
+
+
+def test_headed_login_without_desktop_does_not_notify(settings, monkeypatch):
+    """no_desktop 是在无显示环境用错了入口，不算故障，不该打扰。"""
+    monkeypatch.setattr(browser_manager, "headed_login_available", lambda: False)
+    notifier = RecordingNotifier()
+    app = make_app(settings, [FakePage(logged_in=False)], notifier=notifier)
+    with TestClient(app) as client:
+        account = create_account(client)
+        client.post(f"/api/accounts/{account['id']}/login")
+        state = _wait_for_final_state(client, account["id"], "/login")
+        assert state["detail"] == "no_desktop"
+
+    assert notifier.sent == []
+
+
+def test_login_failure_skipped_when_notifier_disabled(engine, settings):
+    """未配置 Bark 时（NullNotifier）登录失败不应尝试推送。"""
+    manager = BrowserManager(engine, settings)
+    flow = LoginFlow(account_id="acc", state="failed", detail="qr_unavailable")
+    # 未配置通知：no-op 且不抛异常
+    asyncio.run(manager._notify_login_failed(flow, 300.0))
+
+
+def test_notify_login_failed_message_covers_timeout(engine, settings):
+    """超时文案要说清「等了多少秒 + 仍未登录」，不能只说一句「超时」。"""
+    notifier = RecordingNotifier()
+    manager = BrowserManager(engine, settings, notifier=notifier)
+    flow = LoginFlow(account_id="acc", state="expired", detail="等待扫码超时，请重新发起")
+    asyncio.run(manager._notify_login_failed(flow, 300.0))
+
+    assert len(notifier.sent) == 1
+    title, content, level = notifier.sent[0]
+    assert "超时" in title
+    assert "300" in content
+    assert level == "timeSensitive"

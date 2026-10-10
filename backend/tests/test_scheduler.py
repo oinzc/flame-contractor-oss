@@ -18,8 +18,8 @@ from app.models import (
     SendJob,
     SendSchedule,
 )
-from app.scheduler import Scheduler
-from tests.fakes import FakePage, create_account, make_app
+from app.scheduler import Scheduler, format_name_list, summarize_send_results
+from tests.fakes import FakePage, RecordingNotifier, create_account, make_app
 
 
 def make_clock(start: datetime):
@@ -807,18 +807,6 @@ def test_scheduled_always_send_uses_stable_slot_for_exact_time_target(engine):
 # ---------------------------------------------------------------- 通知挂接
 
 
-class RecordingNotifier:
-    """测试观测通知：记录每次 send。"""
-
-    def __init__(self):
-        self.sent: list[tuple[str, str, str]] = []
-        self.enabled = True
-
-    async def send(self, title: str, content: str, level: str = "active") -> bool:
-        self.sent.append((title, content, level))
-        return True
-
-
 def test_partial_result_triggers_notification(engine):
     api = make_account(engine)
     clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
@@ -871,6 +859,266 @@ def test_auth_expired_triggers_notification(engine):
     asyncio.run(sched.wait_idle())
 
     assert any("登录失效" in title for title, _, _ in notifier.sent)
+
+
+# ---------------------------------------------------------------- 通知内容与级别
+
+
+def test_summarize_send_results_separates_skipped_from_failures():
+    """skipped 是「今日已发」的正常幂等结果，不能和真正需要人工介入的失败混为一谈。"""
+    ok, skipped, failed = summarize_send_results(
+        [
+            {"target": "A", "status": "succeeded"},
+            {"target": "B", "status": "duplicate_succeeded"},
+            {"target": "C", "status": "skipped"},
+            {"target": "D", "status": "not_found"},
+            {"target": "E", "status": "unknown_requires_review"},
+        ]
+    )
+    assert ok == 2
+    assert skipped == ["C"]
+    assert failed == ["D", "E"]
+
+
+def test_format_name_list_truncates_long_lists():
+    assert format_name_list([]) == ""
+    assert format_name_list(["A", "B"]) == "A、B"
+    long_list = [f"F{i}" for i in range(8)]
+    assert format_name_list(long_list).endswith("等 8 人")
+
+
+def test_success_notification_reports_skipped_and_counts(engine):
+    """成功汇总要说清「成功几个、跳过几个」，而不是只给一个 N/M。"""
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {
+            "overall": "ok",
+            "results": [
+                {"target": "A", "status": "succeeded"},
+                {"target": "B", "status": "skipped"},
+            ],
+        }
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    title, content, level = notifier.sent[-1]
+    assert title == "今日续焰完成"
+    assert "成功 1/2" in content
+    assert "跳过 1" in content
+    assert level == "active"
+
+
+def test_success_notification_can_be_disabled(engine):
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "ok", "results": [{"target": "A", "status": "succeeded"}]}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        notify_on_success=False,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert notifier.sent == []
+
+
+def _make_exact_time_target(engine, name: str = "示例好友", hhmm: str = "09:00") -> None:
+    """建一个设了独立发送时刻的好友，供好友级准点派发测试复用。"""
+    with Session(engine) as session:
+        account = session.exec(select(Account)).first()
+        session.add(
+            ContractTarget(
+                account_id=account.id, nickname_snapshot=name, send_time_hhmm=hhmm
+            )
+        )
+        session.commit()
+
+
+def test_target_send_success_notifies_with_friend_name(engine):
+    """好友级准点发送成功也要回音，并且点名是谁——无人值守时最关心的就是这一条。"""
+    make_account(engine)
+    _make_exact_time_target(engine)
+    # 09:00 Asia/Shanghai = 01:00 UTC
+    clock = make_clock(datetime(2026, 8, 27, 1, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send_targets(account_id: str, target_ids: list[str]) -> dict:
+        return {"overall": "ok", "results": [{"target": "示例好友", "status": "succeeded"}]}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    assert notifier.sent, "准点发送成功必须推送"
+    title, content, level = notifier.sent[-1]
+    assert "准点" in title
+    assert "示例好友" in content
+    assert level == "active"
+
+
+def test_target_send_failure_notifies_with_friend_name(engine):
+    """准点发送失败要说清是谁、卡在哪，而不是笼统的「好友级定时发送未成功」。"""
+    make_account(engine)
+    _make_exact_time_target(engine)
+    clock = make_clock(datetime(2026, 8, 27, 1, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send_targets(account_id: str, target_ids: list[str]) -> dict:
+        return {
+            "overall": "partial",
+            "results": [{"target": "示例好友", "status": "unknown_requires_review"}],
+        }
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    title, content, level = notifier.sent[-1]
+    assert "未完成" in title
+    assert "示例好友" in content
+    assert "未成功" in content
+    assert level == "timeSensitive"
+
+
+def test_send_error_notification_uses_critical_level(engine):
+    """回归：发送出错曾传非法 level "errors"，被静默降级成最低优先级。
+
+    「账号发送出错」是需要立刻处理的通知，必须是 critical。
+    """
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "error", "detail": "DomChangedError"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    title, content, level = notifier.sent[-1]
+    assert "出错" in title
+    assert level == "critical"
+    assert "DomChangedError" in content  # 失败原因要带上，便于判断该做什么
+
+
+def test_network_unavailable_notification_uses_critical_level(engine):
+    """回归：网络持续不可用同样曾传非法 level "errors"。"""
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {"overall": "network_unavailable"}
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        network_max_deferrals=0,  # 第一轮即判定持续不可用
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    title, content, level = notifier.sent[-1]
+    assert "网络" in title
+    assert level == "critical"
+
+
+def test_partial_notification_lists_unconfirmed_friends(engine):
+    """部分未确认的推送要列出具体好友，人工核对时不必再去任务记录里翻。"""
+    make_account(engine)
+    clock = make_clock(datetime(2026, 8, 27, 15, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+
+    async def send(account_id: str) -> dict:
+        return {
+            "overall": "partial",
+            "results": [
+                {"target": "张三", "status": "unknown_requires_review"},
+                {"target": "李四", "status": "ambiguous"},
+            ],
+        }
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+    )
+    sched.generate_due_schedules()
+    asyncio.run(sched.tick())
+    asyncio.run(sched.wait_idle())
+
+    title, content, level = notifier.sent[-1]
+    assert "未确认" in title
+    assert "张三" in content and "李四" in content
+    assert level == "timeSensitive"
 
 
 # ---------------------------------------------------------------- 会话状态自动同步
