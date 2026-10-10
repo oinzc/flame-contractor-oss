@@ -75,6 +75,7 @@ def create_app(
             settings,
             notifier=notifier,
             auth_check_tolerance=settings.auth_check_tolerance,
+            login_check_timeout=settings.login_check_timeout,
         )
 
     @asynccontextmanager

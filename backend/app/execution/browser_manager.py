@@ -59,7 +59,11 @@ from .send_confirmer import SendConfirmer
 
 logger = logging.getLogger(__name__)
 
-LOGIN_CHECK_TIMEOUT = 8.0
+# 登录判定预算（秒）：页面打开后，等会话列表出现的时长。判定成功会立即返回，因此
+# 放宽只影响「真的没登录/页面没挂上」时的确认耗时，不拖慢正常路径。
+# 原为 8 秒——而冷启动实测「打开会话页 4.3s + 判定 1.3s」已接近该上限，慢网络下
+# 列表渲染稍晚就会被判成「登录失效」（截图扫码路径用的是 120 秒，同一判据差 15 倍）。
+LOGIN_CHECK_TIMEOUT = 20.0
 LOGIN_POLL_INTERVAL = 2.0
 # 登录判定容忍次数：连续失败达到该次数才把账号标记为登录失效（AUTH_EXPIRED）。
 # 单次判定抖动（页面加载慢、临时验证页、网络波动）曾直接把账号判为失效，而调度器
@@ -70,6 +74,11 @@ AUTH_CHECK_TOLERANCE = 2
 SESSION_OK = "ok"
 SESSION_AUTH_EXPIRED = "auth_expired"
 SESSION_AUTH_UNCONFIRMED = "auth_unconfirmed"
+# 页面根本没加载出来（Chromium 错误页），此时「找不到会话列表」说明网络/加载有问题，
+# 不能当成「登录失效」——否则一次网络抖动会以「请重新扫码」的面目出现并误导用户。
+SESSION_NETWORK_PROBLEM = "network_problem"
+# 判定「页面未加载成功」的 URL 前缀：Chromium 的离线/连接错误页。
+_LOAD_FAILURE_URL_PREFIXES = ("chrome-error://", "about:blank", "data:text/html")
 LOGIN_TIMEOUT_SECONDS = 180.0
 # 截图扫码：二维码在页面上真正渲染出来需要的时间（慢网络下可达数十秒）
 QR_PREPARE_TIMEOUT = 120.0
@@ -229,6 +238,8 @@ class BrowserManager:
         # 因为重启把计数带过去而误落终局。
         self._auth_check_tolerance = max(1, int(auth_check_tolerance))
         self._auth_check_failures: dict[str, int] = {}
+        # 最近一次登录判定失败时的现场证据（截图路径与页面 URL），供调用方写进诊断工件。
+        self._auth_evidence: dict[str, dict] = {}
         self._send_timeout = send_timeout
         self._send_poll_interval = send_poll_interval
         self._send_stabilize_polls = send_stabilize_polls
@@ -871,7 +882,7 @@ class BrowserManager:
             outcome = await self._confirm_session(chat, account_id)
             if outcome != SESSION_OK:
                 return {
-                    "overall": "auth_expired",
+                    "overall": self.overall_for_outcome(outcome),
                     "detail": self.auth_failure_detail(outcome),
                     "results": progress.results or [],
                 }
@@ -1433,9 +1444,16 @@ class BrowserManager:
     async def _confirm_session(self, chat, account_id: str) -> str:
         """登录判定（四个入口共用，口径必须一致）。
 
-        通过则清除连续失败计数；失败则按容忍次数决定是否标记失效。返回
-        `SESSION_OK` / `SESSION_AUTH_EXPIRED`（已确认失效）/ `SESSION_AUTH_UNCONFIRMED`
-        （单次失败、未标记）。
+        通过则清除连续失败计数；失败则区分两类原因再决定后果：
+
+        - 页面根本没加载出来（Chromium 错误页）→ `SESSION_NETWORK_PROBLEM`：既不计入
+          判定失败，也不改账号状态，由调用方按网络问题处理；
+        - 页面正常但看不到会话列表 → 走容忍计数（`SESSION_AUTH_EXPIRED` /
+          `SESSION_AUTH_UNCONFIRMED`），并留一张现场截图便于事后分辨「确实登出」与
+          「慢/验证页/风控」。
+
+        区分这两类是必要的：原实现把两者一律当「登录失效」，于是网络抖动会以
+        「请重新扫码」的面目出现（2026-10-10 实测的误报即属此类可能之一）。
         """
         if await chat.wait_logged_in(
             timeout=self._login_check_timeout,
@@ -1443,15 +1461,58 @@ class BrowserManager:
         ):
             self._note_auth_ok(account_id)
             return SESSION_OK
+
+        page_url = self._page_url(chat)
+        if self._looks_like_load_failure(page_url):
+            logger.warning(
+                "账号 %s 登录判定失败，但页面未正常加载（url=%s），按网络异常处理、不计入失效判定",
+                account_id,
+                page_url,
+            )
+            return SESSION_NETWORK_PROBLEM
+
+        # 留现场：截图 + 页面 URL。没有它只能靠猜是「慢」「验证页」还是真登出。
+        evidence = await self._capture_shot(chat, account_id, "auth_check_failed")
+        self._auth_evidence[account_id] = {"page_url": page_url, "screenshot": evidence}
+        logger.warning(
+            "账号 %s 登录判定失败（url=%s，现场截图=%s）", account_id, page_url, evidence
+        )
+
         marked = self._mark_auth_expired(account_id)
         return SESSION_AUTH_EXPIRED if marked else SESSION_AUTH_UNCONFIRMED
 
     @staticmethod
+    def _looks_like_load_failure(page_url: str | None) -> bool:
+        """页面是否根本没加载成功。
+
+        只认明确的失败标志（Chromium 错误页 / 空白页）：宁可把可疑情况按「登录失效」
+        处理走容忍计数，也不要把真的登出误判成网络问题——后者会让账号永远不被标记、
+        静默失败下去。
+        """
+        if not page_url:
+            return False
+        return page_url.startswith(_LOAD_FAILURE_URL_PREFIXES)
+
+    @staticmethod
     def auth_failure_detail(outcome: str) -> str:
-        """登录判定失败时给用户看的说明；未确认时明确写清「不必急着重扫码」。"""
+        """登录判定失败时给用户看的说明（务必与后果一致，别让人白跑一趟扫码）。"""
+        if outcome == SESSION_NETWORK_PROBLEM:
+            return "抖音页面未能加载（网络异常），本次未判定登录状态、账号未被标记失效，会自动重试"
         if outcome == SESSION_AUTH_EXPIRED:
             return "登录已失效，请重新扫码"
         return "登录判定未通过，但未确认失效（可能是瞬时抖动）；账号未被标记失效，会自动重试"
+
+    @staticmethod
+    def overall_for_outcome(outcome: str, *, network_overall: str = "error") -> str:
+        """把登录判定结论映射到响应里的 overall。
+
+        `Literal` 契约不允许新增取值，因此网络问题只能落到已有的值上：
+        发送链路用 `network_unavailable`（调度器据此延迟重试、不消耗尝试次数），
+        其余链路（扫描/定位校验/身份补采）用 `error`。
+        """
+        if outcome == SESSION_NETWORK_PROBLEM:
+            return network_overall
+        return "auth_expired"
 
     def _mark_auth_expired(self, account_id: str) -> bool:
         """记录一次登录判定失败；连续失败达到容忍次数才真正标记失效，返回是否已标记。
@@ -1486,6 +1547,7 @@ class BrowserManager:
     def _note_auth_ok(self, account_id: str) -> None:
         """登录判定通过：清除连续失败计数，让偶发抖动不会累积成终局判定。"""
         self._auth_check_failures.pop(account_id, None)
+        self._auth_evidence.pop(account_id, None)
 
     def _touch_verified(self, account_id: str) -> None:
         with Session(self._engine) as session:
@@ -1546,7 +1608,7 @@ class BrowserManager:
             outcome = await self._confirm_session(chat, account_id)
             if outcome != SESSION_OK:
                 return {
-                    "overall": "auth_expired",
+                    "overall": self.overall_for_outcome(outcome),
                     "detail": self.auth_failure_detail(outcome),
                     "entries": [],
                 }
@@ -1717,7 +1779,7 @@ class BrowserManager:
             await chat.open_chat_page()
             outcome = await self._confirm_session(chat, account_id)
             if outcome != SESSION_OK:
-                overall = "auth_expired"
+                overall = self.overall_for_outcome(outcome)
                 detail = self.auth_failure_detail(outcome)
             else:
                 try:
@@ -2034,19 +2096,27 @@ class BrowserManager:
             self._update_send_progress(account_id, stage="检查登录状态")
             outcome = await self._confirm_session(chat, account_id)
             if outcome != SESSION_OK:
-                overall = "auth_expired"
+                overall = self.overall_for_outcome(
+                    outcome, network_overall="network_unavailable"
+                )
                 detail = self.auth_failure_detail(outcome)
+                # 判定失败已在 _confirm_session 里留过现场，这里复用同一张截图，
+                # 不再重复截图（send 链路额外需要把证据写进工件 JSON）。
+                evidence = self._auth_evidence.get(account_id) or {}
                 diagnostics = {
-                    "stage": "auth_expired",
+                    "stage": outcome,
                     "confirmed": outcome == SESSION_AUTH_EXPIRED,
-                    "screenshot": await self._capture_shot(chat, account_id, "auth_expired"),
-                    "page_url": self._page_url(chat),
+                    "screenshot": evidence.get("screenshot"),
+                    "page_url": evidence.get("page_url") or self._page_url(chat),
                 }
                 self._finish_send_progress(
                     account_id,
                     status="failed",
                     completed=0,
-                    stage="登录失效" if outcome == SESSION_AUTH_EXPIRED else "登录判定未通过",
+                    stage={
+                        SESSION_AUTH_EXPIRED: "登录失效",
+                        SESSION_NETWORK_PROBLEM: "网络异常",
+                    }.get(outcome, "登录判定未通过"),
                     overall=overall,
                     detail=detail,
                 )
