@@ -70,7 +70,12 @@ def create_app(
     # 通知器由调度器与浏览器流程共享：扫码登录的结果也要能主动回音。
     notifier = BarkNotifier(base_url=settings.bark_url)
     if browser_manager is None:
-        browser_manager = BrowserManager(engine, settings, notifier=notifier)
+        browser_manager = BrowserManager(
+            engine,
+            settings,
+            notifier=notifier,
+            auth_check_tolerance=settings.auth_check_tolerance,
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

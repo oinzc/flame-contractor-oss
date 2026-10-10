@@ -358,12 +358,24 @@ def test_send_ambiguous_target_fails_safe(settings):
 
 
 def test_send_not_logged_in_marks_auth_expired(settings):
-    app = make_app(settings, [FakePage(logged_in=False)])
+    """发送遇登录失效：overall=auth_expired；连续两次判定失败才标记账号失效。
+
+    单次判定抖动不改状态、不锁死调度（否则要人工重新扫码才能恢复），第一次失败
+    只计数并记为「未确认」。
+    """
+    app = make_app(settings, [FakePage(logged_in=False), FakePage(logged_in=False)])
     with TestClient(app) as client:
         account = _account_with_targets(client)
-        result = client.post(f"/api/accounts/{account['id']}/send").json()
-        assert result["overall"] == "auth_expired"
+        first = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert first["overall"] == "auth_expired"
+        assert "未确认" in first["detail"]
 
+        status_after_first = next(
+            item for item in client.get("/api/accounts").json() if item["id"] == account["id"]
+        )["status"]
+        assert status_after_first != "auth_expired"
+
+        client.post(f"/api/accounts/{account['id']}/send")
         updated = next(
             item for item in client.get("/api/accounts").json() if item["id"] == account["id"]
         )

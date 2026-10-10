@@ -61,6 +61,15 @@ logger = logging.getLogger(__name__)
 
 LOGIN_CHECK_TIMEOUT = 8.0
 LOGIN_POLL_INTERVAL = 2.0
+# 登录判定容忍次数：连续失败达到该次数才把账号标记为登录失效（AUTH_EXPIRED）。
+# 单次判定抖动（页面加载慢、临时验证页、网络波动）曾直接把账号判为失效，而调度器
+# 会跳过所有非 HEALTHY 账号的扫描与发送，于是账号彻底停摆、只能人工重新扫码救回
+# （实测案例：一次自动扫描在 8 秒判定窗口内误判失效，而同一时刻会话其实有效）。
+AUTH_CHECK_TOLERANCE = 2
+# 登录判定结论：ok=通过 / auth_expired=已确认失效 / auth_unconfirmed=单次失败未确认。
+SESSION_OK = "ok"
+SESSION_AUTH_EXPIRED = "auth_expired"
+SESSION_AUTH_UNCONFIRMED = "auth_unconfirmed"
 LOGIN_TIMEOUT_SECONDS = 180.0
 # 截图扫码：二维码在页面上真正渲染出来需要的时间（慢网络下可达数十秒）
 QR_PREPARE_TIMEOUT = 120.0
@@ -188,6 +197,7 @@ class BrowserManager:
         login_poll_interval: float = LOGIN_POLL_INTERVAL,
         login_timeout: float = LOGIN_TIMEOUT_SECONDS,
         login_check_timeout: float = LOGIN_CHECK_TIMEOUT,
+        auth_check_tolerance: int = AUTH_CHECK_TOLERANCE,
         send_timeout: float = SEND_TIMEOUT_SECONDS,
         send_poll_interval: float = SEND_POLL_INTERVAL,
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
@@ -215,6 +225,10 @@ class BrowserManager:
         self._login_poll_interval = login_poll_interval
         self._login_timeout = login_timeout
         self._login_check_timeout = login_check_timeout
+        # 连续登录判定失败计数：只在内存，进程重启即清零——宁可「少一次判定」也不要
+        # 因为重启把计数带过去而误落终局。
+        self._auth_check_tolerance = max(1, int(auth_check_tolerance))
+        self._auth_check_failures: dict[str, int] = {}
         self._send_timeout = send_timeout
         self._send_poll_interval = send_poll_interval
         self._send_stabilize_polls = send_stabilize_polls
@@ -854,14 +868,11 @@ class BrowserManager:
             self._update_identity_hydration_progress(progress.task_id, stage="打开会话列表")
             await chat.open_chat_page()
             self._update_identity_hydration_progress(progress.task_id, stage="检查登录状态")
-            if not await chat.wait_logged_in(
-                timeout=self._login_check_timeout,
-                poll_interval=self._login_poll_interval,
-            ):
-                self._mark_auth_expired(account_id)
+            outcome = await self._confirm_session(chat, account_id)
+            if outcome != SESSION_OK:
                 return {
                     "overall": "auth_expired",
-                    "detail": "登录已失效，请重新扫码",
+                    "detail": self.auth_failure_detail(outcome),
                     "results": progress.results or [],
                 }
 
@@ -1244,6 +1255,8 @@ class BrowserManager:
             return account.display_name if account is not None else account_id
 
     def _mark_healthy(self, account_id: str, douyin_nickname: str | None = None) -> None:
+        # 重新登录成功即视为会话已确认，清掉此前的连续失败计数。
+        self._note_auth_ok(account_id)
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             if account is None:
@@ -1417,13 +1430,62 @@ class BrowserManager:
                     pass
             await self._notify_login_failed(flow, self._qr_login_timeout)
 
-    def _mark_auth_expired(self, account_id: str) -> None:
+    async def _confirm_session(self, chat, account_id: str) -> str:
+        """登录判定（四个入口共用，口径必须一致）。
+
+        通过则清除连续失败计数；失败则按容忍次数决定是否标记失效。返回
+        `SESSION_OK` / `SESSION_AUTH_EXPIRED`（已确认失效）/ `SESSION_AUTH_UNCONFIRMED`
+        （单次失败、未标记）。
+        """
+        if await chat.wait_logged_in(
+            timeout=self._login_check_timeout,
+            poll_interval=self._login_poll_interval,
+        ):
+            self._note_auth_ok(account_id)
+            return SESSION_OK
+        marked = self._mark_auth_expired(account_id)
+        return SESSION_AUTH_EXPIRED if marked else SESSION_AUTH_UNCONFIRMED
+
+    @staticmethod
+    def auth_failure_detail(outcome: str) -> str:
+        """登录判定失败时给用户看的说明；未确认时明确写清「不必急着重扫码」。"""
+        if outcome == SESSION_AUTH_EXPIRED:
+            return "登录已失效，请重新扫码"
+        return "登录判定未通过，但未确认失效（可能是瞬时抖动）；账号未被标记失效，会自动重试"
+
+    def _mark_auth_expired(self, account_id: str) -> bool:
+        """记录一次登录判定失败；连续失败达到容忍次数才真正标记失效，返回是否已标记。
+
+        调度器对非 HEALTHY 账号会同时跳过扫描与发送，若单次抖动就落终局，账号会
+        停摆且无法自愈（只能人工重新扫码）。连续两次才标记：既挡住抖动，也保证
+        真失效时仍会被判定并提醒。
+        """
+        count = self._auth_check_failures.get(account_id, 0) + 1
+        self._auth_check_failures[account_id] = count
+        if count < self._auth_check_tolerance:
+            logger.warning(
+                "账号 %s 登录判定失败第 %d/%d 次，暂不标记失效（避免单次抖动锁死调度）",
+                account_id,
+                count,
+                self._auth_check_tolerance,
+            )
+            return False
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             if account is not None:
                 account.status = AccountStatus.AUTH_EXPIRED
                 session.add(account)
                 session.commit()
+        logger.warning(
+            "账号 %s 登录判定连续失败 %d 次，已标记登录失效",
+            account_id,
+            count,
+        )
+        return True
+
+    def _note_auth_ok(self, account_id: str) -> None:
+        """登录判定通过：清除连续失败计数，让偶发抖动不会累积成终局判定。"""
+        self._auth_check_failures.pop(account_id, None)
 
     def _touch_verified(self, account_id: str) -> None:
         with Session(self._engine) as session:
@@ -1481,14 +1543,11 @@ class BrowserManager:
             update_progress(stage="打开会话列表")
             await chat.open_chat_page()
             update_progress(stage="检查登录状态")
-            if not await chat.wait_logged_in(
-                timeout=self._login_check_timeout,
-                poll_interval=self._login_poll_interval,
-            ):
-                self._mark_auth_expired(account_id)
+            outcome = await self._confirm_session(chat, account_id)
+            if outcome != SESSION_OK:
                 return {
                     "overall": "auth_expired",
-                    "detail": "登录已失效，请重新扫码",
+                    "detail": self.auth_failure_detail(outcome),
                     "entries": [],
                 }
             try:
@@ -1656,13 +1715,10 @@ class BrowserManager:
             context, page = await self._open(profile_path, headless=True)
             chat = self._make_chat(page)
             await chat.open_chat_page()
-            if not await chat.wait_logged_in(
-                timeout=self._login_check_timeout,
-                poll_interval=self._login_poll_interval,
-            ):
-                self._mark_auth_expired(account_id)
+            outcome = await self._confirm_session(chat, account_id)
+            if outcome != SESSION_OK:
                 overall = "auth_expired"
-                detail = "登录已失效，请重新扫码"
+                detail = self.auth_failure_detail(outcome)
             else:
                 try:
                     await chat.warm_up_list()
@@ -1976,15 +2032,13 @@ class BrowserManager:
             chat = self._make_chat(page)
             await chat.open_chat_page()
             self._update_send_progress(account_id, stage="检查登录状态")
-            if not await chat.wait_logged_in(
-                timeout=self._login_check_timeout,
-                poll_interval=self._login_poll_interval,
-            ):
-                self._mark_auth_expired(account_id)
+            outcome = await self._confirm_session(chat, account_id)
+            if outcome != SESSION_OK:
                 overall = "auth_expired"
-                detail = "登录已失效，请重新扫码"
+                detail = self.auth_failure_detail(outcome)
                 diagnostics = {
                     "stage": "auth_expired",
+                    "confirmed": outcome == SESSION_AUTH_EXPIRED,
                     "screenshot": await self._capture_shot(chat, account_id, "auth_expired"),
                     "page_url": self._page_url(chat),
                 }
@@ -1992,7 +2046,7 @@ class BrowserManager:
                     account_id,
                     status="failed",
                     completed=0,
-                    stage="登录失效",
+                    stage="登录失效" if outcome == SESSION_AUTH_EXPIRED else "登录判定未通过",
                     overall=overall,
                     detail=detail,
                 )
