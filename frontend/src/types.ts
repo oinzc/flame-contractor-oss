@@ -75,7 +75,18 @@ export interface SchedulerStatus {
   runningAccounts: string[]
   todaySchedules: SendSchedule[]
   autoScanIntervalHours: number
+  /** 定时到点是否忽略当天已发送记录再发一遍（「到点重发」开关） */
+  scheduledAlwaysSend: boolean
+  /** 固定发送时刻的宽限期（分钟）：超过才算错过、当天不再补发 */
+  fixedTimeGraceMinutes: number
   autoScans: AutoScanStatus[]
+}
+
+/** 调度设置增量更新：只传需要改的字段，未传的保持现值。 */
+export interface SchedulerSettingsPatch {
+  autoScanIntervalHours?: number
+  scheduledAlwaysSend?: boolean
+  fixedTimeGraceMinutes?: number
 }
 
 export interface Account {

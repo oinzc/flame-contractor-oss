@@ -18,10 +18,15 @@ interface Props {
   onToggleScheduler: () => void
   onUpdateAutoScanInterval: (hours: number) => void
   autoScanIntervalSaving: boolean
+  onToggleScheduledAlwaysSend: () => void
+  onUpdateFixedTimeGrace: (minutes: number) => void
+  schedulerPolicySaving: boolean
   onNavigate: (page: 'accounts' | 'targets' | 'jobs') => void
 }
 
 const AUTO_SCAN_INTERVAL_OPTIONS = [1, 3, 6, 12, 24, 48, 72, 168]
+// 固定时刻宽限期候选（分钟）：0=严格到点即错过，越大越容忍机器晚起。
+const FIXED_TIME_GRACE_OPTIONS = [0, 5, 15, 30, 60, 180]
 
 function hhmmToFraction(value: string): number {
   const [hour, minute] = value.split(':').map(Number)
@@ -56,6 +61,9 @@ export default function DashboardPage({
   onToggleScheduler,
   onUpdateAutoScanInterval,
   autoScanIntervalSaving,
+  onToggleScheduledAlwaysSend,
+  onUpdateFixedTimeGrace,
+  schedulerPolicySaving,
   onNavigate,
 }: Props) {
   const [stats, setStats] = useState<StatsSummary | null>(null)
@@ -111,6 +119,11 @@ export default function DashboardPage({
   }))
   const autoScans = schedulerStatus?.autoScans ?? []
   const autoScanIntervalHours = schedulerStatus?.autoScanIntervalHours ?? 24
+  const scheduledAlwaysSend = schedulerStatus?.scheduledAlwaysSend ?? false
+  const fixedTimeGraceMinutes = schedulerStatus?.fixedTimeGraceMinutes ?? 30
+  const graceOptions = FIXED_TIME_GRACE_OPTIONS.includes(fixedTimeGraceMinutes)
+    ? FIXED_TIME_GRACE_OPTIONS
+    : [...FIXED_TIME_GRACE_OPTIONS, fixedTimeGraceMinutes].sort((a, b) => a - b)
   const intervalOptions = AUTO_SCAN_INTERVAL_OPTIONS.includes(autoScanIntervalHours)
     ? AUTO_SCAN_INTERVAL_OPTIONS
     : [autoScanIntervalHours, ...AUTO_SCAN_INTERVAL_OPTIONS]
@@ -301,6 +314,47 @@ export default function DashboardPage({
           <span className="auto-sync-safety">只读 · 不发送</span>
           <span className="auto-sync-state">
             {autoScanIntervalSaving ? '保存中…' : autoScanState}
+          </span>
+        </div>
+        <div
+          className={`auto-sync-status sched-policy${scheduledAlwaysSend ? ' on' : ''}`}
+          aria-label="定时到点重发"
+        >
+          <span className="auto-sync-lamp" aria-hidden="true" />
+          <span className="auto-sync-label">定时到点重发</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={scheduledAlwaysSend}
+            aria-label="定时到点重发"
+            className="sched-switch"
+            disabled={schedulerStatus === null || schedulerPolicySaving}
+            onClick={onToggleScheduledAlwaysSend}
+          >
+            <span className="sched-switch-thumb" aria-hidden="true" />
+          </button>
+          <label className="auto-sync-control">
+            <span>固定时刻宽限</span>
+            <select
+              aria-label="固定时刻宽限期"
+              value={fixedTimeGraceMinutes}
+              disabled={schedulerStatus === null || schedulerPolicySaving}
+              onChange={(event) => onUpdateFixedTimeGrace(Number(event.currentTarget.value))}
+            >
+              {graceOptions.map((minutes) => (
+                <option key={minutes} value={minutes}>
+                  {minutes === 0 ? '不宽限' : `${minutes} 分钟`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="auto-sync-safety">结果未确认不重发</span>
+          <span className="auto-sync-state">
+            {schedulerPolicySaving
+              ? '保存中…'
+              : scheduledAlwaysSend
+                ? '已开启 · 忽略当天已发记录'
+                : '每天每好友只发一次'}
           </span>
         </div>
       </section>
