@@ -30,5 +30,11 @@ storage-state*.json
 .DS_Store
 Thumbs.db
 
+# 本地工具状态与临时产物：只在本机有意义，不入库
+.zcode/
+.playwright-cli/
+output/
+
 # Logs
 *.log
+nohup.out
