@@ -64,6 +64,8 @@ export default function App() {
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
   const [autoScanIntervalSaving, setAutoScanIntervalSaving] = useState(false)
+  // 「到点重发」开关与固定时刻宽限期共用同一个写入中标记：两者都是调度设置写操作。
+  const [schedulerPolicySaving, setSchedulerPolicySaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [now, setNow] = useState(() => new Date())
@@ -677,13 +679,47 @@ export default function App() {
     if (!schedulerStatus || autoScanIntervalSaving) return
     setAutoScanIntervalSaving(true)
     try {
-      const next = await api.schedulerUpdateSettings(hours)
+      const next = await api.schedulerUpdateSettings({ autoScanIntervalHours: hours })
       setSchedulerStatus(next)
       setError(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '自动同步周期保存失败')
     } finally {
       setAutoScanIntervalSaving(false)
+    }
+  }
+
+  async function handleToggleScheduledAlwaysSend() {
+    if (!schedulerStatus || schedulerPolicySaving) return
+    const next = !schedulerStatus.scheduledAlwaysSend
+    setSchedulerPolicySaving(true)
+    // 乐观更新：开关要立刻跟手，失败再回滚并提示。
+    setSchedulerStatus({ ...schedulerStatus, scheduledAlwaysSend: next })
+    try {
+      const payload = await api.schedulerUpdateSettings({ scheduledAlwaysSend: next })
+      setSchedulerStatus(payload)
+      setError(null)
+    } catch (err) {
+      setSchedulerStatus((current) =>
+        current ? { ...current, scheduledAlwaysSend: !next } : current,
+      )
+      setError(err instanceof ApiError ? err.message : '「到点重发」开关保存失败')
+    } finally {
+      setSchedulerPolicySaving(false)
+    }
+  }
+
+  async function handleUpdateFixedTimeGrace(minutes: number) {
+    if (!schedulerStatus || schedulerPolicySaving) return
+    setSchedulerPolicySaving(true)
+    try {
+      const payload = await api.schedulerUpdateSettings({ fixedTimeGraceMinutes: minutes })
+      setSchedulerStatus(payload)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '固定时刻宽限期保存失败')
+    } finally {
+      setSchedulerPolicySaving(false)
     }
   }
 
@@ -961,6 +997,9 @@ export default function App() {
                   onToggleScheduler={() => void handleToggleScheduler()}
                   onUpdateAutoScanInterval={(hours) => void handleUpdateAutoScanInterval(hours)}
                   autoScanIntervalSaving={autoScanIntervalSaving}
+                  onToggleScheduledAlwaysSend={() => void handleToggleScheduledAlwaysSend()}
+                  onUpdateFixedTimeGrace={(minutes) => void handleUpdateFixedTimeGrace(minutes)}
+                  schedulerPolicySaving={schedulerPolicySaving}
                   onNavigate={setPage}
                 />
               )}

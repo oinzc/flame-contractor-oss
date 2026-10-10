@@ -498,7 +498,8 @@ body {
 .mini-row .state.idle { color: var(--text-3); }
 
 /* 会话官方状态自动同步：把周期与下一次触发放在调度器同一模块内。 */
-.auto-sync-status {
+.auto-sync-status,
+.sched-policy {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -519,6 +520,54 @@ body {
 }
 .auto-sync-status.running .auto-sync-lamp { background: var(--flame); box-shadow: 0 0 6px var(--flame-glow); }
 .auto-sync-status.paused .auto-sync-lamp { background: var(--text-3); box-shadow: none; }
+/* 「到点重发」开启时用焰橙点出：这是会多发一条的策略，需要一眼可见 */
+.sched-policy.on .auto-sync-lamp { background: var(--flame); box-shadow: 0 0 6px var(--flame-glow); }
+
+/* 布尔开关：轨道只有 1px 蚀刻缝，拇指靠 transform 滑动（不触发布局）。
+   状态变化本身即反馈，因此只做 180ms 的位移；按下时轻微缩小确认「听到了」。 */
+.sched-switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--seam);
+  border-radius: 9px;
+  background: var(--panel);
+  cursor: pointer;
+  transition:
+    background-color 180ms var(--ease-out),
+    border-color 180ms var(--ease-out),
+    transform 140ms var(--ease-out);
+}
+.sched-switch[aria-checked='true'] {
+  background: var(--flame-dim);
+  border-color: var(--flame);
+}
+.sched-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition:
+    transform 180ms var(--ease-out),
+    background-color 180ms var(--ease-out);
+}
+.sched-switch[aria-checked='true'] .sched-switch-thumb {
+  background: var(--flame);
+  transform: translateX(13px);
+}
+.sched-switch:active:not(:disabled) { transform: scale(0.97); }
+.sched-switch:focus-visible { outline: 1px solid var(--flame); outline-offset: 2px; }
+.sched-switch:disabled { opacity: 0.55; cursor: wait; }
+
+@media (hover: hover) and (pointer: fine) {
+  .sched-switch:not(:disabled):not([aria-checked='true']):hover { border-color: var(--text-3); }
+  .sched-switch:not(:disabled):hover .sched-switch-thumb { background: var(--flame); }
+}
 .auto-sync-label { color: var(--ink); white-space: nowrap; }
 .auto-sync-control {
   display: inline-flex;
