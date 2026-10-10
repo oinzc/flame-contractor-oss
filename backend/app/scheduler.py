@@ -86,6 +86,42 @@ _RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
 # 人工接管（绝不自动重发）
 _TERMINAL = {ScheduleStatus.SUCCEEDED, ScheduleStatus.UNKNOWN_REQUIRES_REVIEW}
 
+# 视为「已办妥」的发送终态：succeeded 与 duplicate_succeeded（今日已发，幂等命中）。
+_SEND_OK_STATUSES = frozenset({"succeeded", "duplicate_succeeded"})
+# 通知文案里最多列几个好友名，避免一条推送被长名单撑爆。
+_NOTIFY_NAME_LIMIT = 5
+
+
+def summarize_send_results(results: list[dict] | None) -> tuple[int, list[str], list[str]]:
+    """汇总发送明细为 (成功数, 跳过的好友名, 未成功的好友名)。
+
+    skipped 归入「跳过」而非「未成功」：它表示今日已发送，属正常幂等结果，
+    和真正需要人工介入的 not_found/ambiguous/unknown_requires_review 是两回事。
+    """
+    ok = 0
+    skipped: list[str] = []
+    failed: list[str] = []
+    for item in results or []:
+        name = item.get("target") or "?"
+        status = item.get("status")
+        if status in _SEND_OK_STATUSES:
+            ok += 1
+        elif status == "skipped":
+            skipped.append(name)
+        else:
+            failed.append(name)
+    return ok, skipped, failed
+
+
+def format_name_list(names: list[str]) -> str:
+    """把好友名单压成一行；超出上限时补「等 N 人」，别让推送被名单淹没。"""
+    if not names:
+        return ""
+    head = "、".join(names[:_NOTIFY_NAME_LIMIT])
+    if len(names) > _NOTIFY_NAME_LIMIT:
+        return f"{head} 等 {len(names)} 人"
+    return head
+
 
 class Scheduler:
     """进程内异步调度器。
@@ -427,7 +463,8 @@ class Scheduler:
         for account_id in recovered:
             await self._notify(
                 "自动发送中断",
-                f"账号「{self._account_name(account_id)}」的自动发送曾中断，结果未确认，已转待人工复核。",
+                f"账号「{self._account_name(account_id)}」上一轮自动发送在执行中中断"
+                "（多为进程重启或崩溃），结果未确认，已转待人工复核，不会自动重发。",
                 "timeSensitive",
             )
         self.generate_due_schedules(now)
@@ -476,7 +513,8 @@ class Scheduler:
                 self._clear_retry_state(schedule.id)
                 await self._notify(
                     "今日发送窗口已结束",
-                    f"账号「{self._account_name(account.id)}」的今日计划未能在窗口内完成，已跳过；"
+                    f"账号「{self._account_name(account.id)}」原定 {self._local_hhmm(account, scheduled_at)} "
+                    "的自动发送未能在窗口内执行，已跳过（错过不深夜补发）；"
                     "如需补发请在控制台手动发送。",
                     "timeSensitive",
                 )
@@ -690,10 +728,12 @@ class Scheduler:
     async def _run_target_send(
         self, account_id: str, target_ids: list[str], *, force_run_id: str | None = None
     ) -> None:
+        """好友级准点发送；成败都回执，失败说清是谁、卡在哪。"""
+        label = self._target_label(target_ids)
         try:
             if self._send_targets is None:
                 raise RuntimeError("未配置单好友发送执行器")
-            await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._call_send_targets(
                     account_id, target_ids, force_run_id=force_run_id
                 ),
@@ -701,15 +741,71 @@ class Scheduler:
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # 单好友精确派发失败：不自动重发，交由人工/下一轮（幂等键兜底）
             await self._notify(
-                "自动发送中断",
-                f"账号「{self._account_name(account_id)}」的好友级定时发送未成功，请人工复核。",
+                "准点发送未完成",
+                f"账号「{self._account_name(account_id)}」准点给「{label}」发送时中断"
+                f"（{type(exc).__name__}），不会自动重发，请人工复核。",
                 "timeSensitive",
             )
+        else:
+            await self._notify_target_result(account_id, label, result or {})
         finally:
             self._running.discard(account_id)
+
+    async def _notify_target_result(self, account_id: str, label: str, result: dict) -> None:
+        """好友级准点发送的单条回执。
+
+        成功默认也推送：准点会话（如固定 02:22）是用户最关心的一条，无人值守时
+        「发没发出去」必须有回音；`notify_on_success=0` 可整体关掉成功推送。
+        """
+        overall = result.get("overall")
+        account = self._account_name(account_id)
+        if overall == "ok":
+            if not self._notify_on_success:
+                return
+            await self._notify(
+                "准点续焰完成",
+                f"账号「{account}」已准点给「{label}」续焰。",
+                "active",
+            )
+            return
+        if overall == "network_unavailable":
+            # 账号级链路对此另有延迟重试与终态通知，此处不重复打扰。
+            return
+        if overall == "auth_expired":
+            await self._notify(
+                "准点发送遇登录失效",
+                f"账号「{account}」准点给「{label}」发送时发现登录已失效，请重新扫码登录。",
+                "critical",
+            )
+            return
+        ok, skipped, failed = summarize_send_results(result.get("results"))
+        detail = result.get("detail")
+        reason = f"：{detail}" if detail else ""
+        parts = [f"成功 {ok}"]
+        if skipped:
+            parts.append(f"跳过 {len(skipped)}（今日已发）")
+        if failed:
+            parts.append(f"未成功 {format_name_list(failed)}")
+        await self._notify(
+            "准点发送未完成",
+            f"账号「{account}」准点给「{label}」发送未成功{reason}；"
+            f"{' · '.join(parts)}。请到任务记录人工核对。",
+            "timeSensitive",
+        )
+
+    def _target_label(self, target_ids: list[str]) -> str:
+        """把好友 ID 列表换成可读名字；查不到时退回数量，避免推送出现裸 UUID。"""
+        if not target_ids:
+            return "指定好友"
+        with Session(self._engine) as session:
+            rows = session.exec(
+                select(ContractTarget).where(ContractTarget.id.in_(target_ids))
+            ).all()
+        names = [row.nickname_snapshot for row in rows if row.nickname_snapshot]
+        return format_name_list(names) if names else f"{len(target_ids)} 个好友"
 
     def _call_send_targets(
         self, account_id: str, target_ids: list[str], *, force_run_id: str | None = None
@@ -807,7 +903,11 @@ class Scheduler:
             await self._defer_network(schedule_id, account_id)
             return
         await self._handle_failure(
-            schedule_id, account_id, overall=overall or "error", detail=overall
+            schedule_id,
+            account_id,
+            overall=overall or "error",
+            detail=result.get("detail") or overall,
+            result=result,
         )
 
     # ------------------------------------------------------------ M6-3 熔断/成功推送
@@ -817,15 +917,16 @@ class Scheduler:
         if not self._notify_on_success:
             return
         results = result.get("results") or []
+        ok, skipped, failed = summarize_send_results(results)
         total = len(results)
-        ok = sum(
-            1
-            for item in results
-            if item.get("status") in ("succeeded", "duplicate_succeeded")
-        )
+        parts = [f"成功 {ok}/{total}"]
+        if skipped:
+            parts.append(f"跳过 {len(skipped)}（今日已发）")
+        if failed:
+            parts.append(f"未成功 {format_name_list(failed)}")
         await self._notify(
             "今日续焰完成",
-            f"账号「{self._account_name(account_id)}」自动续火完成 {ok}/{total}。",
+            f"账号「{self._account_name(account_id)}」自动续火：{' · '.join(parts)}。",
             "active",
         )
 
@@ -863,7 +964,13 @@ class Scheduler:
             )
 
     async def _handle_failure(
-        self, schedule_id: str, account_id: str, *, overall: str, detail: str | None
+        self,
+        schedule_id: str,
+        account_id: str,
+        *,
+        overall: str,
+        detail: str | None,
+        result: dict | None = None,
     ) -> None:
         """partial/error/执行异常：窗口内有限次指数退避重试，耗尽才转终态并通知。
 
@@ -876,7 +983,8 @@ class Scheduler:
             await self._register_failure(account_id)
             await self._notify(
                 "账号登录失效",
-                f"账号「{self._account_name(account_id)}」登录已失效，请重新扫码登录以继续自动续火。",
+                f"账号「{self._account_name(account_id)}」登录已失效，"
+                "自动续火已停；请重新扫码登录，登录后会自动恢复调度。",
                 "critical",
             )
             return
@@ -899,18 +1007,23 @@ class Scheduler:
                 "部分好友结果未确认（已重试仍未全部确认）",
             )
             await self._register_failure(account_id)
+            _, _, failed = summarize_send_results((result or {}).get("results"))
+            who = f"：{format_name_list(failed)}" if failed else ""
             await self._notify(
                 "部分好友结果未确认",
-                f"账号「{name}」有好友发送结果未确认（已含重试），请到任务记录人工核对。",
+                f"账号「{name}」有 {len(failed) or '若干'} 个好友结果未确认（已重试）{who}。"
+                "为防重复发送，系统不会自动重发，请到任务记录人工核对。",
                 "timeSensitive",
             )
         else:
             self._finalize(schedule_id, ScheduleStatus.FAILED, detail or overall)
             await self._register_failure(account_id)
+            reason = detail or overall
             await self._notify(
                 "账号发送出错",
-                f"账号「{name}」发送过程中出现错误（已重试仍未成功），需人工处理。",
-                "errors",
+                f"账号「{name}」发送出错（已重试仍未成功）：{reason}。"
+                "需人工处理，系统不会自动重发。",
+                "critical",
             )
 
     async def _defer_network(self, schedule_id: str, account_id: str) -> None:
@@ -922,12 +1035,14 @@ class Scheduler:
             self._clear_retry_state(schedule_id)
             self._finalize(schedule_id, ScheduleStatus.FAILED, "网络持续不可用")
             await self._register_failure(account_id)
+            rounds = self._network_max_deferrals + 1
+            waited = int(self._network_deferral_backoff * rounds / 60)
             await self._notify(
                 "网络持续不可用",
-                f"账号「{self._account_name(account_id)}」因网络不可用连续 "
-                f"{self._network_max_deferrals + 1} 轮未能开始发送，今日计划已停止；"
+                f"账号「{self._account_name(account_id)}」因网络不可用连续 {rounds} 轮"
+                f"（约 {waited} 分钟）无法开始发送，今日计划已停止；"
                 "网络恢复后请在控制台手动补发。",
-                "errors",
+                "critical",
             )
             return
         self._release(schedule_id)
@@ -944,6 +1059,17 @@ class Scheduler:
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
             return account.display_name if account is not None else account_id
+
+    def _local_hhmm(self, account: Account, moment: datetime | None) -> str:
+        """把 UTC-naive 的计划时刻换算成账号本地 HH:MM，供通知里说「原定几点」。"""
+        if moment is None:
+            return "本次"
+        aware = (
+            moment.replace(tzinfo=ZoneInfo("UTC"))
+            if moment.tzinfo is None
+            else moment
+        )
+        return aware.astimezone(ZoneInfo(account.timezone)).strftime("%H:%M")
 
     async def _notify(self, title: str, content: str, level: str) -> None:
         try:

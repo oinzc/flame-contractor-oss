@@ -33,6 +33,7 @@ from ..models import (
     TemplateType,
 )
 from ..schemas import BatchTargetItem, TargetBatchCreate
+from ..notifications import Notifier, NullNotifier
 from ..scan_reconciliation import (
     build_reconciliation,
     empty_reconciliation,
@@ -196,10 +197,13 @@ class BrowserManager:
         qr_screenshot_interval: float = 6.0,
         confirm_timeout: float = 8.0,
         search_timeout: float = 12.0,
+        notifier: Notifier | None = None,
         sleep=asyncio.sleep,
     ):
         self._engine = engine
         self._settings = settings
+        # 扫码登录是账号恢复自动续火的唯一入口：失败/超时必须能主动回音，不能只在日志留痕。
+        self._notifier: Notifier = notifier or NullNotifier()
         self._flows: dict[str, LoginFlow] = {}
         self._send_progress: dict[str, SendProgress] = {}
         self._scan_progress: dict[str, ScanProgress] = {}
@@ -1197,6 +1201,47 @@ class BrowserManager:
                     await context.close()
                 except Exception:
                     pass
+            await self._notify_login_failed(flow, self._login_timeout)
+
+    async def _notify_login_failed(self, flow: LoginFlow, timeout: float) -> None:
+        """扫码登录未成功时主动回音。
+
+        登录结果只在控制台页面上可见，而截图扫码最长要等数分钟，用户很可能已经离开；
+        等下一轮自动同步再以「会话状态同步失败」告知会晚很多，所以在这里直接推送。
+        `no_desktop`（在无显示环境发起有头扫码）属于用错入口，不算故障，不打扰。
+        """
+        if flow.state not in {"failed", "expired"} or flow.detail == "no_desktop":
+            return
+        if not self._notifier.enabled:
+            return
+        name = self._account_name(flow.account_id)
+        if flow.state == "expired":
+            title = "扫码登录超时"
+            content = (
+                f"账号「{name}」扫码登录等待超时（{int(timeout)} 秒内未完成扫码），"
+                "账号仍未登录，请重新发起。"
+            )
+        elif flow.detail == "qr_unavailable":
+            title = "扫码登录失败"
+            content = (
+                f"账号「{name}」未能获取登录二维码（页面既无二维码也无有效登录态），"
+                "账号仍未登录；请确认抖音登录页结构是否变化后重新发起。"
+            )
+        else:
+            title = "扫码登录失败"
+            content = (
+                f"账号「{name}」扫码登录失败（{flow.detail or '未知原因'}），"
+                "账号仍未登录，请重新发起。"
+            )
+        try:
+            await self._notifier.send(title, content, "timeSensitive")
+        except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
+            logger.warning("登录结果通知发送失败", exc_info=True)
+
+    def _account_name(self, account_id: str) -> str:
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+            return account.display_name if account is not None else account_id
 
     def _mark_healthy(self, account_id: str, douyin_nickname: str | None = None) -> None:
         with Session(self._engine) as session:
@@ -1370,6 +1415,7 @@ class BrowserManager:
                     await context.close()
                 except Exception:
                     pass
+            await self._notify_login_failed(flow, self._qr_login_timeout)
 
     def _mark_auth_expired(self, account_id: str) -> None:
         with Session(self._engine) as session:

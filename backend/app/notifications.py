@@ -62,6 +62,14 @@ class BarkNotifier:
     def _resolve_url(self, level: str) -> str | None:
         level = level or self.level
         if level not in VALID_LEVELS:
+            # 静默回退会让 `level="errors"` 这类笔误变成「最低优先级推送」而不被发现：
+            # 消息照发但手机不响，恰好是最需要立刻知道的那几条。这里显式留痕。
+            logger.warning(
+                "未知通知级别 %r，已回退到 %r（合法值：%s）",
+                level,
+                self.level,
+                "、".join(sorted(VALID_LEVELS)),
+            )
             level = self.level
         base = (self.base_url or "").strip()
         if not base:

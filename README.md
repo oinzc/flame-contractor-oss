@@ -116,15 +116,31 @@ powershell -ExecutionPolicy Bypass -File scripts\runtime\manage_runtime.ps1 -Act
 
 ## 异常通知（M5）
 
-自动调度在无人值守时，若遇到必须人工接管的信号，会推送到你的手机（当前支持 **Bark**）：
+自动调度在无人值守时，若遇到必须人工接管的信号，会推送到你的手机（当前支持 **Bark**）。通知级别按「是否需要立刻处理」分三档：`critical`（响铃，必须处理）、`timeSensitive`（需关注）、`active`（知悉即可）。
 
-- 账号登录失效（`auth_expired`）；
-- 调度发送中断 / 结果未确认（`unknown_requires_review`）；
-- 部分好友结果未确认、发送异常；
+**需要人工接管（critical）**
+
+- 账号登录失效（`auth_expired`）——自动续火已停，重新扫码后自动恢复；
+- 账号发送出错（重试耗尽）——带上失败原因，如 `DomChangedError`；
+- 网络持续不可用（连续 5 轮约 5 分钟）——今日计划已停止，需手动补发；
 - 连续失败熔断（M6：连续 N 天失败自动暂停该账号调度）；
-- 网络持续不可用、发送窗口已结束计划被跳过（M6）。
+- 准点发送时发现登录失效；
+- 自动会话同步遇到登录失效。
 
-默认开启**成功汇总推送**：每天自动续火完成后推送「今日续焰完成 N/M」（`FLAME_NOTIFY_ON_SUCCESS=0` 关闭）。
+**需要关注（timeSensitive）**
+
+- 调度发送中断 / 结果未确认（`unknown_requires_review`，多为进程重启或崩溃）；
+- 好友级准点发送未完成——点名是哪个好友、卡在什么原因；
+- 部分好友结果未确认（重试耗尽）——列出未确认的好友名；
+- 发送窗口已结束、计划被跳过（M6）——带上原定时刻；注意该条仅在 `FLAME_WINDOW_EXPIRY_POLICY=skip` 时可能触发；
+- 扫码登录失败 / 超时——带上失败原因与等待秒数。
+
+**成功回音（active，`FLAME_NOTIFY_ON_SUCCESS=0` 可关）**
+
+- 账号批量自动续火完成——`成功 12/13 · 跳过 1（今日已发）`，有未成功项时列出好友名；
+- 好友级准点发送完成——点名给谁续上了（如固定 `02:22` 的那一条）。
+
+「结果未确认」在任何配置下都不会自动重发，推送里会明确写出这一点。手动「立即发送/强制发送」不推送——那是你本人在操作，页面上就有结果。
 
 配置：在 `backend/.env` 填入你的 Bark 设备地址（只存本机，不入库、不上传）：
 
@@ -133,7 +149,7 @@ powershell -ExecutionPolicy Bypass -File scripts\runtime\manage_runtime.ps1 -Act
 FLAME_BARK_URL=https://api.day.app/<你的device_key>
 ```
 
-未配置时通知自动跳过，调度照常运行。
+未配置时通知自动跳过，调度照常运行。通知级别只接受 `active` / `timeSensitive` / `critical` / `passive`；传入其它值会回退到 `active` 并写一条 WARNING 日志——历史上「账号发送出错」曾因误传 `errors` 被静默降级成最低优先级，现已修正。
 
 ## 可靠性机制（M6）
 
@@ -144,6 +160,7 @@ FLAME_BARK_URL=https://api.day.app/<你的device_key>
 - **窗口过期策略**：`FLAME_WINDOW_EXPIRY_POLICY=skip`（默认）——窗口已结束的计划不再深夜补发，转 skipped 并通知；`dispatch` 恢复到点即发；
 - **连续失败熔断**：`FLAME_FAILURE_STREAK_LIMIT`（默认 3）——连续 N 次终态失败自动暂停该账号调度（cooldown）并 critical 推送；
 - **常驻自恢复**：`scripts\runtime\manage_runtime.ps1 -Action Install` 安装当前用户计划任务，登录自启、失败重试、健康监测并持有系统唤醒请求；旧 `scripts/autostart` 只启动一次，不再推荐；
+- **应用日志不再被吞**：`alembic/env.py` 的 `fileConfig` 曾用默认的 `disable_existing_loggers=True`，在启动迁移时把已导入的全部 `app.*` logger 置为 disabled（通知发送失败、扫码登录失败现场、发送诊断都收不到），现改为 `False`；
 - **artifacts 保留期**：`FLAME_ARTIFACT_RETENTION_DAYS`（默认 30，0 永久）启动时自动清理过期诊断产物。
 
 ## Selector 热更新（M5）
