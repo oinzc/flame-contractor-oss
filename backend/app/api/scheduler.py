@@ -45,6 +45,8 @@ def _scheduler_read(
         running_accounts=sorted(scheduler.running_accounts),
         today_schedules=_today_schedules(session, scheduler, user_id),
         auto_scan_interval_hours=getattr(scheduler, "auto_scan_interval_hours", 24),
+        scheduled_always_send=getattr(scheduler, "scheduled_always_send", False),
+        fixed_time_grace_minutes=getattr(scheduler, "fixed_time_grace_minutes", 30),
         auto_scans=auto_scan_status() if callable(auto_scan_status) else [],
     )
 
@@ -63,8 +65,15 @@ def update_scheduler_settings(
     payload: SchedulerSettingsPatch,
     user: CurrentUser,
 ) -> SchedulerStatusRead:
+    """按需更新调度设置：只应用请求里显式给出的字段。"""
     scheduler = request.app.state.scheduler
-    scheduler.update_auto_scan_interval(payload.auto_scan_interval_hours)
+    provided = payload.model_fields_set
+    if "auto_scan_interval_hours" in provided:
+        scheduler.update_auto_scan_interval(payload.auto_scan_interval_hours)
+    if "scheduled_always_send" in provided:
+        scheduler.update_scheduled_always_send(payload.scheduled_always_send)
+    if "fixed_time_grace_minutes" in provided:
+        scheduler.update_fixed_time_grace_minutes(payload.fixed_time_grace_minutes)
     return _scheduler_read(request, session, user.id)
 
 

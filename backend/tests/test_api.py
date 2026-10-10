@@ -46,6 +46,43 @@ def test_scheduler_interval_can_be_updated_and_persisted(client):
     ).status_code == 422
 
 
+def test_scheduler_always_send_toggle_persisted(client):
+    """「到点重发」可在页面上开关并持久化；未传的字段不受影响。"""
+    initial = client.get("/api/scheduler")
+    assert initial.json()["scheduledAlwaysSend"] is False
+    assert initial.json()["fixedTimeGraceMinutes"] == 30
+
+    on = client.patch("/api/scheduler/settings", json={"scheduledAlwaysSend": True})
+    assert on.status_code == 200, on.text
+    assert on.json()["scheduledAlwaysSend"] is True
+    # 只改一个字段时，其它设置必须保持原值
+    assert on.json()["autoScanIntervalHours"] == 24
+    assert on.json()["fixedTimeGraceMinutes"] == 30
+
+    assert client.get("/api/scheduler").json()["scheduledAlwaysSend"] is True
+
+    off = client.patch("/api/scheduler/settings", json={"scheduledAlwaysSend": False})
+    assert off.json()["scheduledAlwaysSend"] is False
+
+
+def test_scheduler_fixed_time_grace_can_be_updated(client):
+    """固定时刻宽限期可调、可持久化，并在 0..1440 分钟内校验。"""
+    updated = client.patch("/api/scheduler/settings", json={"fixedTimeGraceMinutes": 5})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["fixedTimeGraceMinutes"] == 5
+    assert client.get("/api/scheduler").json()["fixedTimeGraceMinutes"] == 5
+    # 宽限期变化不能连带改动其它调度设置
+    assert updated.json()["autoScanIntervalHours"] == 24
+    assert updated.json()["scheduledAlwaysSend"] is False
+
+    assert client.patch(
+        "/api/scheduler/settings", json={"fixedTimeGraceMinutes": -1}
+    ).status_code == 422
+    assert client.patch(
+        "/api/scheduler/settings", json={"fixedTimeGraceMinutes": 1441}
+    ).status_code == 422
+
+
 def test_create_account_returns_camel_case(client):
     response = client.post(
         "/api/accounts",

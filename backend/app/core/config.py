@@ -27,6 +27,14 @@ class Settings(BaseSettings):
     artifact_retention_days: int = 30
     # 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰，默认）；dispatch=到点即发
     window_expiry_policy: str = "skip"
+    # 固定发送时刻的宽限期（分钟）。固定时刻本身被当作「窗口终点」，若不设宽限，
+    # 计划在到点那一刻就被判「窗口已结束」而永远发不出去；宽限期内仍按到点处理，
+    # 超过宽限才转 SKIPPED（保持「错过不深夜补发」的原意）。
+    fixed_time_grace_minutes: int = 30
+    # 自动调度到点是否始终发一遍：默认 False 保持「每天每个好友只发一次」；
+    # 开启后定时任务忽略当天已发送记录（含手动强制发送）再发一遍。
+    # 注意：「结果未确认」仍然绝不自动重发，这条边界不受该开关影响。
+    scheduled_always_send: bool = False
     # 成功汇总推送：自动发送完成后推送「今日续焰完成 N/M」（Bark）
     notify_on_success: bool = True
     # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断

@@ -266,6 +266,35 @@ def test_send_unconfirmed_outcome_blocks_retry(settings):
             assert job.status == JobStatus.UNKNOWN_REQUIRES_REVIEW
 
 
+def test_scheduled_slot_ignores_same_day_manual_force(settings):
+    """调度器传入的「按业务日固定」槽位：当天手动强制发过，定时到点仍再发一遍。
+
+    scheduled_always_send 的实现基础：槽位后缀固定为 sched<业务日>，与手动强制的
+    随机 :force: 槽位互不冲突，因此同一天两条都成立；重试复用同一槽位不会多发。
+    """
+    import asyncio
+
+    app = make_app(settings, [_page_for_send(), _page_for_send()])
+    with TestClient(app) as client:
+        account = _account_with_targets(client)
+        manager = app.state.browser_manager
+
+        forced = asyncio.run(manager.run_send(account["id"], force=True))
+        assert forced["overall"] == "ok", forced
+        with Session(app.state.engine) as session:
+            jobs = session.exec(select(SendJob)).all()
+        assert len(jobs) == 1
+        assert ":force:" in jobs[0].message_slot_id
+
+        resend = asyncio.run(manager.run_send(account["id"], force_run_id="sched20260827"))
+        assert resend["results"][0]["status"] == "succeeded", resend
+
+        with Session(app.state.engine) as session:
+            slots = {job.message_slot_id for job in session.exec(select(SendJob)).all()}
+        assert len(slots) == 2
+        assert any(slot.endswith(":force:sched20260827") for slot in slots)
+
+
 def test_force_send_still_blocks_unconfirmed_outcome(settings):
     """强制模式也不能绕过当天未人工核对的未知结果。"""
     app = make_app(

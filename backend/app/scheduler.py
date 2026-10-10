@@ -64,9 +64,22 @@ NETWORK_DEFERRAL_BACKOFF = 60.0
 NETWORK_MAX_DEFERRALS = 5
 # 窗口过期策略：skip=窗口已结束不再派发（防深夜打扰）；dispatch=到点即发（旧行为）
 WINDOW_EXPIRY_POLICY_DEFAULT = "skip"
+# 到点判定容差（秒）。事件循环的定时器可能比目标时刻早若干毫秒返回，若固定时刻正好
+# 落在整分边界上，「到点那一刻」会被判成「还没到点」，整轮推迟整整一分钟才发。
+# 留 1 秒容差：整分到期的计划即使提前几毫秒醒来也照发，最坏只是早发不到 1 秒。
+DUE_TOLERANCE_SECONDS = 1.0
+# 节拍对齐的余量（秒）：醒来时刻取「边界 + 余量」，确保真的跨过边界。
+TICK_ALIGN_MARGIN_SECONDS = 0.02
+# 固定发送时刻的宽限期（分钟）：固定时刻即窗口终点，没有宽限期就会在到点那一刻
+# 被判「已过期」，导致固定时刻账号在 skip 策略下永远发不出去。
+FIXED_TIME_GRACE_MINUTES_DEFAULT = 30
+FIXED_TIME_GRACE_MINUTES_MIN = 0
+FIXED_TIME_GRACE_MINUTES_MAX = 24 * 60
 # 全局自动调度暂停状态的持久化键；值为 "1" 表示暂停，"0" 表示运行。
 SCHEDULER_PAUSED_SETTING_KEY = "scheduler.paused"
 SCHEDULER_AUTO_SCAN_INTERVAL_SETTING_KEY = "scheduler.auto_scan_interval_hours"
+SCHEDULER_ALWAYS_SEND_SETTING_KEY = "scheduler.scheduled_always_send"
+SCHEDULER_FIXED_GRACE_SETTING_KEY = "scheduler.fixed_time_grace_minutes"
 
 # 可继续调度/重排的状态
 _RECOVERABLE = {ScheduleStatus.PENDING, ScheduleStatus.FAILED}
@@ -102,6 +115,8 @@ class Scheduler:
         window_expiry_policy: str = WINDOW_EXPIRY_POLICY_DEFAULT,
         notify_on_success: bool = True,
         failure_streak_limit: int = 3,
+        scheduled_always_send: bool = False,
+        fixed_time_grace_minutes: int = FIXED_TIME_GRACE_MINUTES_DEFAULT,
         rng: random.Random | None = None,
         sleep=asyncio.sleep,
         clock: Callable[[], datetime] | None = None,
@@ -128,9 +143,12 @@ class Scheduler:
         self._window_expiry_policy = window_expiry_policy
         self._notify_on_success = notify_on_success
         self._failure_streak_limit = failure_streak_limit
+        self._scheduled_always_send = scheduled_always_send
+        self._fixed_time_grace_minutes = max(0, int(fixed_time_grace_minutes))
         self._rng = rng or random.Random()
         self._sleep = sleep
         self._clock = clock or utc_now
+        self._due_tolerance = timedelta(seconds=DUE_TOLERANCE_SECONDS)
         self._running: set[str] = set()  # 当前正在发送的 account_id（进程内防并发的第二道闸）
         self._paused = False
         self._task: asyncio.Task | None = None
@@ -167,8 +185,16 @@ class Scheduler:
     def auto_scan_running_accounts(self) -> set[str]:
         return set(self._auto_scan_running)
 
+    @property
+    def scheduled_always_send(self) -> bool:
+        return self._scheduled_always_send
+
+    @property
+    def fixed_time_grace_minutes(self) -> int:
+        return self._fixed_time_grace_minutes
+
     def load_persisted_state(self) -> None:
-        """从数据库恢复全局调度开关和会话同步周期。"""
+        """从数据库恢复全局调度开关、会话同步周期与「到点重发」开关。"""
         with Session(self._engine) as session:
             paused_setting = session.get(AppSetting, SCHEDULER_PAUSED_SETTING_KEY)
             self._paused = paused_setting is not None and paused_setting.value == "1"
@@ -188,6 +214,27 @@ class Scheduler:
                     <= AUTO_SCAN_INTERVAL_MAX_HOURS
                 ):
                     self._auto_scan_interval_hours = persisted_interval
+            always_send_setting = session.get(
+                AppSetting,
+                SCHEDULER_ALWAYS_SEND_SETTING_KEY,
+            )
+            if always_send_setting is not None:
+                self._scheduled_always_send = always_send_setting.value == "1"
+            grace_setting = session.get(
+                AppSetting,
+                SCHEDULER_FIXED_GRACE_SETTING_KEY,
+            )
+            if grace_setting is not None:
+                try:
+                    persisted_grace = int(grace_setting.value)
+                except (TypeError, ValueError):
+                    persisted_grace = None
+                if persisted_grace is not None and (
+                    FIXED_TIME_GRACE_MINUTES_MIN
+                    <= persisted_grace
+                    <= FIXED_TIME_GRACE_MINUTES_MAX
+                ):
+                    self._fixed_time_grace_minutes = persisted_grace
 
     def _persist_paused(self, paused: bool) -> None:
         with Session(self._engine) as session:
@@ -231,6 +278,49 @@ class Scheduler:
         self._auto_scan_interval_hours = hours
         # 互斥冲突的短暂退避属于旧周期，设置变更后让数据库扫描时间重新决定下一次触发。
         self._auto_scan_next_attempt_at.clear()
+
+    def _persist_scheduled_always_send(self, enabled: bool) -> None:
+        with Session(self._engine) as session:
+            setting = session.get(AppSetting, SCHEDULER_ALWAYS_SEND_SETTING_KEY)
+            if setting is None:
+                setting = AppSetting(
+                    key=SCHEDULER_ALWAYS_SEND_SETTING_KEY,
+                    value="1" if enabled else "0",
+                )
+            else:
+                setting.value = "1" if enabled else "0"
+                setting.updated_at = utc_now()
+            session.add(setting)
+            session.commit()
+
+    def update_scheduled_always_send(self, enabled: bool) -> None:
+        """持久化「到点重发」开关；下一次 tick 即按新值派发。"""
+        # 先写库再切换内存值，避免持久化失败时运行态与重启后的配置不一致。
+        self._persist_scheduled_always_send(enabled)
+        self._scheduled_always_send = bool(enabled)
+
+    def update_fixed_time_grace_minutes(self, minutes: int) -> None:
+        """持久化固定时刻宽限期（分钟）；下一次 tick 即按新值判断「是否已错过」。"""
+        if isinstance(minutes, bool) or not (
+            FIXED_TIME_GRACE_MINUTES_MIN <= minutes <= FIXED_TIME_GRACE_MINUTES_MAX
+        ):
+            raise ValueError(
+                f"固定时刻宽限期必须在 {FIXED_TIME_GRACE_MINUTES_MIN} 到 "
+                f"{FIXED_TIME_GRACE_MINUTES_MAX} 分钟之间"
+            )
+        with Session(self._engine) as session:
+            setting = session.get(AppSetting, SCHEDULER_FIXED_GRACE_SETTING_KEY)
+            if setting is None:
+                setting = AppSetting(
+                    key=SCHEDULER_FIXED_GRACE_SETTING_KEY,
+                    value=str(minutes),
+                )
+            else:
+                setting.value = str(minutes)
+                setting.updated_at = utc_now()
+            session.add(setting)
+            session.commit()
+        self._fixed_time_grace_minutes = int(minutes)
 
     def pause(self) -> None:
         self._paused = True
@@ -329,7 +419,7 @@ class Scheduler:
     # ---------------------------------------------------------------- 派发
 
     async def tick(self, now: datetime | None = None) -> dict:
-        """一轮调度：恢复游离计划 → 生成当日 → 到点抢租约并触发发送。"""
+        """一轮调度：恢复游离计划 → 生成当日 → 好友级准点先发 → 账号批量 → 自动扫描。"""
         now = self._utc_naive(now or self._clock())
         if self._paused:
             return {"dispatched": 0}
@@ -341,6 +431,13 @@ class Scheduler:
                 "timeSensitive",
             )
         self.generate_due_schedules(now)
+
+        # 好友级精确时刻先派发，并等它跑完再发账号批量：设了独立时刻的好友（例如「要准点
+        # 最先发」的那一个）在整点第一个真正发出，其余好友紧接着在同一分钟内开跑；否则
+        # 账号批量会先抢走同一个浏览器，把准点好友挤到下一轮（60 秒后）。
+        pending_targets = await self._dispatch_due_targets(now)
+        if pending_targets:
+            await asyncio.gather(*pending_targets, return_exceptions=True)
 
         # 到点且可派发的计划（pending + failed 重试）
         with Session(self._engine) as session:
@@ -362,7 +459,7 @@ class Scheduler:
             if next_at is not None and now < next_at:
                 continue  # 退避窗口内，未到下次尝试时间
             scheduled_at = self._utc_naive(schedule.scheduled_at)
-            if scheduled_at is None or scheduled_at > now:
+            if scheduled_at is None or scheduled_at - now > self._due_tolerance:
                 continue
             if not self._try_lease(schedule.id, now):
                 continue  # 已被另一 worker 抢走或正在跑
@@ -386,9 +483,7 @@ class Scheduler:
                 continue
             dispatched += 1
             self._spawn_send(schedule.id, schedule.account_id)
-        # 好友级精确时刻派发（各自到点单独发），同样遵守同账号并发=1
-        await self._dispatch_due_targets(now)
-        # 发送计划先派发，自动扫描随后检查账号租约，避免二者同时抢同一浏览器。
+        # 自动扫描最后检查账号租约，避免与发送同时抢同一浏览器。
         self._dispatch_auto_scans(now)
         return {"dispatched": dispatched}
 
@@ -399,8 +494,12 @@ class Scheduler:
     def _window_expired(self, account: Account) -> bool:
         """当前账号本地时间是否已过发送窗口终点。
 
-        账号设置固定发送时刻时，该时刻本身即为「窗口终点」：一旦已过且仍未派发，
+        账号设置固定发送时刻时，该时刻本身即为「窗口终点」：过了宽限期仍未派发，
         今天这个固定槽位即视为错过，不深夜补发（与窗口随机语义一致的 skip 策略）。
+
+        宽限期是必需的：`>=` 会让计划在到点那一刻就被判「窗口已结束」，于是固定时刻
+        账号在 skip 策略下永远发不出去（发送器从不被调用）。宽限期内仍按到点处理，
+        同时保留「错过就不补发」的原意——不会因为机器凌晨没开就在白天补发。
         """
         tz = ZoneInfo(account.timezone)
         local_now = self._clock().astimezone(tz)
@@ -408,7 +507,7 @@ class Scheduler:
             fixed = datetime.combine(
                 local_now.date(), self._parse_hhmm(account.send_time_hhmm), tzinfo=tz
             )
-            return local_now >= fixed
+            return local_now >= fixed + timedelta(minutes=self._fixed_time_grace_minutes)
         _, end_dt = self._window_for(account)
         return local_now >= end_dt
 
@@ -518,14 +617,17 @@ class Scheduler:
         # 若该时刻在今天稍后（尚未到），则仍是「今天」的计划；已过去则视为已过
         return target.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
-    async def _dispatch_due_targets(self, now: datetime) -> None:
+    async def _dispatch_due_targets(self, now: datetime) -> list[asyncio.Task]:
         """好友级精确发送时刻到点派发：各自到点单独发，遵守同账号并发=1与每日幂等。
 
         只处理启用 + 非软删 + 设置独立 send_time_hhmm 的好友，且账号 healthy。
         到点后走 send_targets 执行器（内部复用 run_send 的 SendJob 幂等，绝不重复发送）。
+
+        返回已派发的任务，供 tick 等在同一个节拍内跑完再派发账号批量。
         """
+        spawned: list[asyncio.Task] = []
         if self._send_targets is None:
-            return
+            return spawned
         with Session(self._engine) as session:
             rows = session.exec(
                 select(ContractTarget, Account)
@@ -545,37 +647,57 @@ class Scheduler:
             if not account.enabled or account.status != AccountStatus.HEALTHY:
                 continue
             due_at = self._target_time_aware(account, target.send_time_hhmm, now)
-            if due_at is None or due_at > now:
+            if due_at is None or due_at - now > self._due_tolerance:
                 continue
-            # 每日幂等：已有发送结果（成功/复核中）的不重发（与账号批量逻辑一致）
-            if self._target_done_today(account=account, target=target):
+            resend_slot = (
+                f"sched{self._clock().astimezone(ZoneInfo(account.timezone)).date():%Y%m%d}"
+                if self._scheduled_always_send
+                else None
+            )
+            # 幂等：本轮槽位已有发送记录的不重发（与账号批量逻辑一致）
+            if self._target_done_today(account=account, target=target, resend_slot=resend_slot):
                 continue
             self._running.add(account.id)
             task = asyncio.create_task(
-                self._run_target_send(account.id, [target.id])
+                self._run_target_send(account.id, [target.id], force_run_id=resend_slot)
             )
             self._send_tasks.add(task)
             task.add_done_callback(self._send_tasks.discard)
+            spawned.append(task)
+        return spawned
 
-    def _target_done_today(self, *, account, target) -> bool:
-        """该好友今天是否已有发送结果（成功/复核中）——有则不重复派发。"""
+    def _target_done_today(self, *, account, target, resend_slot: str | None = None) -> bool:
+        """该好友今天是否已按本轮槽位发送过——发过则不重复派发。
+
+        默认任何当日发送记录都算已发（每天一次）。开启 scheduled_always_send 时只认
+        「按业务日固定」的槽位：当天手动或账号批量发过也照样派发，即用户要的
+        「到点就发一遍，不管有没有发过」；重试复用同一槽位，因此不会重复发送。
+        """
         with Session(self._engine) as session:
             business_date = self._clock().astimezone(ZoneInfo(account.timezone)).date()
-            job = session.exec(
-                select(SendJob).where(
-                    SendJob.account_id == account.id,
-                    SendJob.target_id == target.id,
-                    SendJob.business_date == business_date,
+            statement = select(SendJob).where(
+                SendJob.account_id == account.id,
+                SendJob.target_id == target.id,
+                SendJob.business_date == business_date,
+            )
+            if resend_slot is not None:
+                statement = statement.where(
+                    SendJob.message_slot_id.like(f"%:force:{resend_slot}")
                 )
-            ).first()
+            job = session.exec(statement).first()
             return job is not None
 
-    async def _run_target_send(self, account_id: str, target_ids: list[str]) -> None:
+    async def _run_target_send(
+        self, account_id: str, target_ids: list[str], *, force_run_id: str | None = None
+    ) -> None:
         try:
             if self._send_targets is None:
                 raise RuntimeError("未配置单好友发送执行器")
             await asyncio.wait_for(
-                self._send_targets(account_id, target_ids), timeout=self._run_timeout
+                self._call_send_targets(
+                    account_id, target_ids, force_run_id=force_run_id
+                ),
+                timeout=self._run_timeout,
             )
         except asyncio.CancelledError:
             raise
@@ -589,13 +711,35 @@ class Scheduler:
         finally:
             self._running.discard(account_id)
 
-    def _call_send_account(self, account_id: str, *, exclude_scheduled: bool) -> Awaitable[dict]:
+    def _call_send_targets(
+        self, account_id: str, target_ids: list[str], *, force_run_id: str | None = None
+    ) -> Awaitable[dict]:
+        """调用单好友发送执行器，兼容旧签名（send_targets(account_id, ids)）。"""
+        if self._send_targets is None:
+            raise RuntimeError("未配置单好友发送执行器")
+        kwargs: dict = {}
+        if force_run_id is not None:
+            kwargs["force_run_id"] = force_run_id
+        try:
+            result = self._send_targets(account_id, target_ids, **kwargs)
+        except TypeError:
+            result = self._send_targets(account_id, target_ids)
+        if asyncio.iscoroutine(result):
+            return result
+        return asyncio.ensure_future(result)  # type: ignore[return-value]
+
+    def _call_send_account(
+        self, account_id: str, *, exclude_scheduled: bool, force_run_id: str | None = None
+    ) -> Awaitable[dict]:
         """调用发送执行器，兼容旧签名（send_account(account_id)）与新签名（支持 exclude_scheduled）。"""
         if self._send_account is None:
             raise RuntimeError("未配置发送执行器")
+        kwargs: dict = {"exclude_scheduled": exclude_scheduled}
+        if force_run_id is not None:
+            kwargs["force_run_id"] = force_run_id
         try:
             # 新签名：browser_manager.run_send(account_id, exclude_scheduled=True)
-            result = self._send_account(account_id, exclude_scheduled=exclude_scheduled)
+            result = self._send_account(account_id, **kwargs)
         except TypeError:
             # 旧签名：send_account(account_id)（测试替身等），忽略该参数
             result = self._send_account(account_id)
@@ -611,21 +755,32 @@ class Scheduler:
 
     async def _run_send(self, schedule_id: str, account_id: str) -> None:
         try:
+            business_date: date | None = None
             with Session(self._engine) as session:
                 row = session.get(SendSchedule, schedule_id)
                 if row is not None:
                     row.status = ScheduleStatus.SENDING
                     row.started_at = utc_now()
                     row.updated_at = utc_now()
+                    business_date = row.business_date
                     session.add(row)
                     session.commit()
 
             if self._send_account is None:
                 raise RuntimeError("未配置发送执行器")
 
+            # 开启 scheduled_always_send 时用「按业务日固定」的独立槽位发送：同一天
+            # 手动/自动发过也照发，而重试复用同一槽位，已成功的好友不会因重试重复发送。
+            resend_slot = (
+                f"sched{business_date:%Y%m%d}"
+                if self._scheduled_always_send and business_date is not None
+                else None
+            )
             # 自动账号级批量只发「未设置独立精确时刻」的好友；独立时刻好友由 _dispatch_due_targets 单独派发。
             result = await asyncio.wait_for(
-                self._call_send_account(account_id, exclude_scheduled=True),
+                self._call_send_account(
+                    account_id, exclude_scheduled=True, force_run_id=resend_slot
+                ),
                 timeout=self._run_timeout,
             )
             await self._handle_result(schedule_id, account_id, result)
@@ -1025,10 +1180,23 @@ class Scheduler:
             except Exception:
                 # 调度循环自身绝不允许因单轮异常退出
                 pass
-            interval = self._loop_interval
-            if interval <= 0:
-                interval = 60.0
-            await self._sleep(interval)
+            await self._sleep(self._seconds_until_next_tick())
+
+    def _seconds_until_next_tick(self) -> float:
+        """距下一个节拍边界的秒数（醒来落在「边界 + 余量」）。
+
+        默认 60 秒节拍对齐到整分边界。否则「固定 02:22」会被进程启动相位带着漂移
+        （例如容器 13:17:25 启动 → 每轮 tick 都在 :25 触发），可能整分错过了用户
+        要求的准点窗口；对齐后固定时刻在 :00 触发。
+
+        余量是必需的：事件循环的定时器可能比目标时刻早几毫秒返回，正好落在整分边界
+        之前时，「到点那一刻」会被判成「还没到点」，把整轮推迟到下一分钟。
+        """
+        interval = self._loop_interval
+        if interval <= 0:
+            interval = 60.0
+        remainder = self._clock().timestamp() % interval
+        return max(interval - remainder, 0.0) + TICK_ALIGN_MARGIN_SECONDS
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():

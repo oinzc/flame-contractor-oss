@@ -100,6 +100,8 @@ def create_app(
                 window_expiry_policy=settings.window_expiry_policy,
                 notify_on_success=settings.notify_on_success,
                 failure_streak_limit=settings.failure_streak_limit,
+                scheduled_always_send=settings.scheduled_always_send,
+                fixed_time_grace_minutes=settings.fixed_time_grace_minutes,
             )
             sched.start()
         else:
