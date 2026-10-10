@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # （页面加载慢、临时验证页、网络波动）不该锁死账号——调度器会跳过非 HEALTHY
     # 账号的扫描与发送，一次误判就会让账号停摆且只能人工重新扫码恢复。
     auth_check_tolerance: int = 2
+    # 登录判定预算（秒）：页面打开后等会话列表出现的时长。判定成功立即返回，放宽只
+    # 影响「确实没登录」时的确认耗时。默认 20 秒（原 8 秒偏紧，冷启动已接近上限）。
+    login_check_timeout: float = 20.0
     # 会话官方火花状态自动同步间隔（小时）；官方页面只提供天级状态，默认每日同步一次
     auto_scan_interval_hours: int = Field(
         default=24,

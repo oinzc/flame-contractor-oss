@@ -10,6 +10,8 @@ HEALTHY，下一次判定即可自愈。overall 的取值保持不变（前端�
 未确认与否写在 detail 里，并由调度器结合账号状态决定是否提醒用户重新扫码。
 """
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
@@ -132,3 +134,79 @@ def test_tolerance_is_configurable(engine, settings):
 
     with Session(engine) as session:
         assert session.get(Account, account.id).status == AccountStatus.AUTH_EXPIRED
+
+
+# ------------------------------------------------- 页面未加载 ≠ 登录失效（#2 归类）
+
+
+def test_load_failure_page_is_not_reported_as_logout(settings):
+    """Chromium 错误页导致「找不到会话列表」时，应归类为网络问题而非登录失效。
+
+    否则一次网络抖动会以「请重新扫码」的面目出现（并把账号标成失效、停掉调度），
+    而用户照着去扫码也解决不了问题。
+    """
+    page = FakePage(logged_in=False)
+    page.url = "chrome-error://chromewebdata/"  # 完全没加载出抖音页面
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        _set_status(app, account["id"], AccountStatus.HEALTHY)
+
+        result = _scan(client, account["id"])
+
+        assert result["overall"] == "error"  # 不是 auth_expired
+        assert "网络" in result["detail"]
+        assert _status(app, account["id"]) == AccountStatus.HEALTHY
+
+        # 关键：这次失败不该计入「连续判定失败」——否则网络抖动会累积成一次假失效
+        manager: BrowserManager = app.state.browser_manager
+        assert manager._auth_check_failures.get(account["id"]) is None
+
+
+def test_douyin_page_without_session_still_counts_as_auth_failure(settings):
+    """反面：页面确实在抖音域内、只是没有会话列表 → 仍按登录判定失败处理。
+
+    不能为了躲网络误报而把真失效也放过：那样账号永远不被标记、静默失败。
+    """
+    page = FakePage(logged_in=False)
+    page.url = "https://www.douyin.com/chat"
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        _set_status(app, account["id"], AccountStatus.HEALTHY)
+
+        result = _scan(client, account["id"])
+
+        assert result["overall"] == "auth_expired"
+        manager: BrowserManager = app.state.browser_manager
+        assert manager._auth_check_failures.get(account["id"]) == 1
+
+
+def test_login_failure_captures_diagnostic_screenshot(settings):
+    """判定失败要留现场（截图 + 页面 URL）：没有它只能猜是「慢」「验证页」还是真登出。"""
+    page = FakePage(logged_in=False)
+    page.url = "https://www.douyin.com/chat"
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = create_account(client)
+        _set_status(app, account["id"], AccountStatus.HEALTHY)
+
+        _scan(client, account["id"])
+
+        shots = [path for path in page.screenshots if path]
+        assert shots, "登录判定失败必须截图留证"
+        assert "auth_check_failed" in shots[-1]
+        assert Path(shots[-1]).exists()
+
+        manager: BrowserManager = app.state.browser_manager
+        evidence = manager._auth_evidence.get(account["id"])
+        assert evidence is not None
+        assert evidence["page_url"] == "https://www.douyin.com/chat"
+        assert evidence["screenshot"] == shots[-1]
+
+
+def test_login_check_timeout_is_configurable(engine, settings):
+    """判定预算可配：慢网络下用户可自行放宽，不必等发版。"""
+    manager = BrowserManager(engine, settings, login_check_timeout=45.0)
+    assert manager._login_check_timeout == 45.0
+    assert BrowserManager(engine, settings)._login_check_timeout >= 20.0
