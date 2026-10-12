@@ -232,7 +232,7 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 ### 待办
 
 - [x] 完成 M11 真实扫描样本验收（2026-10-12）：手动完整扫描 `overall=ok`，五类分组为 `changed/no_spark/not_observed` 全 0、`unchanged` 13（与本地活跃对象数一致）、`new` 31。用户确认**全部不导入**新会话；本次无「无火花」项，故不涉及确认删除。新会话导入与无火花删除仍只允许由用户明确操作。
-- [ ] 验收后将纯代码提交 cherry-pick 到 `main`，不合并数据分支，不携带 `data/` 或 `backend/.env`。
+- [x] 验收后将纯代码提交 cherry-pick 到 `main`（2026-10-12 完成）：从 `b70fdc7..HEAD`（34 条）在隔离工作区 cherry-pick，冲突取数据分支侧；结果与数据分支**逐文件一致**，仅排除 `data/` 与 `backend/.env`，`PROJECT_STATUS.md` / `task_plan.md` 已移除。`main` 以 fast-forward 推送（`4ffd3a9..8d0dc4a`）。注：本工作区切分支会删除 `data/`，后续同类归并须用 `git worktree` 在隔离目录操作。
 - [ ] 完成长期稳定性验收：**进程重启恢复已验收（2026-10-12）** —— `docker compose restart app` 后服务 5 秒内恢复（`/health` ok/ready），调度设置（paused/周期/重发/宽限）与账号状态完整保留，首轮自动同步在重启后按周期自动执行（18:19:59 派发、18:20:08 完成，`overall=ok`），全程日志无错误。注意**重启不会重置自动扫描节奏**：判据是「距上次扫描满 `interval`」（`scheduler.py:1190-1194`），启动时的 60 秒只是闸门值，不是「启动后必扫一次」。**尚待**：锁屏跨夜 / 无人值守多日的持续观察。
 - [ ] 维护项（遗留，2026-10-12 已定位到行）：
   - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）；
