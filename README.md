@@ -214,7 +214,7 @@ npm run typecheck                          # TypeScript 严格检查
 npm run build                              # 生产构建
 ```
 
-- 最近一次记录的后端 pytest 为 **210 项全部通过**（2026-10-09）（含平台账号、生产前端托管、扫描熄火判定、扫描五类对账与历史用户隔离，以及既有发送/扫描安全回归）；
+- 最近一次记录的后端 pytest 为 **258 项全部通过**（2026-10-12，本地 `.venv`，全量耗时约 16 分钟）（含平台账号、生产前端托管、扫描熄火判定、扫描五类对账与历史用户隔离，以及既有发送/扫描安全回归）；
 - 已完成自动调度真机验证：到期计划 → 调度派发 → 真实发送 → `SendSchedule.succeeded` + `SendJob.succeeded`；再次 tick 不重复派发。
 
 ## 当前进度与待办
@@ -234,7 +234,9 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 - [ ] 完成 M11 真实扫描样本验收；新会话导入、无火花删除仍须由用户明确操作。
 - [ ] 验收后将纯代码提交 cherry-pick 到 `main`，不合并数据分支，不携带 `data/` 或 `backend/.env`。
 - [ ] 完成长期稳定性验收（锁屏跨夜 / 无人值守多日）：确认容器 `restart=unless-stopped` 与调度在进程重启后仍按预期恢复。
-- [ ] 维护项（遗留）：后端测试仍有 TestClient/httpx 弃用警告，以及模板删除时 `template_pool_item` 删除行数不匹配的 SQLAlchemy 警告，尚未处理。
+- [ ] 维护项（遗留，2026-10-12 已定位到行）：
+  - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）；
+  - `SAWarning`：删除模板时 `template_pool_item` 预期删除 1 行、实际匹配 0 行（`backend/app/services.py:452` 的 `session.commit()`，由 `tests/test_api.py::test_delete_template` 触发）。成因是 `delete_template` 显式删除池项与 `models.py:200` 的 DB 级 `ondelete="CASCADE"` 叠加；候选修法：改为批量 `delete()`，或按告警建议设 `confirm_deleted_rows=False`。
 
 ### 背景与决策记录（历史）
 
