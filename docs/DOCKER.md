@@ -66,7 +66,7 @@ docker compose cp app:/tmp/flame-backup.db ./flame-backup.db
 
 - 容器 `flame-contractor-app-1`（镜像 `flame-contractor:local`，构建于 2026-10-11 02:05）在 Docker Engine 29.7.2 上 **healthy** 连续运行约 39 小时，`RestartCount=0`，`restart=unless-stopped`，映射 `127.0.0.1:8000->8000`。
 - **镜像内容与仓库 HEAD `b1a2ee3` 一致**：后端 `config.py` / `browser_manager.py` / `send_confirmer.py` 与前端 `dist` 均经哈希比对一致，含最新登录判定修复（`auth_check_tolerance=2`、`login_check_timeout=20.0`、chrome-error 归为网络问题）与「定时到点重发 / 固定时刻宽限」UI。
-- **重新登录已完成**：账号「示例账号」为 `HEALTHY / 已启用`（最近校验 2026-10-12 08:18，最近成功发送 2026-10-11 18:23，`failure_streak=0`），迁移时的「待登录」状态已解除，不再需要再次扫码。
+- **重新登录已完成**：账号「示例账号」为 `HEALTHY / 已启用`（库内按 UTC 存储，换算后最近校验 2026-10-12 16:18、最近成功发送 2026-10-12 02:23，`failure_streak=0`），迁移时的「待登录」状态已解除，不再需要再次扫码。
 - 容器内数据库 1 账号 / 16 好友 / 2 模板 / 169 发送任务；`scheduler.paused=0`（已开启），自动同步周期 1 小时，「定时到点重发」开、「固定时刻宽限」30 分钟。
 
 原生 Windows 服务不要与容器同时运行（会抢 8000 端口）。计划任务「Flame Contractor Runtime」已停用，需要恢复原生常驻时用 `Enable-ScheduledTask -TaskName "Flame Contractor Runtime"`。

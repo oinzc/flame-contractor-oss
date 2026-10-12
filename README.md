@@ -225,7 +225,7 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 
 - **部署形态＝本机 Docker**（Windows Docker Desktop，Docker Engine 29.7.2）：容器 `flame-contractor-app-1`，镜像 `flame-contractor:local`，映射 `127.0.0.1:8000->8000`，`restart=unless-stopped`，健康检查 **healthy**（`FailingStreak=0`、`RestartCount=0`），已连续运行约 39 小时；访问 <http://127.0.0.1:8000/>。
 - **容器代码与当前 HEAD 一致**：镜像内后端关键文件（`config.py` / `browser_manager.py` / `send_confirmer.py`）与前端 `dist` 产物经哈希比对，与工作区 HEAD `b1a2ee3` 字节一致（前端含「定时到点重发」「固定时刻宽限」UI），不存在「静态代码有、容器没跑」的偏差。镜像构建于 2026-10-11 02:05（北京时间）。
-- **容器内数据库**（`flame-contractor_data` 卷，迁移 `f8a9b0c1d2e3`）：1 个平台管理员；1 个账号「示例账号」状态 **HEALTHY / 已启用**（最近校验 2026-10-12 08:18，最近成功发送 2026-10-11 18:23，`failure_streak=0`，`send_time_hhmm=02:22`，窗口 `20:00–22:00`）；16 个好友、2 个模板、169 条发送任务、14 个计划。
+- **容器内数据库**（`flame-contractor_data` 卷，迁移 `f8a9b0c1d2e3`；库内时间戳按 UTC 存储，下为换算后的北京时间）：1 个平台管理员；1 个账号「示例账号」状态 **HEALTHY / 已启用**（最近校验 2026-10-12 16:18，最近成功发送 2026-10-12 02:23，`failure_streak=0`，`send_time_hhmm=02:22`，窗口 `20:00–22:00`）；16 个好友、2 个模板、169 条发送任务、14 个计划。当日（2026-10-12）自动发送已完成，13 个对象全部 `SUCCEEDED`。
 - **调度状态**：`scheduler.paused=0`（调度已开启）；自动同步周期 **1 小时**；「定时到点重发」**开**；「固定时刻宽限」**30 分钟**。容器迁移时的「待登录」状态已解除——已用「截图扫码」重新登录并恢复调度。
 - **Git**：分支 `migration-data-20260904`，HEAD `b1a2ee3`（2026-10-11 02:06）；领先 `origin/main` **30 个提交**，同时 `origin/main` 有 **1 个提交**本地没有（分叉，均未 push）。工作区仅 `data/` 运行数据变更，无代码改动。
 
