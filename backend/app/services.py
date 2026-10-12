@@ -444,10 +444,13 @@ def delete_template(session: Session, template_id: str, user_id: str) -> None:
             detail=f"模板仍被 {target_refs} 个好友绑定、{job_refs} 条发送任务引用，不能删除；可改为停用",
         )
 
-    for item in session.exec(
-        select(TemplatePoolItem).where(TemplatePoolItem.template_id == template_id)
-    ).all():
-        session.delete(item)
+    # 池项用批量 DELETE，不走 ORM 逐行删除：SQLAlchemy 会先删父表 message_template，
+    # DB 级 ondelete="CASCADE" 已把池项带走，随后 ORM 排队的子表 DELETE 匹配 0 行，
+    # 触发 SAWarning（expected to delete 1 row(s); 0 were matched）。批量 DELETE 立即
+    # 在连接上执行，不进入身份映射，因此不存在这种「预期删除行数」的比对。
+    session.exec(
+        delete(TemplatePoolItem).where(TemplatePoolItem.template_id == template_id)
+    )
     session.delete(template)
     session.commit()
 
