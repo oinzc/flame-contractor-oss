@@ -223,7 +223,7 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 
 ### 2026-10-12 运行快照（实测）
 
-- **部署形态＝本机 Docker**（Windows Docker Desktop，Docker Engine 29.7.2）：容器 `flame-contractor-app-1`，镜像 `flame-contractor:local`，映射 `127.0.0.1:8000->8000`，`restart=unless-stopped`，健康检查 **healthy**（`FailingStreak=0`、`RestartCount=0`），已连续运行约 39 小时；访问 <http://127.0.0.1:8000/>。
+- **部署形态＝本机 Docker**（Windows Docker Desktop，Docker Engine 29.7.2）：容器 `flame-contractor-app-1`，镜像 `flame-contractor:local`，映射 `127.0.0.1:8000->8000`，`restart=unless-stopped`，健康检查 **healthy**（`FailingStreak=0`、`RestartCount=0`）；本次快照时已连续运行约 39 小时，同日 17:41（北京）因恢复演练重启过一次，服务 5 秒内恢复；访问 <http://127.0.0.1:8000/>。
 - **容器代码与当前 HEAD 一致**：镜像内后端关键文件（`config.py` / `browser_manager.py` / `send_confirmer.py`）与前端 `dist` 产物经哈希比对，与工作区 HEAD `b1a2ee3` 字节一致（前端含「定时到点重发」「固定时刻宽限」UI），不存在「静态代码有、容器没跑」的偏差。镜像构建于 2026-10-11 02:05（北京时间）。
 - **容器内数据库**（`flame-contractor_data` 卷，迁移 `f8a9b0c1d2e3`；库内时间戳按 UTC 存储，下为换算后的北京时间）：1 个平台管理员；1 个账号「示例账号」状态 **HEALTHY / 已启用**（最近校验 2026-10-12 16:18，最近成功发送 2026-10-12 02:23，`failure_streak=0`，`send_time_hhmm=02:22`，窗口 `20:00–22:00`）；16 个好友、2 个模板、169 条发送任务、14 个计划。当日（2026-10-12）自动发送已完成，13 个对象全部 `SUCCEEDED`。
 - **调度状态**：`scheduler.paused=0`（调度已开启）；自动同步周期 **1 小时**；「定时到点重发」**开**；「固定时刻宽限」**30 分钟**。容器迁移时的「待登录」状态已解除——已用「截图扫码」重新登录并恢复调度。
@@ -233,7 +233,7 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 
 - [ ] 完成 M11 真实扫描样本验收；新会话导入、无火花删除仍须由用户明确操作。
 - [ ] 验收后将纯代码提交 cherry-pick 到 `main`，不合并数据分支，不携带 `data/` 或 `backend/.env`。
-- [ ] 完成长期稳定性验收（锁屏跨夜 / 无人值守多日）：确认容器 `restart=unless-stopped` 与调度在进程重启后仍按预期恢复。
+- [ ] 完成长期稳定性验收：**进程重启恢复已验收（2026-10-12）** —— `docker compose restart app` 后服务 5 秒内恢复（`/health` ok/ready），调度设置（paused/周期/重发/宽限）与账号状态完整保留，首轮自动同步在重启后按周期自动执行（18:19:59 派发、18:20:08 完成，`overall=ok`），全程日志无错误。注意**重启不会重置自动扫描节奏**：判据是「距上次扫描满 `interval`」（`scheduler.py:1190-1194`），启动时的 60 秒只是闸门值，不是「启动后必扫一次」。**尚待**：锁屏跨夜 / 无人值守多日的持续观察。
 - [ ] 维护项（遗留，2026-10-12 已定位到行）：
   - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）；
   - `SAWarning`：删除模板时 `template_pool_item` 预期删除 1 行、实际匹配 0 行（`backend/app/services.py:452` 的 `session.commit()`，由 `tests/test_api.py::test_delete_template` 触发）。成因是 `delete_template` 显式删除池项与 `models.py:200` 的 DB 级 `ondelete="CASCADE"` 叠加；候选修法：改为批量 `delete()`，或按告警建议设 `confirm_deleted_rows=False`。
