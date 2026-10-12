@@ -219,27 +219,30 @@ npm run build                              # 生产构建
 
 ## 当前进度与待办
 
-M1–M11 功能已完成，当前进入使用验收和维护阶段。Windows 常驻运行已实现，但长期稳定性尚未完成验收。
+M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与维护**阶段。长期稳定性（锁屏跨夜 / 无人值守多日）尚未完成验收。
 
-2026-10-09 阶段收尾：
+### 2026-10-12 运行快照（实测）
 
-- 已提交 `53eb072`（归档已完成计划并统一文档入口）和 `eb1e4c8`（模板/添加好友弹窗、好友列表与扫描结果页签）；未 push。当前仍在 `migration-data-20260904`。
-- 本机平台用户仅保留管理员；账号清理已作用于本地数据库，运行数据未纳入上述提交。根目录不再维护 `PROJECT_STATUS.md` 或 `task_plan.md`，当前状态统一记录于本节。
-- 已在隔离测试实例 `http://127.0.0.1:8001/` 验证桌面及窄屏、新建/编辑模板、添加好友、必填校验、未保存提示、键盘焦点、页签切换及跨页面扫描进度；扫描使用已保存样本回放。无新增控制台错误，测试实例已停止；未将此结果视为真实抖音扫描或发送验收。
-- 本轮 `npm.cmd run build` 通过（TypeScript + Vite）；本次 UI 和文档 diff 检查通过。
-- 本轮后端 `.venv\Scripts\python.exe -m pytest -q` 退出码为 0，210 项全部通过（收集数量另以 `--collect-only` 核对）。测试输出仍有 TestClient/httpx 弃用警告，以及模板删除时 `template_pool_item` 删除行数不匹配的 SQLAlchemy 警告；作为后续维护项，尚未处理。
+- **部署形态＝本机 Docker**（Windows Docker Desktop，Docker Engine 29.7.2）：容器 `flame-contractor-app-1`，镜像 `flame-contractor:local`，映射 `127.0.0.1:8000->8000`，`restart=unless-stopped`，健康检查 **healthy**（`FailingStreak=0`、`RestartCount=0`），已连续运行约 39 小时；访问 <http://127.0.0.1:8000/>。
+- **容器代码与当前 HEAD 一致**：镜像内后端关键文件（`config.py` / `browser_manager.py` / `send_confirmer.py`）与前端 `dist` 产物经哈希比对，与工作区 HEAD `b1a2ee3` 字节一致（前端含「定时到点重发」「固定时刻宽限」UI），不存在「静态代码有、容器没跑」的偏差。镜像构建于 2026-10-11 02:05（北京时间）。
+- **容器内数据库**（`flame-contractor_data` 卷，迁移 `f8a9b0c1d2e3`）：1 个平台管理员；1 个账号「示例账号」状态 **HEALTHY / 已启用**（最近校验 2026-10-12 08:18，最近成功发送 2026-10-11 18:23，`failure_streak=0`，`send_time_hhmm=02:22`，窗口 `20:00–22:00`）；16 个好友、2 个模板、169 条发送任务、14 个计划。
+- **调度状态**：`scheduler.paused=0`（调度已开启）；自动同步周期 **1 小时**；「定时到点重发」**开**；「固定时刻宽限」**30 分钟**。容器迁移时的「待登录」状态已解除——已用「截图扫码」重新登录并恢复调度。
+- **Git**：分支 `migration-data-20260904`，HEAD `b1a2ee3`（2026-10-11 02:06）；领先 `origin/main` **30 个提交**，同时 `origin/main` 有 **1 个提交**本地没有（分叉，均未 push）。工作区仅 `data/` 运行数据变更，无代码改动。
 
-2026-10-09 14:16（北京时间）只读运行快照：`127.0.0.1:8000/health` 返回 `ok / ready`，监听地址为 `127.0.0.1`；数据库迁移为 `f8a9b0c1d2e3`，`scheduler.paused=0`（调度已开启）。未发现运行中的发送、扫描或身份补采数据库记录，外键检查无错误。计划任务为 `Ready`，状态脚本未找到监督器进程，但后端仍在线；监督器日志最后记录在 2026-10-08 10:58，计划任务最后结果为 `3221225786`。监督器退出原因尚未确认，不能认定当前健康监控和保持唤醒有效。运行状态应通过健康接口和常驻管理脚本重新核对。
+### 待办
 
-- **当前部署＝本机 Docker**（Windows Docker Desktop，访问 <http://127.0.0.1:8000/>）；服务器部署已于 2026-10-09 撤销，数据卷与代码保留在服务器上作为备份。原因见下条。原生 Windows 监督器与锁屏跨夜验收不再作为部署前提，计划任务「Flame Contractor Runtime」已停用（`Enable-ScheduledTask` 可恢复），避免与容器抢 8000 端口。
-- 2026-10-09 服务器节点实测为 Alibaba Cloud **美国弗吉尼亚**：抖音静态资源在国内 CDN，跨境往返使登录页要 15–20s 才渲染出二维码；本机 Docker 实测 **8.1s**。因此撤回本机 Docker 部署，撤服务器。Docker 部署的通用说明与两端状态见 [Docker 部署说明](docs/DOCKER.md)。
-- 2026-10-09 Docker 部署完成：Windows Docker Desktop（Linux/amd64）和 Ubuntu 24.04 Docker Engine 已实际构建并启动验证；新增 Compose、运行密钥检查、非 root 浏览器、持久化卷、健康检查及日志轮转。macOS/ARM64 的配置范围和未实测边界见 [Docker 部署说明](docs/DOCKER.md)。
-- 修复 `httpx` 误放在开发依赖的问题；容器使用 `constraints-docker.txt` 固定已验证的运行依赖，避免新版 SQLModel 日期时间规则变化导致回归失败。容器内后端测试为 **214 passed**；Windows 验证了健康接口、浏览器启动、弱密钥拒绝和重建后数据保留。
-- 本机 Docker 数据由本机库一致性迁移而来（先 `wal_checkpoint(FULL)` 合并 WAL 再取快照，避免只挂单个 `.db` 文件读到未 checkpoint 的旧状态）：1 个管理员、1 个账号、16 个好友、2 个模板、117 条发送记录、52 次扫描记录，`scheduler.paused=1`，账号标为待登录（容器是全新 Linux Profile，Windows 登录态不能沿用）。需要在本机容器里用「截图扫码」重新登录，再做定位校验后恢复调度。本轮未执行真实发送或会话扫描。
-- 2026-10-09 修复扫码登录（提交 `5576265`、`724fa90`）：会话页只等 DOM 就绪（原来等 `load`，慢网络下超 30s 触发 `TimeoutError` 把流程判失败）；改为二维码真正渲染出来后才进入等待扫码，并清掉上一轮残留截图；有头扫码在无桌面环境直接提示改用截图扫码。同时修掉二维码图片的鉴权缺陷：图片端点要 Bearer 头，而 `<img src>` 无法携带，浏览器只会得到 401 裂图，现改为带鉴权 `fetch` + object URL 渲染（备份导出缺鉴权头一并修复）。
-- 2026-10-09 该修复验证记录：后端 **214 passed**；服务器与本机 Docker 均为 `preparing → waiting_scan`（本机 8.1s 出码），图片端点为 512×512 有效 PNG；两侧真实页面都验证过二维码可显示、无失败提示、无控制台错误。
 - [ ] 完成 M11 真实扫描样本验收；新会话导入、无火花删除仍须由用户明确操作。
 - [ ] 验收后将纯代码提交 cherry-pick 到 `main`，不合并数据分支，不携带 `data/` 或 `backend/.env`。
+- [ ] 完成长期稳定性验收（锁屏跨夜 / 无人值守多日）：确认容器 `restart=unless-stopped` 与调度在进程重启后仍按预期恢复。
+- [ ] 维护项（遗留）：后端测试仍有 TestClient/httpx 弃用警告，以及模板删除时 `template_pool_item` 删除行数不匹配的 SQLAlchemy 警告，尚未处理。
+
+### 背景与决策记录（历史）
+
+- **为什么用本机 Docker**：2026-10-09 服务器节点实测为 Alibaba Cloud **美国弗吉尼亚**，抖音静态资源在国内 CDN，跨境往返使登录页要 15–20s 才渲染出二维码（本机 Docker 实测 **8.1s**），因此撤销服务器部署，改为本机 Docker；数据卷与代码保留在服务器上作为备份。原生 Windows 监督器与锁屏跨夜验收不再作为部署前提，计划任务「Flame Contractor Runtime」已停用（`Enable-ScheduledTask` 可恢复），避免与容器抢 8000 端口。Docker 部署说明见 [docs/DOCKER.md](docs/DOCKER.md)。
+- 2026-10-09 Docker 部署完成：Windows Docker Desktop（Linux/amd64）与 Ubuntu 24.04 Docker Engine 均已实际构建并启动验证；含 Compose、运行密钥检查、非 root 浏览器、持久化卷、健康检查与日志轮转。修复 `httpx` 误入开发依赖，容器使用 `constraints-docker.txt` 固定已验证依赖；容器内后端测试 214 passed。
+- 2026-10-09 数据迁移：先 `wal_checkpoint(FULL)` 合并 WAL 再取快照（避免只挂单个 `.db` 读到未 checkpoint 的旧状态）；迁移时 `scheduler.paused=1`、账号标为待登录（容器是全新 Linux Profile，Windows 登录态不能沿用）。**该状态已于后续重新登录并恢复调度，见上方 2026-10-12 快照。**
+- 2026-10-09 修复扫码登录（`5576265`、`724fa90`）：会话页只等 DOM 就绪（原来等 `load`，慢网络下超 30s 触发 `TimeoutError` 把流程判失败）；改为二维码真正渲染出来后才进入等待扫码，并清掉上一轮残留截图；有头扫码在无桌面环境直接提示改用截图扫码。同时修掉二维码图片的鉴权缺陷：图片端点要 Bearer 头，而 `<img src>` 无法携带，浏览器只会得到 401 裂图，现改为带鉴权 `fetch` + object URL 渲染（备份导出缺鉴权头一并修复）。验证：后端 214 passed；服务器与本机 Docker 均为 `preparing → waiting_scan`（本机 8.1s 出码），图片端点为 512×512 有效 PNG。
+- 2026-10-09 阶段收尾：已提交 `53eb072`（归档已完成计划并统一文档入口）、`eb1e4c8`（模板/添加好友弹窗、好友列表与扫描结果页签）等；本机平台用户仅保留管理员；根目录不再维护 `PROJECT_STATUS.md` / `task_plan.md`，当前状态统一记录于本节。隔离实例 `http://127.0.0.1:8001/` 的桌面/窄屏、模板、添加好友、页签与跨页面扫描进度验证已通过（扫描为样本回放，非真实抖音扫描或发送验收）。
 
 发送验证必须先完成 Dry Run，再取得维护者明确确认；`unknown_requires_review` 不自动重发。官方火花快照只用于展示，不改写本地 `streak_days` 或据此自动发送。
 

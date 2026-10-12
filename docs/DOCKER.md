@@ -62,6 +62,13 @@ docker compose cp app:/tmp/flame-backup.db ./flame-backup.db
 
 登录用「截图扫码」：本机到抖音的网络正常，实测出码约 **8 秒**。容器使用全新的 Linux Chromium Profile，Windows 原生部署的登录态不能沿用，需要重新扫码一次。
 
+### 2026-10-12 实测状态
+
+- 容器 `flame-contractor-app-1`（镜像 `flame-contractor:local`，构建于 2026-10-11 02:05）在 Docker Engine 29.7.2 上 **healthy** 连续运行约 39 小时，`RestartCount=0`，`restart=unless-stopped`，映射 `127.0.0.1:8000->8000`。
+- **镜像内容与仓库 HEAD `b1a2ee3` 一致**：后端 `config.py` / `browser_manager.py` / `send_confirmer.py` 与前端 `dist` 均经哈希比对一致，含最新登录判定修复（`auth_check_tolerance=2`、`login_check_timeout=20.0`、chrome-error 归为网络问题）与「定时到点重发 / 固定时刻宽限」UI。
+- **重新登录已完成**：账号「示例账号」为 `HEALTHY / 已启用`（最近校验 2026-10-12 08:18，最近成功发送 2026-10-11 18:23，`failure_streak=0`），迁移时的「待登录」状态已解除，不再需要再次扫码。
+- 容器内数据库 1 账号 / 16 好友 / 2 模板 / 169 发送任务；`scheduler.paused=0`（已开启），自动同步周期 1 小时，「定时到点重发」开、「固定时刻宽限」30 分钟。
+
 原生 Windows 服务不要与容器同时运行（会抢 8000 端口）。计划任务「Flame Contractor Runtime」已停用，需要恢复原生常驻时用 `Enable-ScheduledTask -TaskName "Flame Contractor Runtime"`。
 
 ## 服务器部署（2026-10-09 已撤销）
@@ -69,6 +76,8 @@ docker compose cp app:/tmp/flame-backup.db ./flame-backup.db
 服务器是 Alibaba Cloud 美国弗吉尼亚节点（`47.253.197.95`）。抖音的静态资源在国内 CDN，跨境往返使登录页要 **15–20 秒**才能渲染出二维码（本机约 8 秒），因此撤销了服务器部署，改回本机 Docker。
 
 已执行 `docker compose down`：容器与网络已删除，数据卷 `flame-contractor_data` / `flame-contractor_artifacts` 保留在服务器上，代码与密钥仍在 `/opt/flame-contractor-docker`，需要时可重新 `up -d`。旧的 `/opt/flame-contractor` 原生目录同样保留作备份，systemd 应用服务处于停用状态。
+
+2026-10-12 只读复核（SSH 探测，未做任何变更）：服务器可达，`docker ps -a` 无任何容器；数据卷 `flame-contractor_data` / `flame-contractor_artifacts` 仍在；`/opt/flame-contractor-docker/compose.yaml` 与 `.env`（属主 `10001:10001`、权限 `600`）保留；镜像 `flame-contractor:local`（构建于 2026-10-09 16:37，Docker Engine 29.1.3）保留；`/opt/flame-contractor` 旧原生目录保留；systemd 应用服务 `inactive` 且 `disabled`。**注意：服务器镜像早于本机 HEAD，若恢复服务器部署需先重新构建镜像。**
 
 需要重新从其他电脑访问时，双击 `scripts/runtime/open_server_console.cmd` 建立 SSH 隧道：
 
