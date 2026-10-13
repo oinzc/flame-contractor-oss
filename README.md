@@ -233,10 +233,14 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
 
 - [x] 完成 M11 真实扫描样本验收（2026-10-12）：手动完整扫描 `overall=ok`，五类分组为 `changed/no_spark/not_observed` 全 0、`unchanged` 13（与本地活跃对象数一致）、`new` 31。用户确认**全部不导入**新会话；本次无「无火花」项，故不涉及确认删除。新会话导入与无火花删除仍只允许由用户明确操作。
 - [x] 验收后将纯代码提交 cherry-pick 到 `main`（2026-10-12 完成）：从 `b70fdc7..HEAD`（34 条）在隔离工作区 cherry-pick，冲突取数据分支侧；结果与数据分支**逐文件一致**，仅排除 `data/` 与 `backend/.env`，`PROJECT_STATUS.md` / `task_plan.md` 已移除。`main` 以 fast-forward 推送（`4ffd3a9..8d0dc4a`）。注：本工作区切分支会删除 `data/`，后续同类归并须用 `git worktree` 在隔离目录操作。
-- [ ] 完成长期稳定性验收：**进程重启恢复已验收（2026-10-12）** —— `docker compose restart app` 后服务 5 秒内恢复（`/health` ok/ready），调度设置（paused/周期/重发/宽限）与账号状态完整保留，首轮自动同步在重启后按周期自动执行（18:19:59 派发、18:20:08 完成，`overall=ok`），全程日志无错误。注意**重启不会重置自动扫描节奏**：判据是「距上次扫描满 `interval`」（`scheduler.py:1190-1194`），启动时的 60 秒只是闸门值，不是「启动后必扫一次」。**尚待**：锁屏跨夜 / 无人值守多日的持续观察。
-- [ ] 维护项（遗留，2026-10-12 已定位到行）：
-  - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）；
-  - `SAWarning`：删除模板时 `template_pool_item` 预期删除 1 行、实际匹配 0 行（`backend/app/services.py:452` 的 `session.commit()`，由 `tests/test_api.py::test_delete_template` 触发）。成因是 `delete_template` 显式删除池项与 `models.py:200` 的 DB 级 `ondelete="CASCADE"` 叠加；候选修法：改为批量 `delete()`，或按告警建议设 `confirm_deleted_rows=False`。
+- [ ] 完成长期稳定性验收：**进程重启恢复已验收（2026-10-12）** —— `docker compose restart app` 后服务 5 秒内恢复（`/health` ok/ready），调度设置（paused/周期/重发/宽限）与账号状态完整保留，首轮自动同步在重启后按周期自动执行（18:19:59 派发、18:20:08 完成，`overall=ok`），全程日志无错误。注意**重启不会重置自动扫描节奏**：判据是「距上次扫描满 `interval`」（`scheduler.py:1190-1194`），启动时的 60 秒只是闸门值，不是「启动后必扫一次」。
+  - **跨夜无人值守已验收（2026-10-13）** —— 宿主机整夜开机，02:22 定时发送 `SUCCEEDED`（**13/13**，02:23:55 完成），自动同步每小时一轮全部 `ok`（23:26 → 08:35 北京），账号 `HEALTHY`、`failure_streak=0`。
+  - **宿主机真实重启恢复已验收（2026-10-13）** —— 机器 09:02:45 重启（**非计划**，真实事件），容器 09:07:46 经 `restart=unless-stopped` 自动恢复；重启后首轮自动同步 09:37:00 派发、09:37:15 完成，`overall=ok`，日志无错误。
+  - **尚待**：多日持续观察（连续数日无人值守稳定）后即可整体关闭本项。
+- [ ] 维护项（遗留）：
+  - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）。属**依赖级变更**，会影响容器构建与 `constraints-docker.txt`，需单独评估；
+  - ~~`SAWarning`（template_pool_item 删除行数不匹配）~~ **已于 2026-10-12 修复**（`bb27f53`：`delete_template` 改用批量 `delete()`；根因是 ORM 先删父表 message_template，DB 级 `ondelete="CASCADE"` 已带走池项，导致 ORM 排队的子表 DELETE 匹配 0 行）。
+- [x] 确认 Bark 密钥暴露风险（2026-10-13）：GitHub 仓库 `<owner>/flame-contractor` 为**私有**，数据分支携带 `backend/.env`（含 Bark key）不构成公开泄露。若仓库日后转为公开，需**先轮换密钥**再清理数据分支历史。
 
 ### 背景与决策记录（历史）
 
