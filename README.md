@@ -62,6 +62,16 @@ powershell -ExecutionPolicy Bypass -File scripts\runtime\manage_runtime.ps1 -Act
 
 该命令先构建前端，再通过 Windows Task Scheduler 启动单个 FastAPI 进程；API 和构建后的 React 界面统一使用 <http://127.0.0.1:8000/>。监督器持有系统唤醒请求、每 15 秒检查健康状态，并只重启它自己启动的后端进程。日志和停止/卸载命令见 [`scripts/runtime/README.md`](scripts/runtime/README.md)。
 
+### 6. 远程访问（Tailscale，可选）
+
+应用本体只监听 `127.0.0.1`，不向公网暴露任何端口。需要在手机或其他电脑上访问控制台时，用 Tailscale 虚拟组网：设备间 WireGuard 端到端加密、协调服务器只登记身份、流量不经第三方明文。
+
+1. 本机与要访问的设备都安装 Tailscale 并登录**同一账号**（iOS 需非中国大陆区 Apple ID——VPN/组网类应用在国区 App Store 已下架）；
+2. 本机执行一次 `tailscale serve --bg 8000`：把 Tailscale 网络的请求代理到 `127.0.0.1:8000`，自动签发 HTTPS 证书；配置持久化，重启自动恢复；
+3. 访问 `https://<本机名>.<tailnet名>.ts.net/`（当前为 <https://example.tailnet.ts.net/>，tailnet 内设备均可解析）。
+
+维护命令：`tailscale status`（设备列表）、`tailscale serve status`（代理规则）、`tailscale serve reset`（撤销远程访问）。注意：本机系统 DNS 若手动指定公共 DNS（如 223.5.5.5），本机解析 `*.ts.net` 会失败——本机访问用 `127.0.0.1` 即可，手机与其他设备由 Tailscale 自己接管解析，不受影响。安全边界不变：容器仍只绑定回环地址，唯一对外入口是 serve，受 tailnet 鉴权 + WireGuard 加密保护；控制台能触发真实发送，平台账号密码务必保持强度。
+
 ## 扫码登录与定位校验（M2）
 
 1. 在控制台新建账号并添加好友；
