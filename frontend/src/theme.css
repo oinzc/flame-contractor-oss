@@ -704,6 +704,72 @@ body {
 .jobs-summary-item.is-failed b { color: var(--red); }
 .jobs-summary-item.is-review b { color: var(--amber); }
 
+.jobs-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--seam);
+}
+.jobs-filter-account { min-width: 200px; }
+.jobs-status-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.jobs-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--seam);
+  color: var(--text-2);
+  font-family: var(--sans);
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--press), color var(--press), background var(--press);
+}
+.jobs-filter-chip b {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.jobs-filter-chip:hover { border-color: var(--edge); color: var(--ink); }
+.jobs-filter-chip.is-active {
+  border-color: var(--flame-deep);
+  background: var(--flame-dim);
+  color: var(--flame);
+}
+.jobs-filter-chip.is-active b { color: var(--flame); }
+.jobs-loading {
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.jobs-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--seam);
+}
+.jobs-pager-info {
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.jobs-pager-actions { display: flex; gap: 8px; }
+@media (max-width: 720px) {
+  .jobs-status-filter { margin-left: 0; }
+  .jobs-pager { justify-content: space-between; }
+}
+
 .jobs-table-wrap {
   min-width: 0;
   overflow-x: auto;

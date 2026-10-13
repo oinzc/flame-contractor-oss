@@ -802,6 +802,75 @@ def test_manual_job_review(client, engine):
     assert missing.status_code == 404
 
 
+def test_list_jobs_pagination_and_filters(client, engine):
+    """GET /api/jobs：分页、状态与账号筛选、跨账号隔离、未知状态 422。"""
+    from datetime import date as date_cls
+
+    from sqlmodel import Session
+
+    from app.models import JobStatus, SendJob
+
+    account = client.post("/api/accounts", json={"displayName": "巡检账号"}).json()
+    other = client.post("/api/accounts", json={"displayName": "另一账号"}).json()
+    template = client.post("/api/templates", json={"name": "T2", "content": "续火"}).json()
+    target = client.post(
+        "/api/targets",
+        json={"accountId": account["id"], "nicknameSnapshot": "好友B", "templateId": template["id"]},
+    ).json()
+
+    def make_job(slot: str, acct: str, job_status: JobStatus) -> str:
+        with Session(engine) as session:
+            job = SendJob(
+                account_id=acct,
+                target_id=target["id"],
+                template_id=template["id"],
+                business_date=date_cls.today(),
+                message_slot_id=slot,
+                status=job_status,
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return job.id
+
+    ids = [
+        make_job("slot-list-1", account["id"], JobStatus.SUCCEEDED),
+        make_job("slot-list-2", account["id"], JobStatus.SUCCEEDED),
+        make_job("slot-list-3", account["id"], JobStatus.FAILED_TERMINAL),
+        make_job("slot-list-4", account["id"], JobStatus.UNKNOWN_REQUIRES_REVIEW),
+        make_job("slot-list-5", other["id"], JobStatus.SUCCEEDED),
+    ]
+
+    body = client.get("/api/jobs").json()
+    assert body["total"] == 5
+    assert body["statusCounts"]["succeeded"] == 3
+    assert body["statusCounts"]["failed_terminal"] == 1
+    assert body["statusCounts"]["unknown_requires_review"] == 1
+    assert len(body["items"]) == 5
+
+    failed = client.get("/api/jobs?status=failed_terminal").json()
+    assert failed["total"] == 1
+    assert [j["id"] for j in failed["items"]] == [ids[2]]
+
+    grouped = client.get("/api/jobs?status=succeeded,failed_terminal").json()
+    assert grouped["total"] == 4
+
+    by_account = client.get(f"/api/jobs?accountId={other['id']}").json()
+    assert by_account["total"] == 1
+    assert by_account["items"][0]["accountId"] == other["id"]
+
+    paged = client.get("/api/jobs?limit=2&offset=2").json()
+    assert paged["total"] == 5
+    assert len(paged["items"]) == 2
+
+    # 账号隔离：不属于当前用户的 account_id 查不到任何任务
+    not_mine = client.get(f"/api/jobs?accountId={ids[0]}").json()
+    assert not_mine["total"] == 0
+
+    bad = client.get("/api/jobs?status=nope")
+    assert bad.status_code == 422
+
+
 def test_batch_create_targets(client):
     """批量添加好友：新增加入 created，重名进 duplicates，整批不因单条失败中断。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()

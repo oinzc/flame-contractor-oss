@@ -1,11 +1,46 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 
 from ..core.database import SessionDep
-from ..schemas import JobRead
-from ..services import confirm_job_sent, release_job
+from ..models import JobStatus
+from ..schemas import JobRead, JobsPageRead
+from ..services import confirm_job_sent, list_jobs_page, release_job
 from .deps import CurrentUser
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+@router.get("", response_model=JobsPageRead)
+def list_jobs(
+    session: SessionDep,
+    user: CurrentUser,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    account_id: str | None = Query(None, alias="accountId"),
+    status_filter: str | None = Query(None, alias="status"),
+) -> JobsPageRead:
+    """分页列出当前用户的发送任务，支持按账号与状态筛选（status 逗号分隔多个）。"""
+    statuses: list[JobStatus] | None = None
+    if status_filter:
+        statuses = []
+        for raw in status_filter.split(","):
+            token = raw.strip()
+            if not token:
+                continue
+            try:
+                statuses.append(JobStatus(token))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"未知任务状态：{token}",
+                ) from exc
+    return list_jobs_page(
+        session,
+        user.id,
+        limit=limit,
+        offset=offset,
+        account_id=account_id,
+        statuses=statuses,
+    )
 
 
 @router.post("/{job_id}/confirm-sent", response_model=JobRead)
