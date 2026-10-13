@@ -31,6 +31,7 @@ from .schemas import (
     BatchTargetItem,
     DashboardSummary,
     JobRead,
+    JobsPageRead,
     PoolItemIn,
     PoolItemRead,
     TargetCreate,
@@ -1079,4 +1080,58 @@ def get_dashboard(session: Session, user_id: str) -> DashboardSummary:
         needs_attention=attention_accounts + attention_jobs,
         accounts=[AccountRead.model_validate(account) for account in accounts],
         recent_jobs=[JobRead.model_validate(job) for job in recent_jobs],
+    )
+
+
+def list_jobs_page(
+    session: Session,
+    user_id: str,
+    *,
+    limit: int,
+    offset: int,
+    account_id: str | None = None,
+    statuses: list[JobStatus] | None = None,
+) -> JobsPageRead:
+    """任务记录页的分页查询：按当前用户的账号隔离，支持账号与状态筛选。
+
+    status_counts 统计的是「除状态筛选外」同一条件下的全集分布——前端把
+    各状态计数当作筛选入口展示，因此它不应随状态筛选自身变化。
+    """
+    account_ids = session.exec(
+        select(Account.id).where(Account.user_id == user_id)
+    ).all()
+    empty = JobsPageRead(total=0, status_counts={}, items=[])
+    if not account_ids:
+        return empty
+
+    conditions = [SendJob.account_id.in_(account_ids)]
+    if account_id is not None:
+        if account_id not in account_ids:
+            return empty
+        conditions.append(SendJob.account_id == account_id)
+
+    status_counts: dict[str, int] = {}
+    for row in session.exec(
+        select(SendJob.status, func.count()).where(*conditions).group_by(SendJob.status)
+    ).all():
+        key = row[0].value if hasattr(row[0], "value") else str(row[0])
+        status_counts[key] = int(row[1])
+
+    if statuses:
+        conditions.append(SendJob.status.in_(statuses))
+
+    total = session.scalar(
+        select(func.count()).select_from(SendJob).where(*conditions)
+    )
+    items = session.exec(
+        select(SendJob)
+        .where(*conditions)
+        .order_by(SendJob.updated_at.desc(), SendJob.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return JobsPageRead(
+        total=int(total or 0),
+        status_counts=status_counts,
+        items=[JobRead.model_validate(job) for job in items],
     )

@@ -1031,7 +1031,6 @@ export default function App() {
               )}
               {page === 'jobs' && (
                 <JobsPage
-                  summary={summary}
                   accounts={summary.accounts}
                   targets={targets}
                   templates={templates}

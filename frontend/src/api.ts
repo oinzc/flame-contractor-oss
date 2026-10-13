@@ -251,6 +251,15 @@ export const api = {
     request<import('./types').SendJob>(`/api/jobs/${id}/confirm-sent`, { method: 'POST' }),
   releaseJob: (id: string) =>
     request<import('./types').SendJob>(`/api/jobs/${id}/release`, { method: 'POST' }),
+  listJobs: (params: { limit?: number; offset?: number; accountId?: string; status?: string }) => {
+    const query = new URLSearchParams()
+    if (params.limit != null) query.set('limit', String(params.limit))
+    if (params.offset != null) query.set('offset', String(params.offset))
+    if (params.accountId) query.set('accountId', params.accountId)
+    if (params.status) query.set('status', params.status)
+    const qs = query.toString()
+    return request<import('./types').JobsPageData>(`/api/jobs${qs ? `?${qs}` : ''}`)
+  },
   startLogin: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login`, {
       method: 'POST',

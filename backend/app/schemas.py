@@ -558,6 +558,14 @@ class JobRead(APIBase):
     updated_at: datetime
 
 
+class JobsPageRead(APIBase):
+    """任务记录页的分页结果：total/status_counts 覆盖筛选后的全集，items 仅当前页。"""
+
+    total: int
+    status_counts: dict[str, int]
+    items: list[JobRead]
+
+
 # ---------------------------------------------------------------- scheduler
 
 class SendScheduleRead(APIBase):

@@ -343,6 +343,12 @@ export interface SendJob {
   updatedAt: string
 }
 
+export interface JobsPageData {
+  total: number
+  statusCounts: Record<string, number>
+  items: SendJob[]
+}
+
 export interface DashboardSummary {
   accountCount: number
   healthyAccountCount: number

@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api'
 import type {
   Account,
   ContractTarget,
-  DashboardSummary,
+  JobsPageData,
   MessageTemplate,
   SendJob,
 } from '../types'
@@ -17,12 +17,21 @@ import {
 import StatusBadge from './StatusBadge'
 
 interface Props {
-  summary: DashboardSummary
   accounts: Account[]
   targets: ContractTarget[]
   templates: MessageTemplate[]
   onChanged: () => void
 }
+
+const PAGE_SIZE = 20
+
+/** 筛选 chips：key 为 /api/jobs?status= 参数（空串 = 全部），失败合并可重试与终态两类。 */
+const STATUS_FILTERS: { key: string; label: string }[] = [
+  { key: '', label: '全部' },
+  { key: 'succeeded', label: '已续焰' },
+  { key: 'failed_retryable,failed_terminal', label: '失败' },
+  { key: 'unknown_requires_review', label: '待复核' },
+]
 
 const FAILURE_CLASS_LABELS: Record<NonNullable<SendJob['failureClass']>, string> = {
   network: '网络不可用',
@@ -41,31 +50,69 @@ const TEMPLATE_TYPE_LABELS: Record<MessageTemplate['type'], string> = {
   pool: '文案池',
 }
 
-function isFailedJob(job: SendJob): boolean {
-  return job.status === 'failed_retryable' || job.status === 'failed_terminal'
-}
-
 function slotVersion(slot: string): string | null {
   const match = slot.match(/:v(\d+)$/)
   return match?.[1] ?? null
 }
 
-export default function JobsPage({ summary, accounts, targets, templates, onChanged }: Props) {
-  const jobs = summary.recentJobs
+export default function JobsPage({ accounts, targets, templates, onChanged }: Props) {
+  const [data, setData] = useState<JobsPageData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const accountsById = new Map(accounts.map((account) => [account.id, account]))
-  const targetsById = new Map(targets.map((target) => [target.id, target]))
-  const templatesById = new Map(templates.map((template) => [template.id, template]))
-  const recentCounts = jobs.reduce(
-    (counts, job) => {
-      if (job.status === 'succeeded') counts.succeeded += 1
-      if (isFailedJob(job)) counts.failed += 1
-      if (job.status === 'unknown_requires_review') counts.review += 1
-      return counts
-    },
-    { succeeded: 0, failed: 0, review: 0 },
-  )
+  const [accountFilter, setAccountFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const refresh = useCallback(() => {
+    setReloadKey((key) => key + 1)
+  }, [])
+
+  const accountsById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts])
+  const targetsById = useMemo(() => new Map(targets.map((t) => [t.id, t])), [targets])
+  const templatesById = useMemo(() => new Map(templates.map((t) => [t.id, t])), [templates])
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    api
+      .listJobs({
+        limit: PAGE_SIZE,
+        offset,
+        accountId: accountFilter || undefined,
+        status: statusFilter || undefined,
+      })
+      .then((page) => {
+        if (cancelled) return
+        setData(page)
+        setLoadError(null)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setLoadError(err instanceof ApiError ? err.message : '加载失败，请重试')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [accountFilter, statusFilter, offset, reloadKey])
+
+  const jobs = data?.items ?? []
+  const total = data?.total ?? 0
+  const statusCounts = data?.statusCounts ?? {}
+  const failedCount = (statusCounts.failed_retryable ?? 0) + (statusCounts.failed_terminal ?? 0)
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const pageNo = Math.floor(offset / PAGE_SIZE) + 1
+
+  function pickStatus(key: string) {
+    if (statusFilter === key) return
+    setStatusFilter(key)
+    setOffset(0)
+  }
 
   async function handleConfirmSent(job: SendJob) {
     const ok = window.confirm(
@@ -76,6 +123,7 @@ export default function JobsPage({ summary, accounts, targets, templates, onChan
     setBusyId(job.id)
     try {
       await api.confirmJobSent(job.id)
+      refresh()
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '确认失败，请重试')
@@ -93,6 +141,7 @@ export default function JobsPage({ summary, accounts, targets, templates, onChan
     setBusyId(job.id)
     try {
       await api.releaseJob(job.id)
+      refresh()
       onChanged()
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : '放行失败，请重试')
@@ -113,32 +162,68 @@ export default function JobsPage({ summary, accounts, targets, templates, onChan
       <section className="card">
         <div className="card-head jobs-card-head">
           <div className="jobs-card-heading">
-            <h2>最近任务（{jobs.length}）</h2>
+            <h2>任务记录</h2>
             <p>按最近更新时间排序 · 每行是一位好友的一次续火记录</p>
           </div>
-          {jobs.length > 0 && (
-            <div className="jobs-summary" aria-label="最近任务统计">
-              <span className="jobs-summary-item is-success">
-                <b>{recentCounts.succeeded}</b> 已续焰
-              </span>
-              <span className="jobs-summary-item is-failed">
-                <b>{recentCounts.failed}</b> 失败
-              </span>
-              <span className="jobs-summary-item is-review">
-                <b>{recentCounts.review}</b> 待处理
-              </span>
-            </div>
-          )}
+          {loading && <span className="jobs-loading">加载中…</span>}
         </div>
+        <div className="jobs-filter">
+          <div className="field jobs-filter-account">
+            <label htmlFor="jobs-account">账号</label>
+            <select
+              id="jobs-account"
+              value={accountFilter}
+              onChange={(event) => {
+                setAccountFilter(event.target.value)
+                setOffset(0)
+              }}
+            >
+              <option value="">全部账号</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="jobs-status-filter" role="group" aria-label="按结果筛选">
+            {STATUS_FILTERS.map((filter) => {
+              const count =
+                filter.key === ''
+                  ? total
+                  : filter.key === 'failed_retryable,failed_terminal'
+                    ? failedCount
+                    : (statusCounts[filter.key] ?? 0)
+              const active = statusFilter === filter.key
+              return (
+                <button
+                  key={filter.label}
+                  type="button"
+                  className={`jobs-filter-chip${active ? ' is-active' : ''}`}
+                  aria-pressed={active}
+                  onClick={() => pickStatus(filter.key)}
+                >
+                  {filter.label}
+                  <b>{count}</b>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        {loadError && <div className="form-error" style={{ marginBottom: 8 }}>{loadError}</div>}
         {actionError && <div className="form-error" style={{ marginBottom: 8 }}>{actionError}</div>}
-        {jobs.length === 0 ? (
+        {jobs.length === 0 && !loading ? (
           <div className="empty">
-            <div className="empty-title">暂无任务记录</div>
-            <p className="empty-copy">完成账号登录和好友绑定后，发送任务会记录在这里。</p>
+            <div className="empty-title">没有匹配的任务记录</div>
+            <p className="empty-copy">
+              {total === 0 && !statusFilter && !accountFilter
+                ? '完成账号登录和好友绑定后，发送任务会记录在这里。'
+                : '当前筛选条件下没有任务，试试切换状态或账号。'}
+            </p>
           </div>
         ) : (
           <div className="jobs-table-wrap">
-            <table className="table jobs-table" aria-label="最近任务">
+            <table className="table jobs-table" aria-label="发送任务记录">
               <thead>
                 <tr>
                   <th>发送对象</th>
@@ -229,6 +314,29 @@ export default function JobsPage({ summary, accounts, targets, templates, onChan
             </table>
           </div>
         )}
+        <div className="jobs-pager">
+          <span className="jobs-pager-info">
+            共 {total} 条 · 第 {pageNo} / {pageCount} 页
+          </span>
+          <span className="jobs-pager-actions">
+            <button
+              className="btn ghost small"
+              type="button"
+              disabled={offset === 0 || loading}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            >
+              上一页
+            </button>
+            <button
+              className="btn ghost small"
+              type="button"
+              disabled={offset + PAGE_SIZE >= total || loading}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+            >
+              下一页
+            </button>
+          </span>
+        </div>
       </section>
     </div>
   )
