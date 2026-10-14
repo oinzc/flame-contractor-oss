@@ -871,6 +871,26 @@ def test_list_jobs_pagination_and_filters(client, engine):
     assert bad.status_code == 422
 
 
+def test_login_verification_endpoints_require_active_flow(client):
+    """「身份验证」交互端点：没有进行中的登录流程时一律 404。"""
+    account = client.post("/api/accounts", json={"displayName": "验证账号"}).json()
+
+    options = client.get(f"/api/accounts/{account['id']}/login/verify/options")
+    assert options.status_code == 404
+
+    select = client.post(
+        f"/api/accounts/{account['id']}/login/verify/select",
+        json={"option": "手机发送验证码"},
+    )
+    assert select.status_code == 404
+
+    code = client.post(
+        f"/api/accounts/{account['id']}/login/verify/code",
+        json={"code": "123456"},
+    )
+    assert code.status_code == 404
+
+
 def test_batch_create_targets(client):
     """批量添加好友：新增加入 created，重名进 duplicates，整批不因单条失败中断。"""
     account = client.post("/api/accounts", json={"displayName": "主账号"}).json()

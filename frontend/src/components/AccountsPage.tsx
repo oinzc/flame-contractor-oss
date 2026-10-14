@@ -31,6 +31,10 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
   const [loginStates, setLoginStates] = useState<Record<string, LoginStatus>>({})
   const [qrStates, setQrStates] = useState<Record<string, LoginStatus>>({})
   const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
+  const [verifyOptions, setVerifyOptions] = useState<Record<string, string[]>>({})
+  const [verifyMsg, setVerifyMsg] = useState<Record<string, string>>({})
+  const [verifyBusy, setVerifyBusy] = useState(false)
+  const [codeDraft, setCodeDraft] = useState<Record<string, string>>({})
   const [dryResults, setDryResults] = useState<Record<string, DryRunRead>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
@@ -148,6 +152,17 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
       }
       // 截图端点 no-store，用 tick 破坏缓存让 <img> 拉到最新帧
       setQrTicks((previous) => ({ ...previous, [accountId]: Date.now() }))
+      if (status.state === 'verification_required') {
+        // 「身份验证」等待中：同步读取弹窗当前可见的验证方式，供远程操作
+        try {
+          const options = await api.loginVerificationOptions(accountId)
+          if (options.state === 'verification_required') {
+            setVerifyOptions((previous) => ({ ...previous, [accountId]: options.options }))
+          }
+        } catch {
+          /* 流程已结束（验证完成/超时），下一轮状态轮询会收口 */
+        }
+      }
     } catch (err) {
       setError(accountId, err instanceof ApiError ? err.message : '截图扫码状态查询失败')
       return
@@ -179,6 +194,47 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
       setQrState(account.id, status)
     } catch (err) {
       setError(account.id, err instanceof ApiError ? err.message : '取消失败')
+    }
+  }
+
+  async function handleVerifySelect(account: Account, option: string) {
+    setVerifyBusy(true)
+    setVerifyMsg((previous) => ({ ...previous, [account.id]: '' }))
+    try {
+      const result = await api.selectVerificationOption(account.id, option)
+      setVerifyMsg((previous) => ({
+        ...previous,
+        [account.id]: result.detail ?? '已选择验证方式',
+      }))
+    } catch (err) {
+      setVerifyMsg((previous) => ({
+        ...previous,
+        [account.id]: err instanceof ApiError ? err.message : '选择验证方式失败',
+      }))
+    } finally {
+      setVerifyBusy(false)
+    }
+  }
+
+  async function handleVerifySubmit(account: Account) {
+    const code = (codeDraft[account.id] ?? '').trim()
+    if (!code) return
+    setVerifyBusy(true)
+    setVerifyMsg((previous) => ({ ...previous, [account.id]: '' }))
+    try {
+      const result = await api.submitVerificationCode(account.id, code)
+      setVerifyMsg((previous) => ({
+        ...previous,
+        [account.id]: result.detail ?? '验证码已提交',
+      }))
+      setCodeDraft((previous) => ({ ...previous, [account.id]: '' }))
+    } catch (err) {
+      setVerifyMsg((previous) => ({
+        ...previous,
+        [account.id]: err instanceof ApiError ? err.message : '提交验证码失败',
+      }))
+    } finally {
+      setVerifyBusy(false)
     }
   }
 
@@ -368,6 +424,50 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                     <QrCodeImage accountId={account.id} tick={qrTicks[account.id] ?? 0} />
                     {qr.state === 'verification_required' && (
                       <div className="flow-hint gold">{qr.detail}</div>
+                    )}
+                    {qr.state === 'verification_required' && (
+                      <div className="verify-panel">
+                        <div className="verify-options">
+                          {(verifyOptions[account.id] ?? []).map((option) => (
+                            <button
+                              key={option}
+                              className="btn ghost small"
+                              type="button"
+                              disabled={verifyBusy}
+                              onClick={() => void handleVerifySelect(account, option)}
+                            >
+                              {option}
+                            </button>
+                          ))}
+                          {(verifyOptions[account.id] ?? []).length === 0 && (
+                            <span className="muted">正在读取验证方式…</span>
+                          )}
+                        </div>
+                        <div className="verify-code-row">
+                          <input
+                            value={codeDraft[account.id] ?? ''}
+                            inputMode="numeric"
+                            placeholder="输入收到的验证码"
+                            onChange={(event) =>
+                              setCodeDraft((previous) => ({
+                                ...previous,
+                                [account.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="btn primary small"
+                            type="button"
+                            disabled={verifyBusy || !(codeDraft[account.id] ?? '').trim()}
+                            onClick={() => void handleVerifySubmit(account)}
+                          >
+                            提交验证码
+                          </button>
+                        </div>
+                        {verifyMsg[account.id] && (
+                          <div className="qr-hint">{verifyMsg[account.id]}</div>
+                        )}
+                      </div>
                     )}
                     <div className="qr-hint">
                       截图扫码模式：打开抖音 App → 左上角「≡」→ 扫一扫 → 对准上方二维码。
