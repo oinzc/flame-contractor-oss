@@ -93,14 +93,13 @@ BrowserFactory = Callable[[Path, bool], Awaitable[tuple[object, object]]]
 # headless 不受影响）；关闭该特性规避。headless 携带无害，故统一传入。
 CHROMIUM_LAUNCH_ARGS = ["--disable-features=CalculateNativeWinOcclusion"]
 
-# 扫码后抖音弹「身份验证」风控时的引导文案：新环境/异地登录常见。推荐走
-# 「授权历史记录验证」——由账号本人在抖音 App 里确认，无需操作浏览器，
-# 远程/帮朋友登录的场景才能闭环；短信与邮箱验证码要在页面里输入，
-# 无头浏览器做不到，文案里明确说明。
+# 扫码后抖音弹「身份验证」风控时的引导文案：验证方式与验证码都在页面里
+# 操作，扫码人手机上点完登录就没有后续了——所以必须由维护者在控制台的
+# 登录面板远程选方式/输验证码，而不是等谁去 App 里点确认。
 LOGIN_VERIFICATION_GUIDANCE = (
-    "抖音要求身份验证（新环境登录的风控）。推荐：账号本人在自己的抖音 App 内"
-    "完成「授权确认」（验证弹窗里选「授权历史记录验证」并在手机上确认），"
-    "确认后这里会自动完成登录。短信/邮箱验证码需要在页面里输入，远程无法操作；"
+    "抖音要求身份验证（新环境登录的风控）。请在下方选择验证方式并输入验证码"
+    "完成验证（验证码会发到该账号绑定的手机/邮箱，需要向账号本人索取）；"
+    "推荐先试「授权历史记录验证」。验证通过后登录会自动继续；"
     "等待中，超时后请重新发起。"
 )
 
@@ -128,6 +127,8 @@ class LoginFlow:
     qr_image: str | None = None
     # 登录成功后读到的当前抖音身份昵称（localStorage user_info，仅展示）
     self_nickname: str | None = None
+    # 「身份验证」远程交互：验证等待期间挂着的 DouyinChat，结束后置空
+    chat: DouyinChat | None = None
 
 
 @dataclass
@@ -1274,9 +1275,9 @@ class BrowserManager:
     async def _notify_login_verification(self, flow: LoginFlow) -> None:
         """扫码后出现「身份验证」风控时尽早推送。
 
-        这类验证多数要账号本人在抖音 App 里确认授权，而扫码的人往往不在账号
-        本人身边（帮朋友远程登录正是典型场景）；不推送的话，对方根本不知道
-        要去 App 里点确认，流程只会白白超时。
+        这类验证要在我们浏览器的页面里选方式/输验证码，验证码又发到账号绑定
+        的手机/邮箱——维护者不收到提醒，就没人去要验证码、没人来控制台操作，
+        流程只会白白超时。
         """
         if not self._notifier.enabled:
             return
@@ -1284,9 +1285,9 @@ class BrowserManager:
         try:
             await self._notifier.send(
                 "扫码登录需要身份验证",
-                f"账号「{name}」扫码后抖音要求身份验证。请账号本人在自己的抖音 App 内"
-                "完成「授权确认」（验证弹窗选「授权历史记录验证」）；确认后登录会自动"
-                f"完成，本流程还会等待约 {int(self._qr_login_timeout)} 秒。",
+                f"账号「{name}」扫码后抖音要求身份验证。请到控制台「账号」页的"
+                "登录面板选择验证方式并输入验证码（验证码发到该账号绑定的手机/"
+                f"邮箱，需要向账号本人索取），本流程还会等待约 {int(self._qr_login_timeout)} 秒。",
                 "timeSensitive",
             )
         except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
@@ -1351,6 +1352,36 @@ class BrowserManager:
         existing = self._qr_image_file(account_id)
         return str(existing) if existing.exists() else None
 
+    async def verification_options(self, account_id: str) -> dict:
+        """读取「身份验证」弹窗当前可见的验证方式（仅验证等待中的流程可用）。"""
+        flow = self._active_flow(account_id)
+        if flow is None or flow.chat is None or flow.state != "verification_required":
+            raise LookupError("当前没有等待身份验证的登录流程")
+        options = await flow.chat.verification_options()
+        return {"state": flow.state, "detail": flow.detail, "options": options}
+
+    async def click_verification_option(self, account_id: str, option: str) -> dict:
+        """在「身份验证」弹窗里点选某个验证方式（按可见文案匹配）。"""
+        flow = self._active_flow(account_id)
+        if flow is None or flow.chat is None or flow.state != "verification_required":
+            raise LookupError("当前没有等待身份验证的登录流程")
+        clicked = await flow.chat.click_verification_option(option)
+        if not clicked:
+            raise ValueError(f"页面上没有「{option}」这个验证方式，请对照截图确认")
+        flow.detail = f"已选择「{option}」；验证码发出后请在下方输入并提交。"
+        return {"ok": True, "state": flow.state, "detail": flow.detail}
+
+    async def submit_verification_code(self, account_id: str, code: str) -> dict:
+        """把验证码填进弹窗输入框并提交（通用驱动，失败如实上报）。"""
+        flow = self._active_flow(account_id)
+        if flow is None or flow.chat is None or flow.state != "verification_required":
+            raise LookupError("当前没有等待身份验证的登录流程")
+        submitted = await flow.chat.submit_verification_code(code)
+        if not submitted:
+            raise ValueError("未能在页面上找到验证码输入框或提交按钮，请对照截图确认")
+        flow.detail = "验证码已提交，等待登录完成…"
+        return {"ok": True, "state": flow.state, "detail": flow.detail}
+
     async def _wait_for_qr_or_session(self, page, chat) -> str:
         """轮询等待二维码真正可读，或确认已有登录态；慢网络下要数秒到数十秒。
 
@@ -1389,6 +1420,7 @@ class BrowserManager:
             flow.state = "preparing"
             context, page = await self._open(profile_path, headless=True)
             chat = DouyinChat(page, sleep=self._sleep)
+            flow.chat = chat
             await chat.open_chat_page()
 
             directory = self._qr_image_file(flow.account_id).parent
@@ -1501,6 +1533,7 @@ class BrowserManager:
             flow.detail = type(exc).__name__
             logger.warning("截图扫码登录流程失败：%s", exc, exc_info=True)
         finally:
+            flow.chat = None
             if context is not None:
                 if page is not None and flow.state in {"failed", "expired"}:
                     # 失败现场留一张截图，便于判断是风控页、验证码还是页面结构变化

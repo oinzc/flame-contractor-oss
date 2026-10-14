@@ -10,6 +10,10 @@ from ..schemas import (
     IdentityHydrationProgressRead,
     IdentityHydrationStart,
     LoginStatusRead,
+    LoginVerificationActionRead,
+    LoginVerificationCodeIn,
+    LoginVerificationOptionsRead,
+    LoginVerificationSelectIn,
     ScanChatsRead,
     ScanHistoryRead,
     ScanProgressRead,
@@ -317,6 +321,63 @@ async def cancel_qr_login(
     _require_account(session, account_id, user.id)
     manager = request.app.state.browser_manager
     return await manager.cancel_login(account_id)
+
+
+@router.get(
+    "/login/verify/options",
+    response_model=LoginVerificationOptionsRead,
+)
+async def read_login_verification_options(
+    account_id: str, request: Request, session: SessionDep, user: CurrentUser
+) -> dict:
+    """读取「身份验证」弹窗当前可见的验证方式（仅验证等待中的流程可用）。"""
+    _require_account(session, account_id, user.id)
+    manager = request.app.state.browser_manager
+    try:
+        return await manager.verification_options(account_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/login/verify/select",
+    response_model=LoginVerificationActionRead,
+)
+async def select_login_verification_option(
+    account_id: str,
+    payload: LoginVerificationSelectIn,
+    request: Request,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    """在「身份验证」弹窗里点选某个验证方式（按可见文案匹配）。"""
+    _require_account(session, account_id, user.id)
+    manager = request.app.state.browser_manager
+    try:
+        return await manager.click_verification_option(account_id, payload.option)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/login/verify/code", response_model=LoginVerificationActionRead)
+async def submit_login_verification_code(
+    account_id: str,
+    payload: LoginVerificationCodeIn,
+    request: Request,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    """把验证码填进弹窗输入框并提交（通用驱动，失败如实上报）。"""
+    _require_account(session, account_id, user.id)
+    manager = request.app.state.browser_manager
+    try:
+        return await manager.submit_verification_code(account_id, payload.code)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/login/qr/image")

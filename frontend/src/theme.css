@@ -1232,6 +1232,28 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .qr-panel img { width: 260px; height: auto; image-rendering: pixelated; border: 1px solid var(--seam); background: #fff; }
 .qr-panel .qr-hint { font-size: 11px; color: var(--amber); text-align: center; }
 
+/* 「身份验证」远程操作面板：选项按钮 + 验证码输入，宽度跟随二维码 */
+.verify-panel {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+  width: min(420px, 100%);
+}
+.verify-options { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.verify-code-row { display: flex; gap: 8px; }
+.verify-code-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel-raise);
+  border: 1px solid var(--seam);
+  color: var(--ink);
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+}
+.verify-code-row input:focus { outline: none; border-color: var(--edge); }
+
 /* 空态 */
 .empty { border: 1px dashed var(--edge); padding: 34px 20px; text-align: center; display: grid; gap: 8px; justify-items: center; }
 .empty-title { font-size: 14px; font-weight: 600; }

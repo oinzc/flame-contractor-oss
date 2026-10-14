@@ -26,6 +26,14 @@ OPEN_CONFIRM_TIMEOUT = 8.0
 EDITOR_READY_TIMEOUT = 8.0
 # 全量扫描会话列表：滚动轮数上限 + 连续无新增即判定到底
 SCAN_MAX_ROUNDS = 80
+# 「身份验证」风控弹窗里已知的验证方式文案（2026-10 实测截图）。
+# 点击按可见文案匹配，抖音改版后新增方式不会被点（UI 只展示检测到的）。
+LOGIN_VERIFICATION_OPTION_TEXTS = (
+    "授权历史记录验证",
+    "手机发送验证码",
+    "邮箱验证码",
+    "客服协助验证",
+)
 SCAN_IDLE_ROUNDS = 3
 IDENTITY_RESPONSE_PATHS = (
     "/aweme/v1/web/im/user/info",
@@ -640,6 +648,61 @@ class DouyinChat:
         try:
             return await self.page.locator("text=身份验证").count() > 0
         except Exception:  # noqa: BLE001 - 检测是尽力而为，异常按未出现处理
+            return False
+
+    async def verification_options(self) -> list[str]:
+        """读取「身份验证」弹窗里当前可见的验证方式文案（尽力而为）。"""
+        options: list[str] = []
+        for text in LOGIN_VERIFICATION_OPTION_TEXTS:
+            try:
+                if await self.page.locator(f"text={text}").count() > 0:
+                    options.append(text)
+            except Exception:  # noqa: BLE001 - 单项查询失败不影响其余项
+                continue
+        return options
+
+    async def click_verification_option(self, option: str) -> bool:
+        """点击「身份验证」弹窗里的某个验证方式（按可见文案匹配，尽力而为）。"""
+        try:
+            locator = self.page.locator(f"text={option}").first
+            if await locator.count() == 0:
+                return False
+            await locator.click()
+            return True
+        except Exception:  # noqa: BLE001 - 点击失败如实上报，不猜测成功
+            return False
+
+    async def submit_verification_code(self, code: str) -> bool:
+        """把验证码填进弹窗里可见的输入框并提交（尽力而为）。
+
+        弹窗 DOM 会随抖音改版变化，这里不绑定具体 selector：按「可见输入框 +
+        常见确认文案按钮」通用驱动，失败时如实返回 False，由前端提示对照
+        截图人工确认。输入后先尝试按钮文案，再回退按 Enter 提交。
+        """
+        try:
+            inputs = self.page.locator("input:visible")
+            filled = False
+            for index in range(await inputs.count()):
+                element = inputs.nth(index)
+                try:
+                    await element.fill(code)
+                    filled = True
+                    break
+                except Exception:  # noqa: BLE001 - 换下一个可见输入框
+                    continue
+            if not filled:
+                return False
+            for text in ("确定", "提交", "验证", "下一步", "确认"):
+                button = self.page.locator(f"text={text}").first
+                try:
+                    if await button.count() > 0:
+                        await button.click()
+                        return True
+                except Exception:  # noqa: BLE001 - 尝试下一个文案
+                    continue
+            await self.page.keyboard.press("Enter")
+            return True
+        except Exception:  # noqa: BLE001 - 提交失败如实上报，不猜测成功
             return False
 
     async def wait_logged_in(

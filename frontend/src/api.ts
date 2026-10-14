@@ -296,6 +296,20 @@ export const api = {
     }),
   qrLoginStatus: (id: string) =>
     request<import('./types').LoginStatus>(`/api/accounts/${id}/login/qr`),
+  loginVerificationOptions: (id: string) =>
+    request<import('./types').LoginVerificationOptions>(
+      `/api/accounts/${id}/login/verify/options`,
+    ),
+  selectVerificationOption: (id: string, option: string) =>
+    request<import('./types').LoginVerificationAction>(
+      `/api/accounts/${id}/login/verify/select`,
+      { method: 'POST', body: JSON.stringify({ option }) },
+    ),
+  submitVerificationCode: (id: string, code: string) =>
+    request<import('./types').LoginVerificationAction>(
+      `/api/accounts/${id}/login/verify/code`,
+      { method: 'POST', body: JSON.stringify({ code }) },
+    ),
   /** 二维码截图端点需要 Authorization 头，`<img src>` 无法携带，必须走 fetch + blob */
   qrImage: async (id: string): Promise<Blob> => {
     const response = await fetch(`/api/accounts/${id}/login/qr/image`, { headers: authHeaders() })

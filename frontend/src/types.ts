@@ -425,6 +425,19 @@ export interface LoginStatus {
   selfNickname?: string | null
 }
 
+export interface LoginVerificationOptions {
+  state: LoginState
+  detail: string | null
+  /** 「身份验证」弹窗当前可见的验证方式文案 */
+  options: string[]
+}
+
+export interface LoginVerificationAction {
+  ok: boolean
+  state: LoginState
+  detail: string | null
+}
+
 export type DryRunTargetStatus = 'found' | 'not_found' | 'ambiguous'
 
 export interface DryRunTargetResult {

@@ -566,6 +566,28 @@ class JobsPageRead(APIBase):
     items: list[JobRead]
 
 
+class LoginVerificationOptionsRead(APIBase):
+    """「身份验证」弹窗当前可选的验证方式（按页面上实际可见的文案返回）。"""
+
+    state: str
+    detail: str | None
+    options: list[str]
+
+
+class LoginVerificationActionRead(APIBase):
+    ok: bool
+    state: str
+    detail: str | None
+
+
+class LoginVerificationSelectIn(APIBase):
+    option: str
+
+
+class LoginVerificationCodeIn(APIBase):
+    code: str
+
+
 # ---------------------------------------------------------------- scheduler
 
 class SendScheduleRead(APIBase):
