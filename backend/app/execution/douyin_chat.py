@@ -629,6 +629,19 @@ class DouyinChat:
         element = await self.page.query_selector(_s.CONVERSATION_LIST)
         return element is not None
 
+    async def is_verification_required(self) -> bool:
+        """检测扫码后是否出现「身份验证」风控弹窗（新设备/异地登录常见）。
+
+        出现时流程不应按普通超时收场：部分验证方式（如授权历史记录验证）
+        由账号本人在抖音 App 内确认，只要继续等就能自动完成登录。
+        保守策略：页面里找不到该文案或查询异常，一律按「未出现」处理，
+        回到原本的超时路径——检测不到只影响体验，不影响正确性。
+        """
+        try:
+            return await self.page.locator("text=身份验证").count() > 0
+        except Exception:  # noqa: BLE001 - 检测是尽力而为，异常按未出现处理
+            return False
+
     async def wait_logged_in(
         self,
         timeout: float,

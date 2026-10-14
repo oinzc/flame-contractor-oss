@@ -93,6 +93,17 @@ BrowserFactory = Callable[[Path, bool], Awaitable[tuple[object, object]]]
 # headless 不受影响）；关闭该特性规避。headless 携带无害，故统一传入。
 CHROMIUM_LAUNCH_ARGS = ["--disable-features=CalculateNativeWinOcclusion"]
 
+# 扫码后抖音弹「身份验证」风控时的引导文案：新环境/异地登录常见。推荐走
+# 「授权历史记录验证」——由账号本人在抖音 App 里确认，无需操作浏览器，
+# 远程/帮朋友登录的场景才能闭环；短信与邮箱验证码要在页面里输入，
+# 无头浏览器做不到，文案里明确说明。
+LOGIN_VERIFICATION_GUIDANCE = (
+    "抖音要求身份验证（新环境登录的风控）。推荐：账号本人在自己的抖音 App 内"
+    "完成「授权确认」（验证弹窗里选「授权历史记录验证」并在手机上确认），"
+    "确认后这里会自动完成登录。短信/邮箱验证码需要在页面里输入，远程无法操作；"
+    "等待中，超时后请重新发起。"
+)
+
 
 def headed_login_available() -> bool:
     """当前主机能否弹出有头浏览器窗口。
@@ -1260,6 +1271,27 @@ class BrowserManager:
         except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
             logger.warning("登录结果通知发送失败", exc_info=True)
 
+    async def _notify_login_verification(self, flow: LoginFlow) -> None:
+        """扫码后出现「身份验证」风控时尽早推送。
+
+        这类验证多数要账号本人在抖音 App 里确认授权，而扫码的人往往不在账号
+        本人身边（帮朋友远程登录正是典型场景）；不推送的话，对方根本不知道
+        要去 App 里点确认，流程只会白白超时。
+        """
+        if not self._notifier.enabled:
+            return
+        name = self._account_name(flow.account_id)
+        try:
+            await self._notifier.send(
+                "扫码登录需要身份验证",
+                f"账号「{name}」扫码后抖音要求身份验证。请账号本人在自己的抖音 App 内"
+                "完成「授权确认」（验证弹窗选「授权历史记录验证」）；确认后登录会自动"
+                f"完成，本流程还会等待约 {int(self._qr_login_timeout)} 秒。",
+                "timeSensitive",
+            )
+        except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
+            logger.warning("身份验证提醒发送失败", exc_info=True)
+
     def _account_name(self, account_id: str) -> str:
         with Session(self._engine) as session:
             account = session.get(Account, account_id)
@@ -1400,17 +1432,60 @@ class BrowserManager:
                     await take_qr_shot()
                     await self._sleep(self._qr_screenshot_interval)
 
+            verification_seen = False
+
+            async def watch_verification() -> None:
+                """并行盯「身份验证」风控弹窗：出现就及早改状态并推送提醒。
+
+                不改主等待循环的判据（登录与否仍只看会话列表），这里只负责
+                把「为什么还没登录」暴露给用户，避免白白等到超时才明白原因。
+                """
+                nonlocal verification_seen
+                while True:
+                    await self._sleep(5.0)
+                    try:
+                        if not await chat.is_verification_required():
+                            continue
+                    except Exception:  # noqa: BLE001 - 检测失败按未出现处理
+                        continue
+                    if verification_seen:
+                        continue
+                    verification_seen = True
+                    flow.state = "verification_required"
+                    flow.detail = LOGIN_VERIFICATION_GUIDANCE
+                    logger.warning(
+                        "截图扫码出现「身份验证」风控（账号 %s），延长等待并提醒",
+                        flow.account_id,
+                    )
+                    await self._notify_login_verification(flow)
+
             shooter = asyncio.create_task(shoot())
+            verifier = asyncio.create_task(watch_verification())
             try:
                 logged_in = await chat.wait_logged_in(
                     timeout=self._qr_login_timeout,
                     poll_interval=self._login_poll_interval,
                 )
+                if not logged_in and verification_seen:
+                    # 「身份验证」多数要账号本人在抖音 App 里确认授权，那是人干
+                    # 的时间；检测到弹窗就再给一轮完整窗口，而不是立即判超时。
+                    logger.warning(
+                        "身份验证等待中，追加一轮等待（账号 %s）", flow.account_id
+                    )
+                    logged_in = await chat.wait_logged_in(
+                        timeout=self._qr_login_timeout,
+                        poll_interval=self._login_poll_interval,
+                    )
             finally:
                 shooter.cancel()
+                verifier.cancel()
             if not logged_in:
                 flow.state = "expired"
-                flow.detail = "等待扫码超时，请重新发起"
+                flow.detail = (
+                    "等待身份验证/扫码超时，请重新发起"
+                    if verification_seen
+                    else "等待扫码超时，请重新发起"
+                )
                 logger.warning(
                     "截图扫码等待超时；流程结束时页面 %s", getattr(page, "url", "unknown")
                 )
