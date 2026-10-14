@@ -32,6 +32,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
   const [qrStates, setQrStates] = useState<Record<string, LoginStatus>>({})
   const [qrTicks, setQrTicks] = useState<Record<string, number>>({})
   const [verifyOptions, setVerifyOptions] = useState<Record<string, string[]>>({})
+  const [verifyAutoOption, setVerifyAutoOption] = useState<Record<string, string | null>>({})
   const [verifyMsg, setVerifyMsg] = useState<Record<string, string>>({})
   const [verifyBusy, setVerifyBusy] = useState(false)
   const [codeDraft, setCodeDraft] = useState<Record<string, string>>({})
@@ -158,6 +159,10 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
           const options = await api.loginVerificationOptions(accountId)
           if (options.state === 'verification_required') {
             setVerifyOptions((previous) => ({ ...previous, [accountId]: options.options }))
+            setVerifyAutoOption((previous) => ({
+              ...previous,
+              [accountId]: options.autoOption ?? null,
+            }))
           }
         } catch {
           /* 流程已结束（验证完成/超时），下一轮状态轮询会收口 */
@@ -425,7 +430,7 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                     {qr.state === 'verification_required' && (
                       <div className="flow-hint gold">{qr.detail}</div>
                     )}
-                    {qr.state === 'verification_required' && (
+                    {qr.state === 'verification_required' && !verifyAutoOption[account.id] && (
                       <div className="verify-panel">
                         <div className="verify-options">
                           {(verifyOptions[account.id] ?? []).map((option) => (

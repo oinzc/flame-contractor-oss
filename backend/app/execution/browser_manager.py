@@ -95,12 +95,19 @@ CHROMIUM_LAUNCH_ARGS = ["--disable-features=CalculateNativeWinOcclusion"]
 
 # 扫码后抖音弹「身份验证」风控时的引导文案：验证方式与验证码都在页面里
 # 操作，扫码人手机上点完登录就没有后续了——所以必须由维护者在控制台的
-# 登录面板远程选方式/输验证码，而不是等谁去 App 里点确认。
+# 登录面板远程输验证码，而不是等谁去 App 里点确认。
 LOGIN_VERIFICATION_GUIDANCE = (
     "抖音要求身份验证（新环境登录的风控）。请在下方选择验证方式并输入验证码"
     "完成验证（验证码会发到该账号绑定的手机/邮箱，需要向账号本人索取）；"
     "推荐先试「授权历史记录验证」。验证通过后登录会自动继续；"
     "等待中，超时后请重新发起。"
+)
+# 默认自动选择的验证方式：短信最常见、账号本人最容易拿到码。自动点选失败
+# 时回退为手动按钮（其他方式仍可改选）。
+LOGIN_VERIFICATION_AUTO_OPTION = "手机发送验证码"
+LOGIN_VERIFICATION_SMS_PENDING = (
+    "已自动选择「手机发送验证码」，验证码已发送到该账号绑定的手机。"
+    "请向账号本人索取验证码并在下方输入提交；收不到可改选其他方式。"
 )
 
 
@@ -129,6 +136,8 @@ class LoginFlow:
     self_nickname: str | None = None
     # 「身份验证」远程交互：验证等待期间挂着的 DouyinChat，结束后置空
     chat: DouyinChat | None = None
+    # 已自动点选的验证方式（None = 尚未自动选择，仍展示手动按钮）
+    auto_option: str | None = None
 
 
 @dataclass
@@ -1272,7 +1281,7 @@ class BrowserManager:
         except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
             logger.warning("登录结果通知发送失败", exc_info=True)
 
-    async def _notify_login_verification(self, flow: LoginFlow) -> None:
+    async def _notify_login_verification(self, flow: LoginFlow, *, auto_sms: bool) -> None:
         """扫码后出现「身份验证」风控时尽早推送。
 
         这类验证要在我们浏览器的页面里选方式/输验证码，验证码又发到账号绑定
@@ -1282,14 +1291,22 @@ class BrowserManager:
         if not self._notifier.enabled:
             return
         name = self._account_name(flow.account_id)
-        try:
-            await self._notifier.send(
-                "扫码登录需要身份验证",
-                f"账号「{name}」扫码后抖音要求身份验证。请到控制台「账号」页的"
-                "登录面板选择验证方式并输入验证码（验证码发到该账号绑定的手机/"
-                f"邮箱，需要向账号本人索取），本流程还会等待约 {int(self._qr_login_timeout)} 秒。",
-                "timeSensitive",
+        if auto_sms:
+            title = "扫码登录需要身份验证"
+            content = (
+                f"账号「{name}」扫码后抖音要求身份验证，已自动选择"
+                "「手机发送验证码」。请向账号本人索取验证码，到控制台「账号」页"
+                f"登录面板输入提交（还会等待约 {int(self._qr_login_timeout)} 秒）。"
             )
+        else:
+            title = "扫码登录需要身份验证"
+            content = (
+                f"账号「{name}」扫码后抖音要求身份验证，自动选择验证方式失败。"
+                "请到控制台「账号」页登录面板手动选择验证方式并输入验证码"
+                f"（还会等待约 {int(self._qr_login_timeout)} 秒）。"
+            )
+        try:
+            await self._notifier.send(title, content, "timeSensitive")
         except Exception:  # noqa: BLE001 - 通知失败不影响登录流程本身
             logger.warning("身份验证提醒发送失败", exc_info=True)
 
@@ -1358,7 +1375,12 @@ class BrowserManager:
         if flow is None or flow.chat is None or flow.state != "verification_required":
             raise LookupError("当前没有等待身份验证的登录流程")
         options = await flow.chat.verification_options()
-        return {"state": flow.state, "detail": flow.detail, "options": options}
+        return {
+            "state": flow.state,
+            "detail": flow.detail,
+            "options": options,
+            "auto_option": flow.auto_option,
+        }
 
     async def click_verification_option(self, account_id: str, option: str) -> dict:
         """在「身份验证」弹窗里点选某个验证方式（按可见文案匹配）。"""
@@ -1467,12 +1489,15 @@ class BrowserManager:
             verification_seen = False
 
             async def watch_verification() -> None:
-                """并行盯「身份验证」风控弹窗：出现就及早改状态并推送提醒。
+                """并行盯「身份验证」风控弹窗：出现就自动选短信验证并推送提醒。
 
-                不改主等待循环的判据（登录与否仍只看会话列表），这里只负责
-                把「为什么还没登录」暴露给用户，避免白白等到超时才明白原因。
+                扫码人手机上点完登录就没有后续了，验证全部由维护者在控制台
+                完成：这里默认自动点选「手机发送验证码」（点选失败会在后续
+                轮询里重试，最多 3 次），维护者只需索取验证码并输入。
+                不改主等待循环的判据（登录与否仍只看会话列表）。
                 """
                 nonlocal verification_seen
+                click_attempts = 0
                 while True:
                     await self._sleep(5.0)
                     try:
@@ -1480,16 +1505,33 @@ class BrowserManager:
                             continue
                     except Exception:  # noqa: BLE001 - 检测失败按未出现处理
                         continue
-                    if verification_seen:
-                        continue
-                    verification_seen = True
-                    flow.state = "verification_required"
-                    flow.detail = LOGIN_VERIFICATION_GUIDANCE
-                    logger.warning(
-                        "截图扫码出现「身份验证」风控（账号 %s），延长等待并提醒",
-                        flow.account_id,
-                    )
-                    await self._notify_login_verification(flow)
+                    if not verification_seen:
+                        verification_seen = True
+                        flow.state = "verification_required"
+                        flow.detail = LOGIN_VERIFICATION_GUIDANCE
+                        logger.warning(
+                            "截图扫码出现「身份验证」风控（账号 %s），延长等待并提醒",
+                            flow.account_id,
+                        )
+                    if flow.auto_option is None and click_attempts < 3:
+                        click_attempts += 1
+                        picked = await chat.click_verification_option(
+                            LOGIN_VERIFICATION_AUTO_OPTION
+                        )
+                        if picked:
+                            flow.auto_option = LOGIN_VERIFICATION_AUTO_OPTION
+                            flow.detail = LOGIN_VERIFICATION_SMS_PENDING
+                            logger.warning(
+                                "已自动选择「%s」（账号 %s），等待维护者输入验证码",
+                                LOGIN_VERIFICATION_AUTO_OPTION,
+                                flow.account_id,
+                            )
+                            await self._notify_login_verification(flow, auto_sms=True)
+                        elif click_attempts >= 3:
+                            logger.warning(
+                                "自动选择验证方式失败，转手动（账号 %s）", flow.account_id
+                            )
+                            await self._notify_login_verification(flow, auto_sms=False)
 
             shooter = asyncio.create_task(shoot())
             verifier = asyncio.create_task(watch_verification())

@@ -430,6 +430,8 @@ export interface LoginVerificationOptions {
   detail: string | null
   /** 「身份验证」弹窗当前可见的验证方式文案 */
   options: string[]
+  /** 已自动点选的验证方式（如手机发送验证码）；非空时手动按钮隐藏 */
+  autoOption?: string | null
 }
 
 export interface LoginVerificationAction {
