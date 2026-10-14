@@ -672,6 +672,8 @@ LoginState = Literal[
     # 截图扫码：已开始渲染登录页，二维码尚未可读（慢网络下可达数十秒）
     "preparing",
     "waiting_scan",
+    # 扫码后抖音弹「身份验证」风控：等待维护者在面板选方式/输验证码
+    "verification_required",
     "succeeded",
     "failed",
     "expired",
