@@ -572,6 +572,8 @@ class LoginVerificationOptionsRead(APIBase):
     state: str
     detail: str | None
     options: list[str]
+    # 已自动点选的验证方式；非空时前端隐藏手动方式按钮，聚焦验证码输入
+    auto_option: str | None = None
 
 
 class LoginVerificationActionRead(APIBase):
