@@ -54,7 +54,11 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
           if (status.state !== 'idle') {
             setQrStates((previous) => ({ ...previous, [account.id]: status }))
           }
-          if (status.state === 'preparing' || status.state === 'waiting_scan') {
+          if (
+            status.state === 'preparing' ||
+            status.state === 'waiting_scan' ||
+            status.state === 'verification_required'
+          ) {
             // 接管轮询：持续刷新二维码截图并跟踪登录结果
             void pollQrLogin(account.id)
           }
@@ -339,6 +343,9 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                     浏览器已打开，请用抖音 App 扫码。完成后本卡片自动更新。
                   </div>
                 )}
+                {login && login.state === 'verification_required' && (
+                  <div className="flow-hint gold">{login.detail}</div>
+                )}
                 {login && login.state === 'succeeded' && (
                   <div className="flow-hint ember">
                     登录成功，账号已变为正常。
@@ -356,9 +363,12 @@ export default function AccountsPage({ accounts, onChanged, onCreateAccount, onO
                 {qr?.state === 'preparing' && (
                   <div className="flow-hint gold">正在渲染登录页，二维码生成后会自动显示…</div>
                 )}
-                {qr?.state === 'waiting_scan' && (
+                {(qr?.state === 'waiting_scan' || qr?.state === 'verification_required') && (
                   <div className="qr-panel">
                     <QrCodeImage accountId={account.id} tick={qrTicks[account.id] ?? 0} />
+                    {qr.state === 'verification_required' && (
+                      <div className="flow-hint gold">{qr.detail}</div>
+                    )}
                     <div className="qr-hint">
                       截图扫码模式：打开抖音 App → 左上角「≡」→ 扫一扫 → 对准上方二维码。
                       二维码自动刷新，如手机端提示过期请稍候片刻再扫。
