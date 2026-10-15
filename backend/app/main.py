@@ -76,6 +76,8 @@ def create_app(
             notifier=notifier,
             auth_check_tolerance=settings.auth_check_tolerance,
             login_check_timeout=settings.login_check_timeout,
+            send_cooldown=settings.send_cooldown_seconds,
+            send_cooldown_jitter=settings.send_cooldown_jitter_seconds,
         )
 
     @asynccontextmanager
@@ -110,6 +112,7 @@ def create_app(
                 failure_streak_limit=settings.failure_streak_limit,
                 scheduled_always_send=settings.scheduled_always_send,
                 fixed_time_grace_minutes=settings.fixed_time_grace_minutes,
+                max_concurrent_sends=settings.max_concurrent_sends,
             )
             sched.start()
         else:

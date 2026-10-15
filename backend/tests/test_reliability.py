@@ -1,6 +1,7 @@
 """M6-2：网络预检延迟、有界重试、发送冷却、窗口过期策略。"""
 
 import asyncio
+import random
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -184,7 +185,7 @@ def test_window_expired_skips_instead_of_late_send(engine):
 
 
 def test_send_cooldown_between_targets(settings, engine):
-    """多好友发送：好友之间插入冷却间隔（首轮不等待）。"""
+    """多好友发送：好友之间插入随机冷却间隔（首轮不等待，抖动可复现）。"""
     cooldown_calls: list[float] = []
 
     async def recording_sleep(seconds: float) -> None:
@@ -195,6 +196,10 @@ def test_send_cooldown_between_targets(settings, engine):
         conversation_titles=("好友A", "好友B"),
         right_title="好友A",
     )
+    jitter = 4.0
+    # 固定种子下 uniform 可复现：期望冷却值在测试里独立重算一遍
+    expected = 5.0 + random.Random(1234).uniform(0, jitter)
+    assert 5.0 <= expected < 9.0
     manager = BrowserManager(
         engine,
         settings,
@@ -207,6 +212,8 @@ def test_send_cooldown_between_targets(settings, engine):
         confirm_timeout=0.2,
         search_timeout=0.2,
         send_cooldown=5.0,
+        send_cooldown_jitter=jitter,
+        rng=random.Random(1234),
         sleep=recording_sleep,
     )
 
@@ -220,7 +227,18 @@ def test_send_cooldown_between_targets(settings, engine):
     # 好友B 的右侧标题静态返回「好友A」会被判 ambiguous，不影响本测试关注的冷却断言
     assert result["overall"] in ("ok", "partial")
     assert len(result["results"]) == 2
-    assert cooldown_calls.count(5.0) == 1  # 两个好友之间恰好一次冷却（其余为内部等待）
+    assert cooldown_calls.count(expected) == 1  # 两个好友之间恰好一次随机冷却（其余为内部等待）
+
+
+def test_cooldown_delay_bounds_and_disabled_jitter(settings, engine):
+    """冷却抖动：开启时落在 [下限, 下限+抖动) 区间；关闭（默认 0）时保持固定值。"""
+    manager = BrowserManager(engine, settings, send_cooldown=3.0, send_cooldown_jitter=5.0)
+    for _ in range(50):
+        delay = manager._cooldown_delay()
+        assert 3.0 <= delay < 8.0
+
+    fixed = BrowserManager(engine, settings, send_cooldown=3.0)
+    assert fixed._cooldown_delay() == 3.0
 
 
 def _single_page_factory(page: FakePage):
