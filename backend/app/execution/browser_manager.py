@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -232,6 +233,7 @@ class BrowserManager:
         send_poll_interval: float = SEND_POLL_INTERVAL,
         send_stabilize_polls: int = SEND_STABILIZE_POLLS,
         send_cooldown: float = 3.0,
+        send_cooldown_jitter: float = 0.0,
         network_checker: Callable[[], Awaitable[bool]] | None = None,
         qr_login_timeout: float = 300.0,
         qr_screenshot_interval: float = 6.0,
@@ -239,6 +241,7 @@ class BrowserManager:
         search_timeout: float = 12.0,
         notifier: Notifier | None = None,
         sleep=asyncio.sleep,
+        rng: random.Random | None = None,
     ):
         self._engine = engine
         self._settings = settings
@@ -267,10 +270,24 @@ class BrowserManager:
         self._confirm_timeout = confirm_timeout
         self._search_timeout = search_timeout
         self._send_cooldown = send_cooldown
+        # 冷却随机抖动上限：实际等待 = send_cooldown + uniform(0, jitter)，
+        # 消除固定间隔的机器节律；0 = 关闭抖动（保持固定间隔，测试默认）。
+        self._send_cooldown_jitter = max(0.0, float(send_cooldown_jitter))
+        self._rng = rng or random.Random()
         self._network_checker = network_checker
         self._qr_login_timeout = qr_login_timeout
         self._qr_screenshot_interval = qr_screenshot_interval
         self._sleep = sleep
+
+    def _cooldown_delay(self) -> float:
+        """好友间冷却时长：下限 + 随机抖动。
+
+        固定间隔（每天精确 3 秒）是明显的自动化节律特征；抖动后每次等待
+        落在 [send_cooldown, send_cooldown + jitter] 区间，下限仍保证冷却效果。
+        """
+        if self._send_cooldown_jitter <= 0:
+            return self._send_cooldown
+        return self._send_cooldown + self._rng.uniform(0, self._send_cooldown_jitter)
 
     def _start_send_progress(self, account_id: str, total: int) -> None:
         self._send_progress[account_id] = SendProgress(
@@ -2280,9 +2297,9 @@ class BrowserManager:
                         current_target=target.nickname_snapshot,
                         stage="冷却中" if index > 0 and self._send_cooldown > 0 else "定位并发送",
                     )
-                    # M6-2 发送冷却：好友之间留出间隔，降低频率风险（首轮不等待）
+                    # M6-2 发送冷却：好友之间留出随机间隔，降低频率风险（首轮不等待）。
                     if index > 0 and self._send_cooldown > 0:
-                        await self._sleep(self._send_cooldown)
+                        await self._sleep(self._cooldown_delay())
                         self._update_send_progress(
                             account_id,
                             stage="定位并发送",

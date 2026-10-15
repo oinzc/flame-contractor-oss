@@ -1457,3 +1457,109 @@ def test_auto_scan_retries_immediately_after_unconfirmed_failure(engine):
         sleep=asyncio.sleep, loop_interval=0,
     )
     assert sched._auto_scan_due(account, clock()) is True
+
+
+def test_max_concurrent_sends_queues_due_accounts(engine):
+    """全局发送并发=1：两账号同时到点只派发一个，另一个保持 pending 下一轮错峰。
+
+    多账号集中部署在同一台机器/同一出口 IP 时，同时开多个浏览器会话既是
+    风控峰值信号也是内存压力；被闸门挡下的计划不抢租约、保持 pending，
+    由下一轮 tick 重试（60 秒后），窗口过期/宽限检查仍发生在真正派发时。
+    """
+    account_a = make_account(engine, send_time_hhmm="21:30", display_name="账号A")
+    account_b = make_account(engine, send_time_hhmm="21:30", display_name="账号B")
+    calls: list[str] = []
+    first_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def send(account_id: str, **kwargs) -> dict:
+        calls.append(account_id)
+        if len(calls) == 1:
+            first_started.set()
+            await release.wait()
+        return {"overall": "ok"}
+
+    # 21:30 Asia/Shanghai = 13:30 UTC
+    clock = make_clock(datetime(2026, 8, 27, 13, 30, 0, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+        max_concurrent_sends=1,
+    )
+
+    async def scenario() -> None:
+        # 第一轮：两个计划都已到点，但全局并发=1，只派发先处理的一个
+        result = await sched.tick()
+        assert result["dispatched"] == 1
+        await first_started.wait()
+        assert len(calls) == 1, "并发闸门生效：第二个账号本轮未被派发"
+        dispatched_id = calls[0]
+        queued_id = account_b.id if dispatched_id == account_a.id else account_a.id
+        with Session(engine) as session:
+            statuses = {
+                row.account_id: row.status
+                for row in session.exec(select(SendSchedule)).all()
+            }
+        assert statuses[dispatched_id] == ScheduleStatus.SENDING
+        assert statuses[queued_id] == ScheduleStatus.PENDING, "闸门挡下的计划必须保持 pending"
+
+        release.set()
+        await sched.wait_idle()
+
+        # 第二轮（60 秒后）：第二个账号错峰派发并成功
+        clock.set(datetime(2026, 8, 27, 13, 31, 0, tzinfo=timezone.utc))
+        result = await sched.tick()
+        assert result["dispatched"] == 1
+        await sched.wait_idle()
+        assert sorted(calls) == sorted([account_a.id, account_b.id])
+        with Session(engine) as session:
+            statuses = {
+                row.account_id: row.status
+                for row in session.exec(select(SendSchedule)).all()
+            }
+        assert statuses[account_a.id] == ScheduleStatus.SUCCEEDED
+        assert statuses[account_b.id] == ScheduleStatus.SUCCEEDED
+
+    asyncio.run(scenario())
+
+
+def test_max_concurrent_sends_allows_parallel_when_raised(engine):
+    """并发上限>1：两账号同时到点可以并行派发（默认闸门不改变多并发配置的行为）。"""
+    account_a = make_account(engine, send_time_hhmm="21:30", display_name="账号A")
+    account_b = make_account(engine, send_time_hhmm="21:30", display_name="账号B")
+    calls: list[str] = []
+    both_running = asyncio.Event()
+
+    async def send(account_id: str, **kwargs) -> dict:
+        calls.append(account_id)
+        if len(calls) == 2:
+            both_running.set()
+        return {"overall": "ok"}
+
+    clock = make_clock(datetime(2026, 8, 27, 13, 30, 0, tzinfo=timezone.utc))
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_account=send,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+        retry_max_count=0,
+        window_expiry_policy="dispatch",
+        max_concurrent_sends=2,
+    )
+
+    async def scenario() -> None:
+        result = await sched.tick()
+        assert result["dispatched"] == 2
+        await both_running.wait()
+        await sched.wait_idle()
+        assert sorted(calls) == sorted([account_a.id, account_b.id])
+
+    asyncio.run(scenario())

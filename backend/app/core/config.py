@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     notify_on_success: bool = True
     # 连续失败熔断阈值：连续 N 次自动发送终态失败后账号转 cooldown，0=不熔断
     failure_streak_limit: int = 3
+    # 好友间发送冷却下限（秒）：批量发送时两个好友之间至少等待的时长
+    send_cooldown_seconds: float = 3.0
+    # 好友间发送冷却随机抖动上限（秒）：实际等待 = 下限 + uniform(0, 抖动)，默认
+    # 3~8 秒随机，消除「固定 3 秒」的机器节律特征；0 表示回到固定间隔。
+    send_cooldown_jitter_seconds: float = 5.0
+    # 自动调度同时发送的账号数上限：多账号同时到点时未派发的计划保持 pending，
+    # 由下一轮 tick（60 秒后）重试，形成天然错峰；同时避免同一出口 IP / 设备
+    # 在同一时刻并行多个浏览器会话。1 = 全局串行（好友级准点派发不受此限，
+    # 准点语义优先）。
+    max_concurrent_sends: int = 1
     # 登录判定容忍次数：连续 N 次判定失败才把账号标记为登录失效。单次判定抖动
     # （页面加载慢、临时验证页、网络波动）不该锁死账号——调度器会跳过非 HEALTHY
     # 账号的扫描与发送，一次误判就会让账号停摆且只能人工重新扫码恢复。

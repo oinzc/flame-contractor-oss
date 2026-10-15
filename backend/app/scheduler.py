@@ -156,6 +156,7 @@ class Scheduler:
         failure_streak_limit: int = 3,
         scheduled_always_send: bool = False,
         fixed_time_grace_minutes: int = FIXED_TIME_GRACE_MINUTES_DEFAULT,
+        max_concurrent_sends: int = 1,
         rng: random.Random | None = None,
         sleep=asyncio.sleep,
         clock: Callable[[], datetime] | None = None,
@@ -184,6 +185,10 @@ class Scheduler:
         self._failure_streak_limit = failure_streak_limit
         self._scheduled_always_send = scheduled_always_send
         self._fixed_time_grace_minutes = max(0, int(fixed_time_grace_minutes))
+        # 全局发送并发上限：多账号同时到点时未派发的计划保持 pending，由下一轮
+        # tick 重试形成错峰，避免同一出口 IP / 设备同一时刻并行多个浏览器会话。
+        # 好友级准点派发（_dispatch_due_targets）不受此限——准点语义优先。
+        self._max_concurrent_sends = max(1, int(max_concurrent_sends))
         self._rng = rng or random.Random()
         self._sleep = sleep
         self._clock = clock or utc_now
@@ -495,6 +500,11 @@ class Scheduler:
                 break
             if schedule.id in self._gave_up:
                 continue  # 重试已耗尽，保持终态
+            if len(self._running) >= self._max_concurrent_sends:
+                # 全局发送并发已满：本轮不抢租约、不派发，计划保持 pending 留到
+                # 下一轮（60 秒后）重试——错峰即排队。窗口过期 / 宽限检查仍发生
+                # 在真正派发那一刻，不会因此引入深夜补发。
+                continue
             next_at = self._next_attempt_at.get(schedule.id)
             if next_at is not None and now < next_at:
                 continue  # 退避窗口内，未到下次尝试时间

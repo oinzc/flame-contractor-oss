@@ -95,6 +95,7 @@ powershell -ExecutionPolicy Bypass -File scripts\runtime\manage_runtime.ps1 -Act
 后端启动时自动挂载**进程内调度器**（APScheduler，`app/state/scheduler`）。它只负责「哪个账号今天何时发——账号级随机取时 + 数据库租约 + 同账号互斥 + 崩溃恢复」，实际每个好友的发送仍复用上面已验证的 `run_send` 链路。
 
 - 每个启用账号在它自己的 `send_window`（默认 `20:00-22:00`，按账号 `timezone` 换算）内随机取**一个**发送时刻；
+- **全局发送并发上限（`FLAME_MAX_CONCURRENT_SENDS`，默认 1）**：多账号同时到点时未派发的计划保持 pending，由下一轮 tick（60 秒后）重试形成天然错峰——多账号集中部署在同一台机器/同一出口 IP 时，避免同一时刻并行多个浏览器会话（风控峰值信号 + 内存压力）。窗口过期/宽限检查仍发生在真正派发时，不会因此深夜补发；好友级准点派发不受此限（准点语义优先）；
 - 到点后由同一个浏览器会话批量发送该账号所有启用好友（同账号并发 = 1，绝不同时开两个会话）；
 - 后台每 60 秒轮询一次：为每个启用账号懒生成当日计划（幂等，`(account, business_date)` 唯一），到点抢租约并触发发送；节拍**对齐整分钟边界并留 20ms 余量**，到点比较留 **1 秒容差**——事件循环的定时器可能比目标时刻早几毫秒返回，否则固定时刻（如 `02:22`）会被判成「还没到点」而整整推迟一分钟；
 - **好友级准点优先**：设了独立 `send_time_hhmm` 的好友会从账号批量中剔除，并在同一轮 tick 里**先于账号批量**派发（批量等它跑完再开跑）；这样「要准点最先发」的那一个好友能在整点第一个真正发出，而不是被批量抢走浏览器后挤到下一轮（60 秒后）；
@@ -169,7 +170,7 @@ FLAME_BARK_URL=https://api.day.app/<你的device_key>
 - **登录判定预算（`FLAME_LOGIN_CHECK_TIMEOUT`，默认 20 秒）**：页面打开后等会话列表出现的时长。判定成功立即返回，因此放宽只影响「确实没登录」时的确认耗时，不拖慢正常路径。原为 8 秒，而冷启动实测「打开会话页 4.3s + 判定 1.3s」已逼近上限，慢网络下列表渲染稍晚就会被误判（截图扫码路径用的是 120 秒，同一判据差 15 倍）；
 - **页面未加载 ≠ 登录失效**：若判定失败时页面停在 Chromium 错误页（`chrome-error://`），归类为网络问题——发送链路返回 `network_unavailable`（调度器延迟重试、不消耗尝试次数、不改账号状态），扫描/定位校验返回 `error`。否则一次网络抖动会以「请重新扫码」的面目出现，而用户照着扫码也解决不了问题。判定失败同时落一张现场截图（`artifacts/<账号>/shots/*-auth_check_failed.png`）并记录页面 URL，便于事后分辨「确实登出」与「慢/验证页/风控」；
 - **有界重试**：发送异常/部分失败在窗口内指数退避自动重试（默认 2 次），复用发送幂等，绝不重复发送；重试耗尽才转人工核；
-- **发送冷却**：好友之间默认间隔 3 秒；
+- **发送冷却**：好友之间默认间隔 **3–8 秒随机**（`FLAME_SEND_COOLDOWN_SECONDS` 下限 + `FLAME_SEND_COOLDOWN_JITTER_SECONDS` 抖动上限，抖动置 0 回到固定间隔）——固定秒级间隔是明显的自动化节律特征；
 - **窗口过期策略**：`FLAME_WINDOW_EXPIRY_POLICY=skip`（默认）——窗口已结束的计划不再深夜补发，转 skipped 并通知；`dispatch` 恢复到点即发；
 - **连续失败熔断**：`FLAME_FAILURE_STREAK_LIMIT`（默认 3）——连续 N 次终态失败自动暂停该账号调度（cooldown）并 critical 推送；
 - **常驻自恢复**：`scripts\runtime\manage_runtime.ps1 -Action Install` 安装当前用户计划任务，登录自启、失败重试、健康监测并持有系统唤醒请求；旧 `scripts/autostart` 只启动一次，不再推荐；
@@ -251,6 +252,13 @@ M1–M11 功能已完成，当前处于**本机 Docker 运行 + 使用验收与�
   - `StarletteDeprecationWarning`：`httpx` + `starlette.testclient` 组合已弃用，官方建议改用 `httpx2`（来源 `fastapi/testclient.py:1`，依赖声明在 `backend/requirements.txt:9`）。属**依赖级变更**，会影响容器构建与 `constraints-docker.txt`，需单独评估；
   - ~~`SAWarning`（template_pool_item 删除行数不匹配）~~ **已于 2026-10-12 修复**（`bb27f53`：`delete_template` 改用批量 `delete()`；根因是 ORM 先删父表 message_template，DB 级 `ondelete="CASCADE"` 已带走池项，导致 ORM 排队的子表 DELETE 匹配 0 行）。
 - [x] 确认 Bark 密钥暴露风险（2026-10-13）：GitHub 仓库 `<owner>/flame-contractor` 为**私有**，数据分支携带 `backend/.env`（含 Bark key）不构成公开泄露。若仓库日后转为公开，需**先轮换密钥**再清理数据分支历史。
+
+### 2026-10-14 风控行为增强（多账号集中部署预备）
+
+- **好友间冷却随机化**：固定 3 秒 → **3–8 秒随机**（`FLAME_SEND_COOLDOWN_SECONDS`=3.0 下限 + `FLAME_SEND_COOLDOWN_JITTER_SECONDS`=5.0 抖动上限，抖动置 0 回到固定间隔），消除「每天精确 3 秒」的自动化节律特征；`BrowserManager` 支持 `rng` 注入保证测试可复现；
+- **全局发送并发上限**：`FLAME_MAX_CONCURRENT_SENDS`（默认 1）——多账号同时到点时未派发的计划保持 pending、由下一轮 tick（60 秒后）重试形成天然错峰，避免同一台机器/同一出口 IP 同一时刻并行多个浏览器会话（风控峰值 + 内存压力）。窗口过期/宽限检查仍发生在真正派发时，不引入深夜补发；好友级准点派发不受此限（准点语义优先）；
+- 背景：评估「朋友的账号集中部署到同一台机器」的风控面（出口 IP、设备硬件指纹、行为节律三维度）。**指纹伪装明确不做**（安全约定：不与平台进入对抗），本增强只做行为层缓解；同机多账号的设备指纹集中仍是已知残留风险，规模建议控制在个位数；
+- 验证：`tests/test_reliability.py`、`tests/test_scheduler.py`、`tests/test_api.py` 全部通过（含新增冷却抖动、并发闸门排队/放行共 3 项测试）。
 
 ### 背景与决策记录（历史）
 
