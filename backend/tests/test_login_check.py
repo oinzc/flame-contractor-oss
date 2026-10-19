@@ -74,3 +74,58 @@ def test_run_send_still_auth_expired_when_never_renders(settings):
         account = _account_with_text_target(client)
         result = client.post(f"/api/accounts/{account['id']}/send").json()
         assert result["overall"] == "auth_expired", result
+
+
+def test_run_send_reloads_once_before_concluding_auth_expired(settings):
+    """列表始终不出现时：判定前应先重载复判一次，而不是直接计入失效。"""
+    page = FakePage(
+        logged_in=False,
+        become_logged_after=float('inf'),
+        conversation_titles=("好友A",),
+        right_title="好友A",
+    )
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = _account_with_text_target(client)
+        result = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert result["overall"] == "auth_expired", result
+        assert page.reloads == 1, "无登出实证时必须先重载复判一次"
+
+
+def test_run_send_recovers_after_reload_when_page_stuck(settings):
+    """页面卡住（骨架屏）、重载后列表恢复 → 不误判 auth_expired，应发送成功。
+
+    背景：2026-10-19 02:22 会话页连续两次卡在骨架屏，活会话被误标失效并
+    停掉调度；本测试锁定「重载复判」这条恢复路径。
+    """
+    page = FakePage(
+        logged_in=False,
+        become_logged_after=float('inf'),
+        logged_in_after_reload=True,
+        conversation_titles=("好友A",),
+        right_title="好友A",
+    )
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = _account_with_text_target(client)
+        result = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert result["overall"] == "ok", result
+        assert result["results"][0]["status"] == "succeeded", result
+        assert page.reloads == 1
+
+
+def test_run_send_skips_reload_when_logged_out_signal_present(settings):
+    """页面已有登出实证（跳到登录页）→ 无需重载，直接计入失效判定。"""
+    page = FakePage(
+        logged_in=False,
+        become_logged_after=float('inf'),
+        conversation_titles=("好友A",),
+        right_title="好友A",
+    )
+    page.url = "https://www.douyin.com/login?from=chat"
+    app = make_app(settings, [page])
+    with TestClient(app) as client:
+        account = _account_with_text_target(client)
+        result = client.post(f"/api/accounts/{account['id']}/send").json()
+        assert result["overall"] == "auth_expired", result
+        assert page.reloads == 0
