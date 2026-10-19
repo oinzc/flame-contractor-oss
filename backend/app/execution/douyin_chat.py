@@ -634,6 +634,18 @@ class DouyinChat:
         )
         await self._sleep(3)
 
+    async def reload_chat_page(self) -> None:
+        """整页重载会话页（登录判定复判用）。
+
+        会话页偶发卡在骨架屏：页面壳已加载、URL 正常，但会话列表的数据接口
+        迟迟不返回，等满判定超时也看不到列表。此时整页重载一次通常即可恢复；
+        重载本身失败（网络瞬断、执行上下文销毁等）直接抛给调用方处理。
+        """
+        await self.page.reload(
+            wait_until="domcontentloaded", timeout=CHAT_PAGE_TIMEOUT_MS
+        )
+        await self._sleep(3)
+
     async def is_logged_in(self) -> bool:
         element = await self.page.query_selector(_s.CONVERSATION_LIST)
         return element is not None

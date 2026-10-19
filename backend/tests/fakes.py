@@ -96,6 +96,7 @@ class FakePage:
         sticker_items: list[str] = (),
         sticker_button_available: bool = True,
         sticker_panel_available: bool = True,
+        logged_in_after_reload: bool = False,
     ):
         self.logged_in = logged_in
         self._become_logged_after = become_logged_after
@@ -127,6 +128,9 @@ class FakePage:
         self.image_bubble_render = image_bubble_render
         self.image_uploaded = False
         self.attachment_clicked = False
+        # 重载后列表才出现（模拟骨架屏卡住、重载恢复）；reloads 记录重载次数
+        self.logged_in_after_reload = logged_in_after_reload
+        self.reloads = 0
         self.sticker_items = list(sticker_items)
         self.sticker_button_available = sticker_button_available
         self.sticker_panel_available = sticker_panel_available
@@ -163,6 +167,14 @@ class FakePage:
     async def goto(self, url: str, **kwargs) -> None:
         self.gotos.append(url)
         self.goto_kwargs.append(kwargs)
+
+    async def reload(self, **kwargs) -> None:
+        """整页重载：logged_in_after_reload 时模拟重载后列表正常渲染。"""
+        self.reloads += 1
+        if self.logged_in_after_reload:
+            self.logged_in = True
+            self._list_polls = 0
+            self._become_logged_after = None
 
     async def query_selector(self, selector: str):
         if selector == CONVERSATION_LIST:

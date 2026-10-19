@@ -1723,6 +1723,42 @@ class BrowserManager:
             )
             return SESSION_NETWORK_PROBLEM
 
+        # 列表没出现 ≠ 登出。会话页偶发卡在骨架屏：页面壳与 URL 都正常，但列表
+        # 数据接口迟迟不返回，等满判定超时也看不到列表。2026-10-19 02:22 实测
+        # 连续两次冷启动都撞上，把仍然有效的会话误标失效、停掉调度并催用户
+        # 重新扫码（事后用同一 profile 探测，列表 5 秒即出现）。因此：只要页面
+        # 上没有「确实已登出」的实证，先整页重载再判一次，重载后仍失败才计入
+        # 失效判定——宁可多花几十秒，也不把活会话误杀。
+        if not await self._has_logged_out_signal(chat):
+            logger.warning(
+                "账号 %s 登录判定未通过且无登出实证（url=%s），重载会话页后复判",
+                account_id,
+                page_url,
+            )
+            try:
+                await chat.reload_chat_page()
+            except Exception as exc:  # noqa: BLE001 - 重载失败按原判定路径继续
+                logger.warning(
+                    "账号 %s 会话页重载失败（%s），按原判定继续",
+                    account_id,
+                    type(exc).__name__,
+                )
+            else:
+                if await chat.wait_logged_in(
+                    timeout=self._login_check_timeout,
+                    poll_interval=self._login_poll_interval,
+                ):
+                    self._note_auth_ok(account_id)
+                    return SESSION_OK
+                page_url = self._page_url(chat)
+                if self._looks_like_load_failure(page_url):
+                    logger.warning(
+                        "账号 %s 重载后页面仍未正常加载（url=%s），按网络异常处理、不计入失效判定",
+                        account_id,
+                        page_url,
+                    )
+                    return SESSION_NETWORK_PROBLEM
+
         # 留现场：截图 + 页面 URL。没有它只能靠猜是「慢」「验证页」还是真登出。
         evidence = await self._capture_shot(chat, account_id, "auth_check_failed")
         self._auth_evidence[account_id] = {"page_url": page_url, "screenshot": evidence}
@@ -1732,6 +1768,25 @@ class BrowserManager:
 
         marked = self._mark_auth_expired(account_id)
         return SESSION_AUTH_EXPIRED if marked else SESSION_AUTH_UNCONFIRMED
+
+    @staticmethod
+    async def _has_logged_out_signal(chat: DouyinChat) -> bool:
+        """页面上是否有「确实已登出」的正面证据（登录跳转或扫码登录入口）。
+
+        只用于决定「要不要先重载复判」：检测不到并不证明已登录（可能是骨架屏、
+        风控页等），所以复判失败后仍走原有的容忍计数，不因「无实证」而放过
+        真正的登出。
+        """
+        page = getattr(chat, "page", None)
+        if page is None:
+            return False
+        url = (getattr(page, "url", None) or "").lower()
+        if "login" in url:
+            return True
+        try:
+            return await page.locator("text=扫码登录").count() > 0
+        except Exception:  # noqa: BLE001 - 检测尽力而为，失败按「无实证」处理
+            return False
 
     @staticmethod
     def _looks_like_load_failure(page_url: str | None) -> bool:
