@@ -30,6 +30,7 @@ from .core.config import (
     AUTO_SCAN_INTERVAL_MIN_HOURS,
     Settings,
 )
+from .core.errors import describe_exception, discard_task_result
 from .models import (
     Account,
     AccountStatus,
@@ -143,6 +144,7 @@ class Scheduler:
         auto_scan_interval_hours: int = DEFAULT_AUTO_SCAN_INTERVAL_HOURS,
         auto_scan_initial_delay: float = DEFAULT_AUTO_SCAN_INITIAL_DELAY,
         auto_scan_guard_minutes: int = DEFAULT_AUTO_SCAN_GUARD_MINUTES,
+        auto_scan_timeout: float = 900.0,
         notifier: "Notifier | None" = None,
         loop_interval: float = 60.0,
         lease_seconds: float = DEFAULT_LEASE_SECONDS,
@@ -199,6 +201,9 @@ class Scheduler:
         self._send_tasks: set[asyncio.Task] = set()
         self._auto_scan_tasks: set[asyncio.Task] = set()
         self._auto_scan_running: set[str] = set()
+        # 自动同步的兜底预算：回调一旦挂住，_auto_scan_running 会永久占住该账号，
+        # 之后每轮都被自己的上一轮挡住；宁可放弃这次同步，也要把名额放回去。
+        self._auto_scan_timeout = max(60.0, float(auto_scan_timeout))
         self._auto_scan_next_attempt_at: dict[str, datetime] = {}
         self._auto_scan_not_before: datetime | None = None
         self._stopping = False
@@ -208,6 +213,9 @@ class Scheduler:
         self._next_attempt_at: dict[str, datetime] = {}
         self._network_deferrals: dict[str, int] = {}
         self._gave_up: set[str] = set()
+        # 好友级准点失败推送去重：(target_ids, 业务日)。派发每 tick 重试，
+        # 条件一直不解除时会重复撞同一堵墙，非要把手机刷成通知墙没有意义。
+        self._target_failure_notices: set[tuple[str, str]] = set()
 
     @property
     def enabled(self) -> bool:
@@ -756,16 +764,50 @@ class Scheduler:
             raise
         except Exception as exc:
             # 单好友精确派发失败：不自动重发，交由人工/下一轮（幂等键兜底）
-            await self._notify(
-                "准点发送未完成",
-                f"账号「{self._account_name(account_id)}」准点给「{label}」发送时中断"
-                f"（{type(exc).__name__}），不会自动重发，请人工复核。",
-                "timeSensitive",
+            reason = describe_exception(exc)
+            transient = getattr(exc, "status_code", None) == 409
+            logger.warning(
+                "账号 %s 准点发送「%s」未完成：%s（%s）",
+                account_id,
+                label,
+                reason,
+                "临时占用，下一轮继续尝试" if transient else "终态失败，不自动重发",
             )
+            # 派发是按 tick 重试的：条件没解除时会每 60 秒撞一次同样的墙。
+            # 同一好友同一业务日只推一次，避免把手机刷成同一个原因的通知墙。
+            if self._claim_target_failure_notice(account_id, target_ids):
+                if transient:
+                    message = (
+                        f"账号「{self._account_name(account_id)}」准点给「{label}」暂未发出"
+                        f"（{reason}）。系统会在宽限期内继续尝试，无需手动补发。"
+                    )
+                else:
+                    message = (
+                        f"账号「{self._account_name(account_id)}」准点给「{label}」发送时中断"
+                        f"（{reason}），不会自动重发，请人工复核。"
+                    )
+                await self._notify("准点发送未完成", message, "timeSensitive")
         else:
             await self._notify_target_result(account_id, label, result or {})
         finally:
             self._running.discard(account_id)
+
+    def _claim_target_failure_notice(
+        self, account_id: str, target_ids: list[str]
+    ) -> bool:
+        """同一好友同一业务日的失败推送只放行一次；返回 True 表示本次应推送。"""
+        now = self._clock()
+        with Session(self._engine) as session:
+            account = session.get(Account, account_id)
+        tz = ZoneInfo(account.timezone) if account is not None else ZoneInfo("UTC")
+        today = now.astimezone(tz).date().isoformat()
+        for key in [k for k in self._target_failure_notices if k[1] != today]:
+            self._target_failure_notices.discard(key)
+        key = (",".join(sorted(target_ids)), today)
+        if key in self._target_failure_notices:
+            return False
+        self._target_failure_notices.add(key)
+        return True
 
     async def _notify_target_result(self, account_id: str, label: str, result: dict) -> None:
         """好友级准点发送的单条回执。
@@ -904,7 +946,10 @@ class Scheduler:
             raise
         except Exception as exc:
             await self._handle_failure(
-                schedule_id, account_id, overall="error", detail=type(exc).__name__
+                schedule_id,
+                account_id,
+                overall="error",
+                detail=describe_exception(exc),
             )
         finally:
             self._running.discard(account_id)
@@ -1243,8 +1288,29 @@ class Scheduler:
     async def _run_auto_scan(self, account_id: str) -> None:
         if self._scan_account is None:
             return
+        # 子任务 + asyncio.wait：回调卡在浏览器 await 上时，wait 也能按时返回，
+        # 不会像 wait_for 那样等内部任务真正响应取消——那样等于没设超时。
+        inner = asyncio.create_task(self._scan_account(account_id))
         try:
-            result = await self._scan_account(account_id)
+            done, _pending = await asyncio.wait(
+                {inner}, timeout=self._auto_scan_timeout
+            )
+        except asyncio.CancelledError:
+            inner.cancel()
+            raise
+        finally:
+            if not inner.done():
+                inner.cancel()
+                inner.add_done_callback(discard_task_result)
+        if not done:
+            logger.warning(
+                "账号 %s 自动同步超过 %.0f 秒未结束，已放弃本次等待并释放同步名额",
+                account_id,
+                self._auto_scan_timeout,
+            )
+            return
+        try:
+            result = inner.result()
             overall = result.get("overall")
             if overall == "auth_expired":
                 if self._auth_failure_confirmed(account_id):

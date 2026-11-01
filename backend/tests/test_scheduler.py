@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from app.models import (
@@ -1049,6 +1050,46 @@ def test_target_send_failure_notifies_with_friend_name(engine):
     assert "示例好友" in content
     assert "未成功" in content
     assert level == "timeSensitive"
+
+
+def test_target_send_conflict_notifies_once_per_day_with_readable_reason(engine):
+    """占用类失败会随 tick 每 60 秒重试，但通知一天只该推一条，且要说人话。
+
+    2026-11-01 实测：账号被一次卡死的扫描占用两小时，好友级准点派发每分钟撞一次
+    同样的 409，手机连续弹出「发送时中断（HTTPException）」——既没说明卡在哪，
+    也没说该不该处理。
+    """
+    make_account(engine)
+    _make_exact_time_target(engine)
+    clock = make_clock(datetime(2026, 8, 27, 1, 0, tzinfo=timezone.utc))
+    notifier = RecordingNotifier()
+    calls: list[int] = []
+
+    async def send_targets(account_id: str, target_ids: list[str]) -> dict:
+        calls.append(1)
+        raise HTTPException(status_code=409, detail="账号正在扫描会话，暂不能发送")
+
+    sched = Scheduler(
+        engine,
+        settings=None,
+        send_targets=send_targets,
+        notifier=notifier,
+        clock=clock,
+        sleep=asyncio.sleep,
+        loop_interval=0,
+    )
+    for _ in range(3):
+        asyncio.run(sched.tick())
+        asyncio.run(sched.wait_idle())
+
+    assert len(calls) == 3, "占用未解除时应继续重试（宽限期内可自愈）"
+    failures = [item for item in notifier.sent if "准点发送未完成" in item[0]]
+    assert len(failures) == 1, "同一好友同一天只推一条，不能刷屏"
+    _, content, level = failures[0]
+    assert level == "timeSensitive"
+    assert "账号正在扫描会话" in content
+    assert "HTTPException" not in content
+    assert "继续尝试" in content
 
 
 def test_send_error_notification_uses_critical_level(engine):
