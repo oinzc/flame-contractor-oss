@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..core.config import Settings
+from ..core.errors import describe_exception, discard_task_result
 from ..models import (
     Account,
     AccountStatus,
@@ -239,6 +240,7 @@ class BrowserManager:
         qr_screenshot_interval: float = 6.0,
         confirm_timeout: float = 8.0,
         search_timeout: float = 12.0,
+        scan_timeout: float = 600.0,
         notifier: Notifier | None = None,
         sleep=asyncio.sleep,
         rng: random.Random | None = None,
@@ -269,6 +271,10 @@ class BrowserManager:
         self._send_stabilize_polls = send_stabilize_polls
         self._confirm_timeout = confirm_timeout
         self._search_timeout = search_timeout
+        # 扫描总预算：卡住的扫描必须能被收束，否则「扫描中」会永久占住账号的发送闸门。
+        self._scan_timeout = max(30.0, float(scan_timeout))
+        # 僵尸扫描判定阈值：超时收束本身失效（连 cancel 都挂住）时的最后一道放行线。
+        self._scan_stale_after = self._scan_timeout + 60.0
         self._send_cooldown = send_cooldown
         # 冷却随机抖动上限：实际等待 = send_cooldown + uniform(0, jitter)，
         # 消除固定间隔的机器节律；0 = 关闭抖动（保持固定间隔，测试默认）。
@@ -357,10 +363,52 @@ class BrowserManager:
         }
 
     def _active_scan(self, account_id: str) -> ScanProgress | None:
+        """该账号是否正在扫描；顺手释放「僵尸扫描」。
+
+        扫描跑在真实浏览器里，某个 Playwright 调用一旦挂住（页面主线程卡死、上下文
+        失效但 await 不返回），任务状态就会永远停在 running。而 running 是发送、
+        扫描、补采的共同闸门——卡一次就等于把该账号的续火全部锁死，且用户只会在
+        推送里看到一句「HTTPException」。这里按启动时间兜底：明显超过预算的直接判
+        失败并放行，宁可少一次官方快照，也不能锁死发送。
+        """
+        active: ScanProgress | None = None
+        stale: list[ScanProgress] = []
         for progress in reversed(list(self._scan_progress.values())):
-            if progress.account_id == account_id and progress.status == "running":
-                return progress
-        return None
+            if progress.account_id != account_id or progress.status != "running":
+                continue
+            if self._scan_is_stale(progress):
+                stale.append(progress)
+            elif active is None:
+                active = progress
+        for progress in stale:
+            logger.warning(
+                "账号 %s 的扫描任务 %s 已超过 %.0f 秒仍未结束（阶段：%s），判为僵尸扫描并释放占用",
+                account_id,
+                progress.task_id,
+                self._scan_stale_after,
+                progress.stage,
+            )
+            self._update_scan_progress(
+                progress.task_id,
+                status="failed",
+                stage="扫描超时",
+                current_item=None,
+                overall="error",
+                detail=(
+                    f"扫描超过 {int(self._scan_stale_after)} 秒仍未结束，已自动中止；"
+                    "本次不写入官方火花快照"
+                ),
+                finished_at=_utcnow(),
+            )
+        return active
+
+    def _scan_is_stale(self, progress: ScanProgress) -> bool:
+        started = progress.started_at
+        if started is None:
+            return False
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return (_utcnow() - started).total_seconds() > self._scan_stale_after
 
     @staticmethod
     def _scan_entries_from_json(value: str | None) -> list[dict]:
@@ -520,8 +568,45 @@ class BrowserManager:
         return self._scan_progress_view(progress)
 
     async def _run_scan_task(self, progress: ScanProgress) -> None:
+        """执行一次后台扫描，并保证「一定会收束」。
+
+        扫描体内的 Playwright 调用没有超时保护（页面主线程卡住时 await 永不返回），
+        所以这里用独立子任务 + asyncio.wait 拿回控制权：到点先把快照落成失败、
+        释放「扫描中」占用，再尽力取消浏览器侧操作——绝不等待它自愿结束，
+        否则账号的发送闸门会被这次扫描永久占住。
+        """
+        inner = asyncio.create_task(self._scan_chats_impl(progress.account_id, progress))
         try:
-            result = await self._scan_chats_impl(progress.account_id, progress)
+            done, _pending = await asyncio.wait({inner}, timeout=self._scan_timeout)
+        except asyncio.CancelledError:
+            inner.cancel()
+            raise
+        finally:
+            if not inner.done():
+                inner.cancel()
+                inner.add_done_callback(discard_task_result)
+        if not done:
+            logger.warning(
+                "账号 %s 会话扫描超过 %.0f 秒未结束，已中止并释放发送闸门",
+                progress.account_id,
+                self._scan_timeout,
+            )
+            self._update_scan_progress(
+                progress.task_id,
+                status="failed",
+                stage="扫描超时",
+                current_item=None,
+                overall="error",
+                detail=(
+                    f"扫描超过 {int(self._scan_timeout)} 秒未结束，已中止；"
+                    "本次不写入官方火花快照，发送不受影响"
+                ),
+                entries=progress.entries or [],
+                finished_at=_utcnow(),
+            )
+            return
+        try:
+            result = inner.result()
             overall = result["overall"]
             if overall == "ok":
                 entries = result["entries"]
@@ -563,7 +648,7 @@ class BrowserManager:
                 stage="流程中断",
                 current_item=None,
                 overall="error",
-                detail=type(exc).__name__,
+                detail=describe_exception(exc),
                 entries=progress.entries or [],
                 finished_at=_utcnow(),
             )
@@ -1785,11 +1870,11 @@ class BrowserManager:
                     progress_callback=on_scan_progress if progress is not None else None,
                 )
             except Exception as exc:
-                return {"overall": "error", "detail": type(exc).__name__, "entries": []}
+                return {"overall": "error", "detail": describe_exception(exc), "entries": []}
             self._touch_verified(account_id)
             return {"overall": "ok", "detail": None, "entries": entries}
         except Exception as exc:
-            return {"overall": "error", "detail": type(exc).__name__, "entries": []}
+            return {"overall": "error", "detail": describe_exception(exc), "entries": []}
         finally:
             if context is not None:
                 try:
@@ -1875,11 +1960,32 @@ class BrowserManager:
             return result.model_dump()
 
     async def run_auto_scan(self, account_id: str) -> dict:
-        """执行一次由调度器触发的扫描，并在完成后回写已有对象的官方快照。"""
+        """执行一次由调度器触发的扫描，并在完成后回写已有对象的官方快照。
+
+        轮询等待也带上限：后台扫描任务已被超时收束，但只要它没变成终态，这里就不该
+        无限等下去——调度器的 `_auto_scan_running` 会因此永久占住该账号，后续每轮
+        自动同步都被自己的上一轮挡住（2026-11-01 实测：账号 2 小时没再同步过）。
+        """
         initial = await self.start_scan_chats(account_id, source="automatic")
         task_id = initial["task_id"]
         progress = initial
+        # 用轮询次数而不是墙钟计时：等待间隔由注入的 sleep 决定，按次数上限才不会在
+        # 测试（sleep 被替换成立即返回）里退化成无限自旋。
+        max_polls = max(1, int(self._scan_stale_after / 0.5) + 1)
+        polls = 0
         while progress["status"] == "running":
+            if polls >= max_polls:
+                logger.warning(
+                    "账号 %s 自动同步等待超过 %.0f 秒仍未收束，放弃本次等待",
+                    account_id,
+                    self._scan_stale_after,
+                )
+                return {
+                    "overall": "error",
+                    "detail": "扫描任务未在预期时间内结束，已放弃等待",
+                    "entries": progress.get("entries") or [],
+                }
+            polls += 1
             await self._sleep(0.5)
             progress = self.scan_chats_progress(account_id, task_id)
         if progress["status"] != "completed":
