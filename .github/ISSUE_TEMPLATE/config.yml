@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题
+    url: https://github.com/oinzc/flame-contractor-oss/security/policy
+    about: 漏洞请走私密报告，不要开公开 issue
+  - name: 使用与部署问题
+    url: https://github.com/oinzc/flame-contractor-oss/discussions
+    about: 先看 README 的常见问题；仍未解决再到 Discussions 提问
