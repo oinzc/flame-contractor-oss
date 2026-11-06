@@ -1,0 +1,78 @@
+name: Bug 报告
+description: 报告可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先搜索已有 issue。
+        **不要贴真实好友昵称、账号 id、Cookie、`.env`、数据库或诊断截图**，用脱敏后的内容代替。
+        安全问题请走 [SECURITY.md](../security/policy)，不要在这里公开。
+  - type: input
+    id: version
+    attributes:
+      label: 版本或提交
+      description: 控制台「关于」里的版本号，或 `git rev-parse --short HEAD`
+      placeholder: v0.1.0 / 4b60a34
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: 运行方式
+      options:
+        - Docker Compose（推荐）
+        - 本地开发（uvicorn + vite）
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统与 Docker 版本
+      placeholder: Windows 11 + Docker Desktop 4.x / Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从干净状态开始，越具体越好
+      placeholder: |
+        1. 新增账号并扫码
+        2. 好友页扫描会话
+        3. 设固定时刻 02:22，打开自动调度
+        4. 到点后任务状态为 ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 包含错误提示原文、任务状态、可复现频率
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 优先用 `docker compose logs --tail 100 app`；请先脱敏
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 我已搜索现有 issue，未发现重复
+          required: true
+        - label: 我已移除账号、好友、Cookie、密钥等个人信息
+          required: true
