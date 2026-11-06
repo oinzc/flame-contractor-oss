@@ -6,6 +6,6 @@ sqlmodel==0.0.42
 sqlalchemy==2.0.52
 pydantic==2.13.5
 pydantic-settings==2.15.0
-alembic==1.19.1
+alembic==1.20.1
 apscheduler==3.11.3
 httpx==0.28.1
