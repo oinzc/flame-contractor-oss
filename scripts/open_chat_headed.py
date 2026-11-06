@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
-"""以有头模式打开抖音聊天页（项目登录态），供老大人工指认续火对象。
-独立进程运行，保持窗口 40 分钟后自动关闭；也可手动结束进程。"""
+"""以有头模式打开抖音聊天页（项目登录态），供维护者人工指认续火对象。
+
+用法：先设置 FLAME_ACCOUNT_ID 为账号在数据库里的 id（账号卡片 URL 或接口里可见），
+再在容器/本机执行本脚本。独立进程运行，窗口保持 40 分钟后自动关闭。
+"""
 
 import asyncio
+import os
+import sys
 
-ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"  # 示例账号
+ACCOUNT_ID = os.environ.get("FLAME_ACCOUNT_ID", "").strip()
 
 
 async def main():
+    if not ACCOUNT_ID:
+        sys.exit("请先设置 FLAME_ACCOUNT_ID 环境变量，值为目标账号在数据库中的 id。")
+
     from app.core.config import get_settings
     from app.core.database import build_engine
     from app.execution.browser_manager import BrowserManager
