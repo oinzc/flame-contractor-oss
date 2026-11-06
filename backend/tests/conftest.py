@@ -59,6 +59,19 @@ def _authed_testclient(monkeypatch):
     monkeypatch.setattr("fastapi.testclient.TestClient.__enter__", patched_enter)
 
 
+@pytest.fixture(autouse=True)
+def _headed_login_available(monkeypatch):
+    """测试默认运行在「有桌面」环境。
+
+    真实判定依赖 Linux 下是否有 DISPLAY；CI 与容器里没有显示，会让扫码登录
+    直接走 no_desktop 分支，导致与桌面环境下不同的行为。需要验证无显示分支的
+    测试（test_qr_login）自行 monkeypatch 覆盖本默认值。
+    """
+    from app.execution import browser_manager
+
+    monkeypatch.setattr(browser_manager, "headed_login_available", lambda: True)
+
+
 @pytest.fixture
 def client(settings) -> Generator[TestClient, None, None]:
     app = create_app(settings)
