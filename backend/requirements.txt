@@ -1,9 +1,47 @@
-fastapi>=0.116,<1
-uvicorn[standard]>=0.35,<1
-sqlmodel>=0.0.24,<0.1
-pydantic-settings>=2.10,<3
-tzdata>=2025.2
-alembic>=1.16,<2
-apscheduler>=3.10,<4
+# 运行时依赖固定到确切版本：CI、Docker 构建与本地开发必须保持一致。
+# 升级请一次只升一个包，跑通 `python -m pytest -q` 后再提交。
+
+# Web 框架
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.52.4
+httpx==0.28.1
+anyio==4.14.2
+
+# 数据层
+sqlmodel==0.0.42
+SQLAlchemy==2.0.52
+alembic==1.19.1
+Mako==1.4.1
+greenlet==3.5.5
+
+# 配置与校验
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+annotated-types==0.8.0
+typing_extensions==4.16.0
+typing-inspection==0.4.4
+python-dotenv==1.2.3
+
+# 调度与时间
+apscheduler==3.11.3
+tzdata==2026.3
+tzlocal==5.4.4
+
+# 浏览器自动化
 playwright==1.62.0
-httpx>=0.28,<1
+pyee==13.0.1
+
+# 其余运行时依赖
+PyYAML==6.0.3
+websockets==17.1
+watchfiles==1.2.0
+httptools==0.8.0
+h11==0.16.0
+httpcore==1.0.9
+idna==3.19
+certifi==2026.7.22
+click==8.5.0
+MarkupSafe==3.0.3
+packaging==26.3
