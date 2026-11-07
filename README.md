@@ -2,7 +2,14 @@
 
 > 你与它立下契约，每日以一言续之，焰不可熄。
 
-![Flame Contractor](docs/assets/social-preview.png)
+[![CI](https://github.com/oinzc/flame-contractor-oss/actions/workflows/ci.yml/badge.svg)](https://github.com/oinzc/flame-contractor-oss/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/oinzc/flame-contractor-oss)](https://github.com/oinzc/flame-contractor-oss/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
+![Self-hosted](https://img.shields.io/badge/self--hosted-Docker-2496ED?logo=docker&logoColor=white)
+
+![控制台总览：今日续火进度、24 小时调度标尺、好友火花榜与任务流水](docs/assets/screenshots/dashboard.png)
+
+<sub>截图均来自内置的[演示实例](#演示实例)，昵称与数据全部虚构。</sub>
 
 本机优先的抖音「续火」控制台：按你设定的时刻，每天给指定的几位好友或群聊发出一条消息，防止连续互动记录断掉。所有数据、登录态与浏览器 Profile 都留在你自己的机器上，没有云端账号，也没有第三方服务器。
 
@@ -20,6 +27,41 @@
 - **异常通知**：接入 Bark，按 `critical` / `timeSensitive` / `active` 分级推送到手机。
 - **会话扫描与对账**：只读扫描官方火花状态用于展示，产出状态变化 / 无火花 / 新会话 / 未观察到 / 无变化五类对账，删除与导入都要你手动确认。
 - **可观测**：全局任务坞展示发送与扫描进度，诊断截图按天保留，操作留审计记录。
+
+## 界面一览
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/screenshots/send-confirm.png" alt="发送确认弹窗"><br><b>发送前逐人确认</b>：手动发送先列出本次队列和每个人将收到的文案，确认后才执行。</td>
+    <td width="50%"><img src="docs/assets/screenshots/targets.png" alt="好友管理"><br><b>好友与身份</b>：每位好友绑定平台身份、模板和可选的独立时刻，旁边是官方火花状态。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/screenshots/scan-reconciliation.png" alt="扫描对账"><br><b>扫描对账</b>：只读同步官方状态，按状态变化 / 无火花 / 新会话 / 未观察到 / 无变化五类归档。</td>
+    <td><img src="docs/assets/screenshots/jobs.png" alt="任务记录"><br><b>任务记录</b>：每一次续火都有结果和尝试次数，结果无法确认的单独筛出，等你人工复核。</td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/assets/screenshots/accounts.png" alt="账号管理"><br><b>多账号</b>：每个账号独立的浏览器 Profile、发送时段和登录状态；失效账号会被醒目标出并停止自动发送。</td>
+  </tr>
+</table>
+
+## 一次发送是怎样完成的
+
+续火的核心原则是**宁可不发，不可错发**。每个环节拿不到确定信号就停下，而不是猜测后继续：
+
+```mermaid
+flowchart LR
+    A([到点 / 手动触发]) --> B{今天已发过?}
+    B -- 是 --> Z1[跳过]
+    B -- 否 --> C[打开会话列表<br/>按平台身份精确定位]
+    C -- 身份存疑 --> Z2[停止并标记<br/>身份存疑]
+    C --> D[二次核对身份]
+    D --> E[输入文案并发送]
+    E --> F{终态确认:<br/>输入框清空且<br/>新气泡出现?}
+    F -- 是 --> G([成功 · 火花 +1])
+    F -- 无法确认 --> Z3[待人工复核<br/>当天不自动重发]
+```
+
+登录失效、网络不可用、页面结构变化也都会在发送前或发送中拦下，并通过 Bark 推送到手机。
 
 ## 它不做什么
 
@@ -52,6 +94,20 @@ docker compose up -d --build
 5. 打开「自动调度」，确认下一次触发时间。
 
 健康检查：`curl http://127.0.0.1:8000/health`，应返回 `{"status":"ok","database":"ready",...}`。
+
+## 演示实例
+
+想先看看界面，不需要抖音账号，也不需要 Docker。演示实例使用一份虚构数据，并且**只读**：除登录外的写操作一律被拒绝，调度循环不会发送或扫描，不会打开浏览器访问抖音，也不读取 `.env`。
+
+```bash
+cd frontend && npm ci && npm run build && cd ..
+cd backend
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements-dev.txt   # Linux/macOS 用 .venv/bin/python
+.venv/Scripts/python.exe scripts/demo_server.py
+```
+
+打开 <http://127.0.0.1:8010/>，用 `demo` / `demo-password` 登录。数据放在 `data/demo/`，加 `--reseed` 可重新生成。README 中的截图由 `scripts/demo_screenshots.py` 对演示实例自动截取，需要先执行 `python -m playwright install chromium`。
 
 ## 配置
 
@@ -103,7 +159,7 @@ npm run dev      # http://localhost:5173，已代理 /api 与 /health
 npm run build    # tsc --noEmit && vite build
 ```
 
-测试：`cd backend && .venv/Scripts/python.exe -m pytest -q`（271 项，无需真实浏览器）。
+测试：`cd backend && .venv/Scripts/python.exe -m pytest -q`（272 项，无需真实浏览器）。
 
 ## 目录结构
 
